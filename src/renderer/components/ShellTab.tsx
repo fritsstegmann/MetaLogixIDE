@@ -120,88 +120,111 @@ export function ShellTab({
     };
     const linkProviderDisposable: IDisposable = term.registerLinkProvider(pathLinkProvider);
 
-    term.open(termHostRef.current);
+    // NOTE ordering: we deliberately do NOT term.open() yet. Opening the
+    // terminal against a container whose fonts haven't loaded or whose CSS
+    // hasn't laid out yet means xterm measures the wrong cell width, so
+    // every subsequent write lands at a mis-computed column. That produced
+    // the "text wraps into a vertical column on the right" bug. We wait
+    // until document.fonts is ready AND the host has real pixel dimensions
+    // BEFORE opening the terminal.
     term.onData((data) => { void api.invoke('shells:write', { projectId, shellIndex, data }); });
     termRef.current = term;
+    let opened = false;
+    let disposed = false;
 
     // Track the last-fit rows/cols so we can drop no-op resize calls that
     // would otherwise spam the PTY when the container reports the same
     // size repeatedly.
     let lastCols = -1, lastRows = -1;
     function syncSize() {
+      if (!opened) return;
       try {
-        // Skip when the host element hasn't been laid out yet — trying to
-        // fit against a 0×0 element writes a bogus 0-col grid, which then
-        // renders no text even when data arrives later.
         const host = termHostRef.current;
         if (!host || host.clientWidth < 20 || host.clientHeight < 20) return;
         fit.fit();
+        // After a fit, force a repaint — xterm's canvas/DOM renderer
+        // occasionally leaves stale glyphs at the old cell positions
+        // (that's why a manual window resize used to "fix" the display).
+        try { term.refresh(0, Math.max(0, term.rows - 1)); } catch { /* fine */ }
         if (term.cols === lastCols && term.rows === lastRows) return;
         lastCols = term.cols; lastRows = term.rows;
         void api.invoke('shells:resize', { projectId, shellIndex, cols: term.cols, rows: term.rows });
       } catch { /* container might be zero-sized during transitions */ }
     }
 
-    // Fit staircase: two rAFs (fonts + layout), then follow-ups at 100/300ms
-    // to catch the case where the flex parent hadn't settled on the first
-    // fit — that's the "have to resize the window to refresh" bug. On top of
-    // this the ResizeObserver keeps things sized during genuine changes.
-    requestAnimationFrame(() => requestAnimationFrame(syncSize));
-    const late1 = window.setTimeout(syncSize, 100);
-    const late2 = window.setTimeout(syncSize, 300);
-    // Also whenever this window regains focus, force a refit — Chromium can
-    // pause layout while backgrounded and re-emerge with a wrong grid.
-    const onWinFocus = () => syncSize();
-    window.addEventListener('focus', onWinFocus);
-
-    // Replay any existing scrollback from the PTY so late-attaching viewports
-    // (a pop-out window, tab switch back, second monitor) don't see an empty
-    // terminal while the shell is idle. Live data that arrives DURING the
-    // snapshot fetch is buffered and flushed after — see `snapshotReady`.
+    // Snapshot fetch runs in parallel with the open-when-ready gate below;
+    // whichever finishes second writes the snapshot into a correctly-sized
+    // terminal.
     snapshotReady.current = false;
     pendingLive.current = '';
-    (async () => {
-      try {
-        const { output } = await api.invoke('shells:snapshot', { projectId, shellIndex });
-        if (termRef.current !== term) return; // component unmounted / re-mounted
-        if (output) {
-          // Full terminal reset before replay — a bare SGR reset (\x1b[0m)
-          // isn't enough because scrollback can contain unbalanced sequences
-          // like alt-screen enter (\x1b[?1049h from vim/less) or cursor-
-          // hidden mode, which the new terminal inherits and then renders
-          // garbage. term.reset() is xterm's RIS equivalent: attrs, cursor,
-          // wrap, alt-screen — all back to initial.
-          term.reset();
-          // Also strip any partial ANSI escape at the very start of the
-          // scrollback. The main-side truncation already snaps to newlines,
-          // but a mid-CSI cut on a very long line can still slip through.
-          // Drop everything up to (and including) the first newline if the
-          // buffer opens with an ESC that has no `m` / `H` terminator in
-          // the first 32 chars — that's almost certainly a fragment.
-          let safe = output;
-          if (safe.startsWith('\x1b') && !/[A-Za-z]/.test(safe.slice(1, 32))) {
-            const nl = safe.indexOf('\n');
-            if (nl > -1 && nl < 2048) safe = safe.slice(nl + 1);
-          }
-          term.write(safe);
-          // Trailing SGR reset defends the live stream that plays after.
-          term.write('\x1b[0m');
+    let cachedSnapshot: string | null = null;
+    const snapshotPromise = api.invoke('shells:snapshot', { projectId, shellIndex })
+      .then(({ output }) => { cachedSnapshot = output; })
+      .catch(() => { cachedSnapshot = ''; });
+
+    function writeSnapshotAndFlush() {
+      if (termRef.current !== term || disposed) return;
+      const output = cachedSnapshot ?? '';
+      if (output) {
+        term.reset();
+        // Strip a partial-ANSI head that survived main-side truncation.
+        let safe = output;
+        if (safe.startsWith('\x1b') && !/[A-Za-z]/.test(safe.slice(1, 32))) {
+          const nl = safe.indexOf('\n');
+          if (nl > -1 && nl < 2048) safe = safe.slice(nl + 1);
         }
-        if (pendingLive.current) term.write(pendingLive.current);
-      } catch { /* ignore — snapshot is best-effort */ }
-      finally {
-        snapshotReady.current = true;
-        pendingLive.current = '';
-        // Snapshot replay lands after mount → re-fit + refresh so the
-        // terminal repaints against whatever the container's ACTUAL size
-        // ended up being (rather than whatever it was during the double-
-        // rAF at mount).
-        requestAnimationFrame(() => {
-          syncSize();
-          try { term.refresh(0, Math.max(0, term.rows - 1)); } catch { /* fine */ }
-        });
+        term.write(safe);
+        term.write('\x1b[0m');
       }
-    })();
+      if (pendingLive.current) term.write(pendingLive.current);
+      snapshotReady.current = true;
+      pendingLive.current = '';
+      // One last fit + refresh once xterm has processed the write queue.
+      requestAnimationFrame(syncSize);
+    }
+
+    /**
+     * The actual open sequence: wait for fonts + a laid-out container,
+     * THEN term.open, fit, and write the snapshot. This is the fix for
+     * "text wraps into a vertical stripe on the right" — that only
+     * happened when open+write ran before the container had real width,
+     * because xterm computed a bogus cell size and every wrap landed at
+     * the wrong column.
+     */
+    async function openWhenReady(): Promise<void> {
+      try { await (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts?.ready; }
+      catch { /* fine — best-effort */ }
+      // Poll (via rAF) until the host has real dimensions. Bail after
+      // ~2s so we don't hold up the terminal forever if a parent layout
+      // is stuck; fallback opens against whatever's there.
+      const startedAt = performance.now();
+      while (!disposed) {
+        const host = termHostRef.current;
+        if (host && host.clientWidth >= 20 && host.clientHeight >= 20) break;
+        if (performance.now() - startedAt > 2000) break;
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+      if (disposed || termRef.current !== term) return;
+      const host = termHostRef.current;
+      if (!host) return;
+      term.open(host);
+      opened = true;
+      // First fit AFTER open so xterm has an element to measure.
+      syncSize();
+      // Snapshot may already be back — write it into the correctly-sized
+      // terminal. If not yet, the .then() below picks up.
+      if (cachedSnapshot != null) writeSnapshotAndFlush();
+      else void snapshotPromise.then(writeSnapshotAndFlush);
+    }
+    void openWhenReady();
+
+    // Fit follow-ups catch flex parents that settle after our open, plus
+    // any late-arriving font-metric changes. The ResizeObserver below
+    // handles genuine size changes during the terminal's lifetime.
+    const late1 = window.setTimeout(syncSize, 150);
+    const late2 = window.setTimeout(syncSize, 400);
+    const onWinFocus = () => syncSize();
+    window.addEventListener('focus', onWinFocus);
 
     const ro = new ResizeObserver(syncSize);
     if (containerRef.current) ro.observe(containerRef.current);
@@ -211,6 +234,7 @@ export function ShellTab({
     media.addEventListener('change', onScheme);
 
     return () => {
+      disposed = true;
       window.clearTimeout(late1);
       window.clearTimeout(late2);
       window.removeEventListener('focus', onWinFocus);
