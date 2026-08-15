@@ -123,6 +123,10 @@ function MainApp() {
   }, []);
   // Clear unread the instant the chat panel opens.
   useEffect(() => { if (activeView === 'chat') setChatUnread(0); }, [activeView]);
+  // Clear any pending "open this file" request when the project changes —
+  // otherwise a relPath captured from project A would fire in project B's
+  // FilesTab and either open the wrong file or 404.
+  useEffect(() => { setOpenInFiles(null); }, [selected?.id]);
   // Refresh task count for the ActivityBar pip whenever the project changes.
   // Cheap: it's a filesystem read of package.json + Makefile + compose.
   useEffect(() => {
@@ -762,6 +766,7 @@ function MainApp() {
                             }}
                           />))
                 : <FilesTab
+                    key={selected.id}
                     projectId={selected.id}
                     openRelPath={openInFiles?.relPath ?? null}
                     openLine={openInFiles?.line ?? null}
