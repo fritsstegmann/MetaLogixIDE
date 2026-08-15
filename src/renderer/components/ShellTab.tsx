@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '@renderer/api';
 import { useShellStream } from '@renderer/hooks/useShellStream';
@@ -71,12 +72,11 @@ export function ShellTab({
       cursorStyle: 'bar',
       theme: buildTheme(),
       allowProposedApi: true,
-      screenReaderMode: true,
+      // screenReaderMode is intentionally off — the hidden mirror element
+      // it injects into the DOM can drift out of sync during a fast
+      // remount and paint stray characters into the visible row.
       // Explicit — don't let xterm try to boost contrast (blurs rendering).
       minimumContrastRatio: 1,
-      // Skip WebGL: on macOS with translucent backgrounds and retina it
-      // sometimes rasterises to a half-DPR buffer and looks pixelated.
-      // The canvas renderer (default) is subpixel-crisp here.
     });
 
     const fit = new FitAddon();
@@ -208,6 +208,18 @@ export function ShellTab({
       const host = termHostRef.current;
       if (!host) return;
       term.open(host);
+      // Load the WebGL renderer AFTER open so its context binds to the
+      // actual canvas. WebGL sidesteps the DOM renderer's row-width-vs-
+      // container-width overflow bug that produced the vertical-stripe
+      // artefact when cols were slightly off from the container's pixel
+      // width (Chrome would wrap the "row" div's overflow into the next
+      // visual line). If WebGL init fails (no GPU / driver hiccup) we
+      // silently fall back to the DOM renderer.
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => { try { webgl.dispose(); } catch { /* fine */ } });
+        term.loadAddon(webgl);
+      } catch (e) { console.warn('[metaide] webgl renderer unavailable, falling back to DOM', e); }
       opened = true;
       // First fit AFTER open so xterm has an element to measure.
       syncSize();
