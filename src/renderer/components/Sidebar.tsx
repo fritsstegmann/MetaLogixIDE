@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import type { Project, Root } from '@shared/types';
 import { api } from '@renderer/api';
+import { toast } from '@renderer/hooks/useToasts';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 interface Props {
   selectedProjectId: number | null;
@@ -60,6 +62,25 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
     return byRoot;
   }, [projects, filter]);
 
+  const [rescanning, setRescanning] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Project | null>(null);
+  const askRename = useCallback((p: Project) => setRenameTarget(p), []);
+  async function rescanAll() {
+    setRescanning(true);
+    let total = 0;
+    try {
+      for (const r of roots) {
+        const { discovered } = await api.invoke('roots:rescan', { id: r.id });
+        total += discovered;
+      }
+      await refreshProjects();
+      toast(`Rescanned ${roots.length} root${roots.length === 1 ? '' : 's'}`, { kind: 'success', detail: `${total} project folder${total === 1 ? '' : 's'} on disk` });
+    } catch (e) {
+      toast('Rescan failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally {
+      setRescanning(false);
+    }
+  }
   async function addRoot() {
     const picked = await api.invoke('dialogs:pick-directory', undefined as never);
     const path = picked.path ?? window.prompt('Root directory path (absolute):');
@@ -71,16 +92,28 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
 
   return (
     <aside
-      className="h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+      data-view="projects"
+      className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
       style={{ width: width ?? 288 }}
     >
       <div className="p-3 border-b border-[--border] space-y-2">
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter…"
-          className="w-full bg-[--panel-strong] text-sm px-2.5 py-1.5 rounded-md border border-[--border] focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
-        />
+        <div className="flex items-center gap-1">
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter…"
+            className="flex-1 min-w-0 bg-[--panel-strong] text-sm px-2.5 py-1.5 rounded-md border border-[--border] focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+          />
+          <button
+            onClick={rescanAll}
+            title={rescanning ? 'Rescanning…' : 'Rescan every root — pick up newly-added folders on disk'}
+            disabled={rescanning}
+            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md border border-[--border] bg-[--panel-strong] hover:bg-[--panel] text-[--text-muted] hover:text-[--text] disabled:opacity-50"
+            data-testid="sidebar-rescan"
+          >
+            <RescanIcon spinning={rescanning} />
+          </button>
+        </div>
         <div className="flex gap-1">
           <button
             onClick={addRoot}
@@ -111,6 +144,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
                 selected={selectedProjectId === p.id}
                 alive
                 onSelect={onSelect}
+                onRename={askRename}
               />
             ))}
           </Section>
@@ -125,6 +159,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
                 selected={selectedProjectId === p.id}
                 alive={aliveIds.has(p.id)}
                 onSelect={onSelect}
+                onRename={askRename}
               />
             ))}
           </Section>
@@ -139,11 +174,16 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
               selectedProjectId={selectedProjectId}
               aliveIds={aliveIds}
               onSelect={onSelect}
+              onRename={askRename}
             />
           ))}
         </Section>
       </div>
-
+      <RenameProjectDialog
+        project={renameTarget}
+        onClose={() => setRenameTarget(null)}
+        onDone={async () => { setRenameTarget(null); await refreshProjects(); }}
+      />
     </aside>
   );
 }
@@ -197,21 +237,49 @@ function ProjectRow({
   selected,
   alive,
   onSelect,
+  onRename,
   indent = 12,
 }: {
   project: Project;
   selected: boolean;
   alive: boolean;
   onSelect: (p: Project) => void;
+  /** Lifted so the Rename dialog lives at Sidebar level and stays open across rerenders. */
+  onRename: (p: Project) => void;
   indent?: number;
 }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   async function unload(e: React.MouseEvent) {
     e.stopPropagation();
     try { await api.invoke('shells:kill', { projectId: project.id, shellIndex: 0 }); }
     catch (err) { console.error(err); }
   }
+  async function revealInFinder() {
+    try { await api.invoke('files:reveal', { projectId: project.id, relPath: '' }); }
+    catch (err) { console.error(err); }
+  }
+  async function copyPath() {
+    try {
+      await navigator.clipboard.writeText(project.path);
+      toast('Copied path', { kind: 'success', timeoutMs: 1000 });
+    } catch (e) {
+      toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    }
+  }
+  function onContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
+  }
+  const menuItems: ContextMenuItem[] = [
+    { label: 'Rename folder…',  onClick: () => onRename(project) },
+    { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
+    { label: 'Copy full path',   onClick: () => void copyPath() },
+  ];
   return (
     <div
+      onContextMenu={onContextMenu}
+      title={`${project.path}\n(right-click for options)`}
       className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition ${
         selected ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong]'
       }`}
@@ -245,7 +313,25 @@ function ProjectRow({
           <RowXIcon />
         </button>
       )}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+      )}
     </div>
+  );
+}
+
+function RescanIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      className={spinning ? 'animate-spin-slow' : ''}
+      style={spinning ? { animation: 'mp-spin 0.7s linear infinite' } : undefined}
+    >
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
   );
 }
 
@@ -277,12 +363,14 @@ function RootBlock({
   selectedProjectId,
   aliveIds,
   onSelect,
+  onRename,
 }: {
   root: Root;
   projects: Project[];
   selectedProjectId: number | null;
   aliveIds: Set<number>;
   onSelect: (p: Project) => void;
+  onRename: (p: Project) => void;
 }) {
   const [collapsed, setCollapsedState] = useState<Set<number>>(readCollapsed);
   const open = !collapsed.has(root.id);
@@ -317,9 +405,101 @@ function RootBlock({
           selected={selectedProjectId === p.id}
           alive={aliveIds.has(p.id)}
           onSelect={onSelect}
+          onRename={onRename}
           indent={22}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * Rename a project's on-disk folder. Compact modal with an inline warning
+ * that live shells will be killed and the git working dir path changes.
+ * Focus is auto-set to the input; ⏎ submits, Esc dismisses.
+ */
+function RenameProjectDialog({
+  project, onClose, onDone,
+}: {
+  project: Project | null;
+  onClose: () => void;
+  onDone: () => void | Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (project) {
+      setName(project.name);
+      // Focus + select-all after mount so ⏎ overwrites the old name.
+      const id = window.setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 20);
+      return () => window.clearTimeout(id);
+    }
+  }, [project]);
+  useEffect(() => {
+    if (!project) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [project, onClose]);
+  if (!project) return null;
+  const trimmed = name.trim();
+  const unchanged = trimmed === project.name;
+  const canSubmit = trimmed.length > 0 && !unchanged && !busy;
+  async function submit() {
+    if (!project || !canSubmit) return;
+    setBusy(true);
+    try {
+      await api.invoke('projects:rename', { id: project.id, newName: trimmed });
+      toast(`Renamed to ${trimmed}`, { kind: 'success' });
+      await onDone();
+    } catch (e) {
+      toast('Rename failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="rename-project">
+      <div
+        className="bg-[--panel-strong] w-[440px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-[--border]">
+          <div className="font-semibold text-sm">Rename project folder</div>
+          <div className="text-[11px] text-[--text-muted] truncate mt-0.5" title={project.path}>{project.path}</div>
+        </div>
+        <div className="p-4 space-y-3">
+          <input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            placeholder="New folder name"
+            className="w-full bg-[--panel] border border-[--border] rounded-md px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
+          />
+          <div className="text-[11px] text-[--text-muted] leading-relaxed">
+            Renames the folder on disk and updates every reference here. Any
+            live shells for this project will be closed first (the pty holds
+            the old path). If this is a git repo, the working tree moves with
+            it — remote URLs are unaffected.
+          </div>
+        </div>
+        <div className="px-4 py-3 border-t border-[--border] flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="text-xs font-medium px-3 py-1.5 rounded-md bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+          >
+            {busy ? 'Renaming…' : 'Rename'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

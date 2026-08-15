@@ -1,6 +1,6 @@
 {
   "name": "metaide",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -53,8 +53,20 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
@@ -67,8 +79,18 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
     },
@@ -82,8 +104,18 @@
     },
     "linux": {
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb", "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "category": "Development",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
@@ -98,6 +130,7 @@
     "@xterm/xterm": "^5.5.0",
     "better-sqlite3": "^11.0.0",
     "chokidar": "^3.6.0",
+    "electron-log": "^5.4.4",
     "fuse.js": "^7.0.0",
     "highlight.js": "^11.11.1",
     "keytar": "^7.9.0",

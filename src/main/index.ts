@@ -1,11 +1,23 @@
-import { app, BrowserWindow, ipcMain, Menu, screen, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import log from 'electron-log/main';
 import { buildServices } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
+
+// Route console.log/warn/error to a rolling file at
+// `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
+// `preload: true` wires renderer console output through IPC into the same
+// file so both sides land in one place — no more "was that a main or a
+// renderer error?" hunt when a user reports a blank screen. transports.file
+// rotates at 10 MB by default which is fine for a dev-tool desktop app.
+log.initialize({ preload: true });
+log.transports.file.level = 'info';
+log.transports.console.level = 'debug';
+Object.assign(console, log.functions);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -115,6 +127,17 @@ async function createMainWindow(): Promise<BrowserWindow> {
   win.once('ready-to-show', () => win.show());
   wireExternalLinks(win);
   applyPersistedOpacity(win);
+  // Detect renderer crashes ("blank screen" symptom) and auto-recover by
+  // reloading the window. Without this, an OOM / WebGL context loss / stray
+  // exception leaves the user with a blank webview and nothing else to do.
+  win.webContents.on('render-process-gone', (_evt, details) => {
+    console.error('[metaide] renderer gone:', details.reason, details.exitCode);
+    if (details.reason !== 'clean-exit' && !win.isDestroyed()) {
+      try { win.reload(); } catch (e) { console.error('[metaide] reload failed', e); }
+    }
+  });
+  win.webContents.on('unresponsive', () => console.warn('[metaide] renderer unresponsive'));
+  win.webContents.on('responsive', () => console.log('[metaide] renderer responsive again'));
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else await win.loadFile(join(__dirname, '../renderer/index.html'));
   return win;
@@ -254,7 +277,18 @@ export function tileAllOurWindows(): number {
 
 function broadcast(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send(channel, payload);
+    // The BrowserWindow can be alive while its underlying render frame is
+    // transient — during Cmd+R, a renderer crash + auto-respawn, or window
+    // close. Calling `.send()` on a disposed frame throws
+    // "Render frame was disposed before WebFrameMain could be accessed"
+    // and, when it happens from a hot PTY, spams the log dozens of times
+    // per second. Guard both flags and swallow the residual race.
+    if (w.isDestroyed()) continue;
+    const wc = w.webContents;
+    if (!wc || wc.isDestroyed() || wc.isCrashed()) continue;
+    try {
+      wc.send(channel, payload);
+    } catch { /* frame disposed in the window between the checks and send */ }
   }
 }
 
@@ -265,6 +299,25 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
 
 app.whenReady().then(async () => {
   const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations') });
+  // Auto-rescan every registered root at boot so folders added on disk since
+  // the last launch (or after a discovery-rule change) surface without the
+  // user having to remember Settings → Rescan. Cheap: it's just directory
+  // reads + SQL upserts, and the file watcher is already running.
+  try {
+    const { discoverProjects } = await import('./domain/discovery');
+    const scanDepth = services.settings.get('scan_depth');
+    for (const root of services.roots.list()) {
+      for (const disc of discoverProjects(root.path, scanDepth)) {
+        const p = services.projects.upsert(root.id, disc.path, disc.name);
+        if (disc.metaprojectProjectId) {
+          services.projects.updateConfig(p.id, { linkedMetaprojectProjectId: disc.metaprojectProjectId });
+        }
+      }
+      services.watcher.watch(root.path);
+    }
+  } catch (e) {
+    console.warn('[metaide] boot rescan failed', e);
+  }
   // Load persisted opacity so it's applied to the first window right away.
   try { persistedOpacity = Math.max(30, Math.min(100, services.settings.get('window_opacity'))) / 100; } catch { /* keep 1.0 */ }
   mainWindow = await createMainWindow();
@@ -275,6 +328,63 @@ app.whenReady().then(async () => {
     tileAll: () => tileAllOurWindows(),
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
+
+  // ─── Long-running command "done" notifier ─────────────────────────────
+  // Every 500 ms ask the PtyManager which shells just finished a command
+  // (idle after long work). Fire a native OS notification for each — but
+  // only when the shell isn't the currently-focused one (otherwise it'd
+  // ping every time you finish typing a heavy `pytest`).
+  const donePoll = setInterval(() => {
+    const done = services.ptyManager.pollDoneCommands();
+    if (done.length === 0) return;
+    const focused = BrowserWindow.getFocusedWindow();
+    const mainFocused = !!focused && !focused.isDestroyed() && focused === mainWindow;
+    for (const d of done) {
+      const project = services.projects.get(d.projectId);
+      const projectName = project?.name ?? `#${d.projectId}`;
+      const secs = Math.round(d.durationMs / 1000);
+      const timeLabel = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+      const key = `${d.projectId}:${d.shellIndex}`;
+      const popped = popoutWindows.has(key);
+      // Skip the notification when the user is actively looking at that
+      // shell — but do fire when a popped-out shell finishes, when the app
+      // is unfocused, or when they're on a different tab entirely.
+      if (mainFocused && !popped) continue;
+      try {
+        const notif = new Notification({
+          title: `${projectName} — shell ${d.shellIndex}`,
+          body: `Command finished in ${timeLabel}`,
+          silent: false,
+        });
+        // Clicking the notification jumps back into that shell: raise the
+        // main window (or the popout if this shell lives in one), and ask
+        // the renderer to switch project + tab via a broadcast event.
+        notif.on('click', () => {
+          try {
+            if (popped) {
+              const w = popoutWindows.get(key);
+              if (w && !w.isDestroyed()) { w.show(); w.focus(); return; }
+            }
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              if (mainWindow.isMinimized()) mainWindow.restore();
+              mainWindow.show(); mainWindow.focus();
+            }
+            broadcast('shell:focus-request', { projectId: d.projectId, shellIndex: d.shellIndex });
+          } catch (err) { console.warn('[metaide] notification click failed', err); }
+        });
+        notif.show();
+      } catch (e) {
+        console.warn('[metaide] notification failed', e);
+      }
+    }
+  }, 500);
+
+  // ─── Ports panel: fan out ports changes to renderer ───────────────────
+  services.ptyManager.on('ports', (payload: { projectId: number; shellIndex: number; ports: number[] }) => {
+    broadcast('ports:changed', payload);
+  });
+
+  app.on('before-quit', () => { clearInterval(donePoll); });
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

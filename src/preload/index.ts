@@ -1,4 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+// Wires renderer console.log/warn/error through IPC into the main-process
+// electron-log file transport. Import for side effects only — the module
+// installs itself on window.electronLog when the preload runs.
+import 'electron-log/preload';
 import type { IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '../shared/ipc-contract';
 
 const api = {

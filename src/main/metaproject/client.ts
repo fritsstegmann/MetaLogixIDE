@@ -140,6 +140,18 @@ export class MetaprojectClient {
 
   // ────────────────────────── HTTP helpers ──────────────────────────
 
+  /** Read one cookie's value from the serialized `key=v; key=v` jar we hold. */
+  private getCookieValue(name: string): string | null {
+    if (!this.cookie) return null;
+    const parts = this.cookie.split(/;\s*/);
+    for (const p of parts) {
+      const eq = p.indexOf('=');
+      if (eq < 0) continue;
+      if (p.slice(0, eq) === name) return p.slice(eq + 1);
+    }
+    return null;
+  }
+
   private async get<T>(path: string): Promise<T> {
     return this.request<T>('GET', path);
   }
@@ -149,16 +161,47 @@ export class MetaprojectClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!this.cookie) throw new Error('not authenticated');
+    // Session-cookie blueprints on metaproject validate `X-CSRFToken` on
+    // every unsafe method (POST/PUT/PATCH/DELETE) — the token itself is
+    // the value of the `csrf_token` cookie we already hold. Add it here so
+    // callers don't each have to remember. Only `/auth/login` used to send
+    // it (2-step CSRF handshake); the /api/projects create + /api/chat/*
+    // send/edit paths returned 400 without it.
+    const unsafe = /^(POST|PUT|PATCH|DELETE)$/i.test(method);
+    const csrfToken = unsafe ? this.getCookieValue('csrf_token') : null;
+    // `redirect: 'manual'` so a session-expired 302 to /auth/login turns
+    // into a status of 0 / "opaqueredirect" instead of silently landing on
+    // the HTML login page — otherwise the caller's `res.json()` blows up
+    // with the misleading "Unexpected token '<'" and we can't tell the user
+    // what actually happened.
     const res = await fetch(`${this.base}${path}`, {
       method,
       headers: {
         'Cookie': this.cookie,
         'Accept': 'application/json',
         ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(csrfToken ? { 'X-CSRFToken': csrfToken, 'Referer': `${this.base}${path}`, 'Origin': this.base } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      redirect: 'manual',
     });
+    // Auth-required routes redirect (302) when the session cookie is stale.
+    // Wipe local session state so the LoginCard reappears on next status
+    // fetch and surface a clean error to the caller.
+    if (res.status === 0 || res.type === 'opaqueredirect' || res.status === 302 || res.status === 401) {
+      this.cookie = null;
+      this.userId = null;
+      this.userName = null;
+      throw new Error(`session expired — please sign in again`);
+    }
     if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+    const ctype = res.headers.get('content-type') || '';
+    if (!/json/i.test(ctype)) {
+      // Belt-and-braces: some proxies rewrite the redirect to a 200 HTML
+      // page. Detect the mismatch before we throw the incomprehensible
+      // JSON parse error.
+      throw new Error(`${method} ${path} returned ${ctype || 'no content-type'} — expected JSON`);
+    }
     return await res.json() as T;
   }
 
@@ -194,6 +237,33 @@ export class MetaprojectClient {
       `/api/chat/channels/?scope=${encodeURIComponent(s)}`,
     );
     return Array.isArray(raw) ? raw : (raw?.channels ?? []);
+  }
+
+  /**
+   * Fetches an attachment's raw bytes via the metaproject `send_file`
+   * download route. Returns an ArrayBuffer so the main process can write
+   * it to disk. The endpoint is per-project because `chat.get_attachment`
+   * validates project access.
+   */
+  async fetchAttachment(projectId: number, attachmentId: number): Promise<ArrayBuffer> {
+    if (!this.cookie) throw new Error('not authenticated');
+    const res = await fetch(`${this.base}/api/projects/${projectId}/chat/attachments/${attachmentId}/download`, {
+      headers: { 'Cookie': this.cookie },
+      redirect: 'manual',
+    });
+    if (res.status === 0 || res.type === 'opaqueredirect' || res.status === 302 || res.status === 401) {
+      throw new Error('session expired — please sign in again');
+    }
+    if (!res.ok) throw new Error(`download → ${res.status}`);
+    return await res.arrayBuffer();
+  }
+
+  /** GET /api/users — every active, non-archived user. Used to power @-autocomplete. */
+  async listUsers(): Promise<Array<{ id: number; username: string; email?: string; avatar_url?: string | null }>> {
+    const raw = await this.get<{ success?: boolean; users?: Array<{ id: number; username: string; email?: string; avatar_url?: string | null }> }>(
+      `/api/users`,
+    );
+    return raw?.users ?? [];
   }
 
   /** GET /api/projects — every project the current user can access. */

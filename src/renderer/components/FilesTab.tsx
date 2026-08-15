@@ -101,6 +101,19 @@ export function FilesTab({
     setOpenFiles((prev) => prev.map((f) => (f.relPath === relPath ? { ...f, editing } : f)));
   }, []);
 
+  /** Re-read with forceText and drop straight into edit mode. Used by the
+   * "Edit as text anyway" button on the binary-file placeholder. */
+  const forceTextOn = useCallback(async (relPath: string) => {
+    try {
+      const { content, kind } = await api.invoke('files:read', { projectId, relPath, forceText: true });
+      setOpenFiles((prev) => prev.map((f) => (
+        f.relPath === relPath ? { ...f, content, buffer: content, kind, editing: true } : f
+      )));
+    } catch (err) {
+      toast('Could not open as text', { kind: 'error', detail: String(err).replace(/^Error:\s*/, '') });
+    }
+  }, [projectId]);
+
   const saveFile = useCallback(async (relPath: string) => {
     const cur = openFiles.find((f) => f.relPath === relPath);
     if (!cur || cur.kind !== 'text') return;
@@ -233,6 +246,7 @@ export function FilesTab({
               onToggleEdit={() => setEditing(activeFile.relPath, !activeFile.editing)}
               onSave={() => saveFile(activeFile.relPath)}
               dirty={activeFile.buffer !== activeFile.content}
+              onForceText={() => void forceTextOn(activeFile.relPath)}
             />
           )}
         </div>
@@ -486,12 +500,19 @@ function FileTreePane({
                 onContextMenu={(ev) => rowMenu(ev, e)}
                 draggable={!e.isDir}
                 onDragStart={(ev) => {
-                  // Let users drag a file straight into a shell to paste its
-                  // path. text/plain wins over uri-list because Chromium's
-                  // URI-list handling in Electron does surprising things
-                  // (e.g. tries to navigate the whole webview).
+                  // Two behaviours in one gesture:
+                  //   1. Set text/plain so the local shell drop handler still
+                  //      pastes the path (that's the intra-app use case).
+                  //   2. Ask main to start a native OS drag session so the
+                  //      user can drop the file into Finder, VS Code, Mail,
+                  //      etc. preventDefault is intentionally NOT called —
+                  //      the HTML5 drag keeps working for our own shell, and
+                  //      Electron layers the OS drag on top for external
+                  //      apps. See main/ipc/register.ts 'files:start-drag'.
                   ev.dataTransfer.effectAllowed = 'copy';
                   ev.dataTransfer.setData('text/plain', e.relPath);
+                  void api.invoke('files:start-drag', { projectId, paths: [e.relPath] })
+                    .catch(() => { /* fine — HTML5 drag still works for the shell */ });
                 }}
                 data-testid="file-entry"
                 className={`w-full flex items-center gap-2 text-left px-2 py-1 rounded-md ${
@@ -527,7 +548,7 @@ function FileTreePane({
 }
 
 function FilePreview({
-  file, scrollToLine, onScrolled, onChange, onToggleEdit, onSave, dirty,
+  file, scrollToLine, onScrolled, onChange, onToggleEdit, onSave, dirty, onForceText,
 }: {
   file: OpenFile;
   scrollToLine: number | null;
@@ -536,6 +557,8 @@ function FilePreview({
   onToggleEdit: () => void;
   onSave: () => void;
   dirty: boolean;
+  /** Escape hatch: user overrode the binary heuristic and wants to edit as text anyway. */
+  onForceText?: () => void;
 }) {
   const ext = extOf(file.relPath);
   const isMd = MD_EXT.has(ext);
@@ -569,11 +592,11 @@ function FilePreview({
           <>
             <button
               onClick={onToggleEdit}
-              className="text-[11px] px-2 py-0.5 rounded border border-[--border] hover:bg-[--panel-strong]"
-              title={editing ? 'Switch to preview' : 'Edit (⌘S to save)'}
+              className={`text-[11px] px-2 py-0.5 rounded border ${editing ? 'border-[color:var(--accent)]/50 text-[color:var(--accent)]' : 'border-[--border] hover:bg-[--panel-strong]'}`}
+              title={editing ? (isMd ? 'Switch to preview' : 'Stop editing') : 'Edit (⌘S to save)'}
               data-testid="file-edit-toggle"
             >
-              {editing ? (isMd ? 'Preview' : 'View') : 'Edit'}
+              {editing ? (isMd ? 'Preview' : 'Done') : 'Edit'}
             </button>
             <button
               onClick={onSave}
@@ -591,7 +614,19 @@ function FilePreview({
       </div>
       <div className="flex-1 overflow-auto min-h-0">
         {file.kind === 'binary' && !isImg && (
-          <div className="p-6 text-sm text-[--text-muted]">Binary file — no preview.</div>
+          <div className="p-6 text-sm text-[--text-muted] space-y-3">
+            <div>Binary file — no preview.</div>
+            <div className="text-xs opacity-70">
+              Detection is a heuristic (NUL byte in the first 8&nbsp;KB). If you know this is really text, force an edit:
+            </div>
+            <button
+              onClick={() => onForceText?.()}
+              className="text-xs px-3 py-1 rounded border border-[--border] hover:bg-[--panel-strong]"
+              data-testid="force-text-edit"
+            >
+              Edit as text anyway
+            </button>
+          </div>
         )}
         {file.kind === 'binary' && isImg && (
           <div className="p-4 text-sm text-[--text-muted]">Image preview is a Phase 2 feature.</div>

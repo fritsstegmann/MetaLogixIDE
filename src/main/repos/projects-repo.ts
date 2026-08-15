@@ -63,6 +63,16 @@ export class ProjectsRepo {
     return this.get(id)!;
   }
 
+  /**
+   * Reassign path + name in one shot. Used by `projects:rename` after the
+   * on-disk folder move — never called on its own, because the DB row and
+   * the filesystem must move together or the project becomes unopenable.
+   */
+  relocate(id: number, newPath: string, newName: string): Project {
+    this.db.prepare('UPDATE projects SET path = ?, name = ? WHERE id = ?').run(newPath, newName, id);
+    return this.get(id)!;
+  }
+
   markLastOpened(id: number, when: Date): void {
     const ts = iso(when);
     this.db.prepare('UPDATE projects SET last_opened_at = ? WHERE id = ?').run(ts, id);

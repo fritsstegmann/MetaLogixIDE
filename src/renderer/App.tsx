@@ -5,6 +5,7 @@ import { StatusBar } from './components/StatusBar';
 import { ShellTab } from './components/ShellTab';
 import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
+import { GitPanel } from './components/GitPanel';
 import { Settings } from './components/Settings';
 import { ResizeHandle } from './components/ResizeHandle';
 import { FileFinder } from './components/FileFinder';
@@ -12,6 +13,9 @@ import { NewProjectDialog } from './components/NewProjectDialog';
 import { ActivityBar, type ActivityView } from './components/ActivityBar';
 import { CommandPalette, type Command } from './components/CommandPalette';
 import { ProjectSearch } from './components/ProjectSearch';
+import { PromptLibrary } from './components/PromptLibrary';
+import { ScrollbackSearch } from './components/ScrollbackSearch';
+import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
@@ -22,7 +26,9 @@ import { usePersistedNumber } from './hooks/usePersistedNumber';
 import { usePersistedState } from './hooks/usePersistedState';
 import { usePoppedShells } from './hooks/usePoppedShells';
 import { useProjectShells } from './hooks/useProjectShells';
+import { useGitStatus } from './hooks/useGitStatus';
 import { Tooltip } from './components/Tooltip';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 interface PopoutInfo {
   projectId: number;
@@ -47,11 +53,35 @@ function readPopout(): PopoutInfo | null {
 
 export function App() {
   const popout = useMemo(readPopout, []);
-  if (popout) return <PopoutShell {...popout} />;
-  return <MainApp />;
+  // ErrorBoundary catches render/lifecycle errors so an unhandled throw in
+  // any descendant doesn't unmount the whole tree and leave the user with
+  // a blank window. See components/ErrorBoundary.tsx for the fallback UI.
+  return (
+    <ErrorBoundary>
+      {popout ? <PopoutShell {...popout} /> : <MainApp />}
+    </ErrorBoundary>
+  );
 }
 
 function MainApp() {
+  // App-boot auto-login: if the user opted into "Remember me" in a previous
+  // session, the OS keychain has their password. Try the silent auto-login
+  // once at startup so the chat unread badge, event stream, and rail state
+  // reflect reality without waiting for the user to open the chat panel.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { hasPassword } = await api.invoke('metaproject:credentials-load', undefined as never);
+        if (cancelled || !hasPassword) return;
+        const res = await api.invoke('metaproject:auto-login', undefined as never);
+        if (!cancelled && res.ok && res.userName) {
+          toast(`Signed in to metaproject as ${res.userName}`, { kind: 'success' });
+        }
+      } catch { /* fine — user can still sign in via the chat card */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [selected, setSelected] = useState<Project | null>(null);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
   // useEffect with an empty dep list) always reads the current project.
@@ -77,7 +107,7 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'settings',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'settings',
   );
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
@@ -93,6 +123,19 @@ function MainApp() {
   }, []);
   // Clear unread the instant the chat panel opens.
   useEffect(() => { if (activeView === 'chat') setChatUnread(0); }, [activeView]);
+  // Refresh task count for the ActivityBar pip whenever the project changes.
+  // Cheap: it's a filesystem read of package.json + Makefile + compose.
+  useEffect(() => {
+    if (!selected) { setTaskCount(0); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { tasks } = await api.invoke('tasks:discover', { projectId: selected.id });
+        if (!cancelled) setTaskCount(tasks.length);
+      } catch { if (!cancelled) setTaskCount(0); }
+    })();
+    return () => { cancelled = true; };
+  }, [selected]);
   // Which shellIndex is currently visible in the Shell tab. Default 0 (the
   // Claude/primary shell); ad-hoc terminals opened as tabs bump this to
   // their fresh index so the user immediately sees the new shell.
@@ -136,9 +179,13 @@ function MainApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [promptsOpen, setPromptsOpen] = useState(false);
+  const [scrollbackOpen, setScrollbackOpen] = useState(false);
+  const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
+  const { status: git } = useGitStatus(selected?.id ?? null);
   // Once a NON-primary shell (idx > 0) is popped out into its own window,
   // hide it from the tab strip — the window is now its home. Closing the
   // window returns the shell to the tab strip. Killing from the strip
@@ -162,6 +209,9 @@ function MainApp() {
     { id: 'nav.projects',    category: 'Go',       title: 'Open project switcher',           hint: '⌘K',   run: () => setSwitcherOpen(true) },
     { id: 'nav.find-file',   category: 'Go',       title: 'Find file in project',            hint: '⌘P',   run: () => setFinderOpen(true) },
     { id: 'nav.find-in-project', category: 'Go',   title: 'Find in project…',                hint: '⌘⇧F',  run: () => setSearchOpen(true) },
+    { id: 'nav.scrollback-search', category: 'Go', title: 'Search all shells…',              hint: '⌘⇧O',  run: () => setScrollbackOpen(true) },
+    { id: 'shell.prompts',   category: 'Shell',    title: 'Open prompt library',             hint: '⌘⇧K',  run: () => setPromptsOpen(true) },
+    { id: 'view.tasks',      category: 'View',     title: 'Show tasks panel',                              run: () => setActiveView('tasks') },
     { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
@@ -190,6 +240,62 @@ function MainApp() {
     return () => { off(); };
   }, [refreshAlive]);
 
+  // Refresh the selected-project object when anything (link/unlink,
+  // config update, name change) mutates it in the DB.
+  //
+  // History: this used to blindly setSelected on every projects:changed
+  // event. That was buggy — projects:open ALSO emits projects:changed, so
+  // clicking project B would trigger the listener with cur=A (ref stale
+  // relative to the queued pick(B)), and after the async list fetch we'd
+  // setSelected(A), reverting the user's click. The two guards below fix
+  // both parts of the race:
+  //   (1) capture the id-at-start and abort if selection changed during
+  //       the await — the user's later pick wins;
+  //   (2) only setSelected when the fields that actually matter to the
+  //       shell/chat/git views changed, so open-then-refresh doesn't emit
+  //       redundant renders even when we DO stay on the same project.
+  useEffect(() => {
+    const off = api.on('projects:changed', async () => {
+      const idAtStart = selectedRef.current?.id;
+      if (idAtStart == null) return;
+      try {
+        const { projects } = await api.invoke('projects:list', undefined as never);
+        if (selectedRef.current?.id !== idAtStart) return;   // (1)
+        const cur   = selectedRef.current!;
+        const fresh = projects.find((p) => p.id === idAtStart);
+        if (!fresh) return;
+        const linkedNow    = fresh.config.linkedMetaprojectProjectId ?? fresh.metaprojectProjectId ?? null;
+        const linkedBefore = cur.config.linkedMetaprojectProjectId   ?? cur.metaprojectProjectId   ?? null;
+        const materialChange = linkedNow !== linkedBefore || fresh.name !== cur.name || fresh.path !== cur.path;
+        if (materialChange) setSelected(fresh);              // (2)
+      } catch { /* fine — next user action will refresh */ }
+    });
+    return () => { off(); };
+  }, []);
+
+  // Click-to-focus for "command done" OS notifications: the main process
+  // fires `shell:focus-request` with a (projectId, shellIndex). We look up
+  // the project (it may not be the one currently selected), open it, and
+  // switch to that shell tab.
+  useEffect(() => {
+    const off = api.on('shell:focus-request', async ({ projectId, shellIndex }) => {
+      try {
+        const cur = selectedRef.current;
+        if (!cur || cur.id !== projectId) {
+          const { project } = await api.invoke('projects:open', { id: projectId });
+          setSelected(project);
+        }
+        setMainTab('shell');
+        // Use requestAnimationFrame so we apply the shell index after the
+        // per-project state has picked up the new selection.
+        requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+      } catch (e) {
+        toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+      }
+    });
+    return () => { off(); };
+  }, [setActiveShellIndex, setMainTab]);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
@@ -201,6 +307,10 @@ function MainApp() {
       if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); setNewProjectOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); setPaletteOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setSearchOpen(true); }
+      // ⌘⇧K → prompt library (paste snippets into the active shell)
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setPromptsOpen(true); }
+      // ⌘⇧O → search across every alive shell's scrollback
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); setScrollbackOpen(true); }
       if (mod && e.key === '/')                          { e.preventDefault(); setHelpOpen((v) => !v); }
       if (mod && e.key.toLowerCase() === 't') {
         e.preventDefault();
@@ -223,7 +333,7 @@ function MainApp() {
           }
         })();
       }
-      if (e.key === 'Escape')                            { setSettingsOpen(false); setFinderOpen(false); setNewProjectOpen(false); setPaletteOpen(false); setHelpOpen(false); setSearchOpen(false); }
+      if (e.key === 'Escape')                            { setSettingsOpen(false); setFinderOpen(false); setNewProjectOpen(false); setPaletteOpen(false); setHelpOpen(false); setSearchOpen(false); setPromptsOpen(false); setScrollbackOpen(false); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -254,13 +364,24 @@ function MainApp() {
     };
   }, []);
 
+  // Guards against the "clicked another project but nothing happens" bug:
+  // a slow projects:open (or the shells:launch that runs after it) can
+  // resolve after the user has clicked a DIFFERENT project. Without this
+  // ref the stale earlier setSelected would win, reverting the click.
+  const lastPickIdRef = useRef<number | null>(null);
   async function pick(p: Project) {
-    const { project } = await api.invoke('projects:open', { id: p.id });
-    setSelected(project);
+    lastPickIdRef.current = p.id;
     try {
+      const { project } = await api.invoke('projects:open', { id: p.id });
+      if (lastPickIdRef.current !== p.id) return;    // superseded by a newer click
+      setSelected(project);
       await api.invoke('shells:launch', { projectId: project.id });
     } catch (e) {
-      toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+      // Only surface the toast when the failure is for the current pick —
+      // otherwise a stale evictee-failure would confuse the user.
+      if (lastPickIdRef.current === p.id) {
+        toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+      }
       console.error(e);
     }
   }
@@ -428,8 +549,9 @@ function MainApp() {
           active={activeView}
           onSelect={(v) => {
             if (v === 'settings') { setSettingsOpen(true); return; }
-            if (v === 'chat' || v === 'projects') {
-              setActiveView(v);
+            if (v === 'chat' || v === 'projects' || v === 'git' || v === 'tasks') {
+              // Toggle if the same view is clicked twice — quality-of-life.
+              setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
               if (!sidebarOpen) setSidebarOpen(true);
               return;
             }
@@ -438,36 +560,93 @@ function MainApp() {
           onToggleSidebar={() => setSidebarOpen((s) => !s)}
           sidebarOpen={sidebarOpen}
           chatUnread={chatUnread}
+          gitDirty={git.dirty ? Object.keys(git.files).length : undefined}
+          taskCount={taskCount || undefined}
         />
         {sidebarOpen && (
           <>
-            {activeView === 'chat' ? (
-              <div
-                className="h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <ChatTab
-                  projectId={selected?.id ?? 0}
-                  metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                  compact
-                />
-              </div>
-            ) : (
-              <Sidebar
-                selectedProjectId={selected?.id ?? null}
-                onSelect={pick}
-                onNewProject={() => setNewProjectOpen(true)}
-                width={sidebarWidth}
-              />
-            )}
+            {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
+                sits alongside it in its own resizable column instead of
+                replacing it, so the user never has to swap views just to pick
+                a different project. */}
+            <Sidebar
+              selectedProjectId={selected?.id ?? null}
+              onSelect={pick}
+              onNewProject={() => setNewProjectOpen(true)}
+              width={sidebarWidth}
+            />
             <ResizeHandle
-              value={activeView === 'chat' ? chatPanelWidth : sidebarWidth}
-              onChange={activeView === 'chat' ? setChatPanelWidth : setSidebarWidth}
-              onReset={() => activeView === 'chat' ? setChatPanelWidth(400) : setSidebarWidth(288)}
-              min={activeView === 'chat' ? 300 : 200}
-              max={activeView === 'chat' ? 640 : 560}
+              value={sidebarWidth}
+              onChange={setSidebarWidth}
+              onReset={() => setSidebarWidth(288)}
+              min={200}
+              max={560}
               side="left"
             />
+            {activeView === 'chat' && (
+              <>
+                <div
+                  data-view="chat"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  style={{ width: chatPanelWidth }}
+                >
+                  <ChatTab
+                    projectId={selected?.id ?? 0}
+                    metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                    compact
+                  />
+                </div>
+                <ResizeHandle
+                  value={chatPanelWidth}
+                  onChange={setChatPanelWidth}
+                  onReset={() => setChatPanelWidth(400)}
+                  min={300}
+                  max={640}
+                  side="left"
+                />
+              </>
+            )}
+            {activeView === 'git' && (
+              <>
+                <div
+                  data-view="git"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  style={{ width: chatPanelWidth }}
+                >
+                  <GitPanel projectId={selected?.id ?? null} />
+                </div>
+                <ResizeHandle
+                  value={chatPanelWidth}
+                  onChange={setChatPanelWidth}
+                  onReset={() => setChatPanelWidth(400)}
+                  min={280}
+                  max={640}
+                  side="left"
+                />
+              </>
+            )}
+            {activeView === 'tasks' && (
+              <>
+                <div
+                  data-view="tasks"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  style={{ width: chatPanelWidth }}
+                >
+                  <TasksPanel
+                    projectId={selected?.id ?? null}
+                    onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
+                  />
+                </div>
+                <ResizeHandle
+                  value={chatPanelWidth}
+                  onChange={setChatPanelWidth}
+                  onReset={() => setChatPanelWidth(400)}
+                  min={280}
+                  max={640}
+                  side="left"
+                />
+              </>
+            )}
           </>
         )}
         <main className="flex-1 flex flex-col min-h-0 bg-[--panel-strong]/40">
@@ -489,7 +668,42 @@ function MainApp() {
                       <XIcon />
                     </button>
                   </span>
-                  <MetaprojectBoardButton project={selected} />
+                  <MetaprojectBoardButton project={selected} onRequestLink={() => setActiveView('chat')} />
+                  <Tooltip label="Prompt library" shortcut="⌘⇧K">
+                    <button
+                      onClick={() => setPromptsOpen(true)}
+                      className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+                      data-testid="prompts-open"
+                      aria-label="Open prompt library"
+                    >
+                      <PromptsIcon />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Search all shells" shortcut="⌘⇧O">
+                    <button
+                      onClick={() => setScrollbackOpen(true)}
+                      className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+                      data-testid="scrollback-open"
+                      aria-label="Search across all live shells"
+                    >
+                      <SearchIcon />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Reveal project folder in Finder">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.invoke('files:reveal', { projectId: selected.id, relPath: '' });
+                        } catch (e) {
+                          toast('Could not open the folder', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                        }
+                      }}
+                      className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+                      data-testid="reveal-project-folder"
+                    >
+                      <RevealFolderIcon />
+                    </button>
+                  </Tooltip>
                   <Tooltip label="Pop the active shell into its own window">
                     <button
                       onClick={popoutCurrent}
@@ -584,13 +798,37 @@ function MainApp() {
       />
       <ToastStack />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ProjectSearch
+         <ProjectSearch
         open={searchOpen && selected != null}
         projectId={selected?.id ?? null}
         onClose={() => setSearchOpen(false)}
         onOpenMatch={(relPath, line) => {
           setMainTab('files');
           setOpenInFiles({ relPath, line });
+        }}
+      />
+      <PromptLibrary
+        open={promptsOpen}
+        onClose={() => setPromptsOpen(false)}
+        projectId={selected?.id ?? null}
+        activeShell={selected ? { projectId: selected.id, shellIndex: activeShellIndex } : null}
+        activeShellLabel={selected ? `${selected.name} · shell ${activeShellIndex}` : undefined}
+      />
+      <ScrollbackSearch
+        open={scrollbackOpen}
+        onClose={() => setScrollbackOpen(false)}
+        onFocus={async (projectId, shellIndex) => {
+          try {
+            const cur = selectedRef.current;
+            if (!cur || cur.id !== projectId) {
+              const { project } = await api.invoke('projects:open', { id: projectId });
+              setSelected(project);
+            }
+            setMainTab('shell');
+            requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+          } catch (e) {
+            toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+          }
         }}
       />
     </div>
@@ -689,7 +927,7 @@ const SHORTCUT_GROUPS: Array<{ title: string; items: Array<[string, string]> }> 
   { title: 'Go',       items: [['⌘K', 'Project switcher'], ['⌘P', 'Find file in project'], ['⌘⇧F', 'Find in project']] },
   { title: 'Views',    items: [['⌘B', 'Toggle sidebar'], ['⌘,', 'Settings'], ['⌘/', 'This cheat sheet']] },
   { title: 'Palette',  items: [['⌘⇧P', 'Command palette'], ['⌘⇧N', 'New project']] },
-  { title: 'Shell',    items: [['⌘F', 'Find in terminal'], ['⌘=', 'Zoom in'], ['⌘-', 'Zoom out'], ['⌘0', 'Reset zoom']] },
+  { title: 'Shell',    items: [['⌘F', 'Find in terminal'], ['⌘⇧O', 'Search all shells'], ['⌘⇧K', 'Prompt library'], ['⌘=', 'Zoom in'], ['⌘-', 'Zoom out'], ['⌘0', 'Reset zoom']] },
 ];
 
 function ShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -1186,6 +1424,34 @@ function SplitIcon() {
   );
 }
 
+function PromptsIcon() {
+  // Lightbulb — reads as "snippets / ideas to paste".
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 18h6" />
+      <path d="M10 22h4" />
+      <path d="M12 2a7 7 0 0 0-4 12.7c.7.5 1 1.3 1 2.1V18h6v-1.2c0-.8.3-1.6 1-2.1A7 7 0 0 0 12 2z" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  );
+}
+
+function RevealFolderIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
 function PopoutIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1196,37 +1462,58 @@ function PopoutIcon() {
   );
 }
 
-function MetaprojectBoardButton({ project }: { project: Project }) {
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+function MetaprojectBoardButton({ project, onRequestLink }: { project: Project; onRequestLink: () => void }) {
+  // Seed with the default so a click during the settings-fetch race doesn't
+  // dead-end on a "not configured" toast — the vast majority of users will
+  // hit the default anyway, and settings:get overwrites it when it resolves.
+  const DEFAULT_BASE = 'https://projects.metalogix.solutions';
+  const [baseUrl, setBaseUrl] = useState<string>(DEFAULT_BASE);
   useEffect(() => {
     (async () => {
       try {
         const { value } = await api.invoke('settings:get', { key: 'metaproject_base_url' });
-        setBaseUrl(typeof value === 'string' ? value : null);
-      } catch { setBaseUrl(null); }
+        if (typeof value === 'string' && value) setBaseUrl(value);
+      } catch { /* keep default */ }
     })();
   }, []);
   const linked = project.config.linkedMetaprojectProjectId ?? project.metaprojectProjectId;
-  if (!linked) return null;
-  const disabled = !baseUrl;
-  const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}/board/${encodeURIComponent(linked)}` : '';
+  // Strip any leading identifier prefix ("PROJ-42" → "42"). The public URL
+  // is `/projects/<int_id>` which auto-redirects to the kanban board.
+  const numericId = linked ? Number(String(linked).replace(/^[A-Za-z]+-/, '')) : null;
+  const isLinked = !!(linked && numericId && Number.isFinite(numericId));
+  // Normalize baseUrl: users often save a bare host like
+  // `projects.metalogix.solutions` without a scheme, which then fails the
+  // main-process URL-scheme allowlist. Prepend `https://` when missing and
+  // strip a trailing slash so the join is clean.
+  const normalizedBase = /^https?:\/\//i.test(baseUrl)
+    ? baseUrl.replace(/\/$/, '')
+    : `https://${baseUrl.replace(/^\/+/, '').replace(/\/$/, '')}`;
+  const url = isLinked ? `${normalizedBase}/projects/${numericId}` : '';
   return (
     <button
-      onClick={() => {
-        if (disabled) {
-          toast('Set the Metaproject base URL in Settings', { kind: 'warning' });
+      onClick={async () => {
+        // Unlinked → surface the link/create banner in the chat rail so the
+        // user can wire this local project to a metaproject board in one
+        // click; the banner already has both "Link existing" and "Create new".
+        if (!isLinked) {
+          toast('Not linked yet — pick or create a metaproject board', { kind: 'info' });
+          onRequestLink();
           return;
         }
-        void api.invoke('app:open-external', { url });
+        try {
+          await api.invoke('app:open-external', { url });
+        } catch (e) {
+          toast('Could not open the board', { kind: 'error', detail: `${String(e).replace(/^Error:\s*/, '')} — URL: ${url}` });
+        }
       }}
       className={`text-[11px] px-2 py-0.5 rounded-md border border-[--border] flex items-center gap-1 ${
-        disabled ? 'text-[--text-muted]' : 'hover:bg-[--panel-strong] text-[--text]'
+        isLinked ? 'hover:bg-[--panel-strong] text-[--text]' : 'text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text]'
       }`}
-      title={disabled ? 'Metaproject base URL not configured' : `Open ${linked} on the metaproject board`}
+      title={isLinked ? `Open ${linked} on the metaproject board` : 'Not linked to a metaproject board — click to link or create one'}
       data-testid="metaproject-board"
     >
       <BoardIcon />
-      <span>Board</span>
+      <span>{isLinked ? 'Board' : 'Board · link'}</span>
     </button>
   );
 }

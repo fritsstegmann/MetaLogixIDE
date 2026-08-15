@@ -12,7 +12,8 @@ function setupRoot() {
   mkdirSync(join(root, 'proj-go'));       writeFileSync(join(root, 'proj-go/go.mod'), '');
   mkdirSync(join(root, 'proj-rust'));     writeFileSync(join(root, 'proj-rust/Cargo.toml'), '');
   mkdirSync(join(root, 'proj-mp'));       writeFileSync(join(root, 'proj-mp/.metaproject.yaml'), '');
-  mkdirSync(join(root, 'not-a-project')); // no markers
+  mkdirSync(join(root, 'docs-only'));     // no markers — should still surface
+  mkdirSync(join(root, 'node_modules'));  // IGNORE_TOPLEVEL — should NOT surface
   return root;
 }
 
@@ -21,13 +22,21 @@ describe('discoverProjects', () => {
     const root = setupRoot();
     const projects = discoverProjects(root, 1);
     const names = projects.map(p => p.name).sort();
-    expect(names).toEqual(['proj-git', 'proj-go', 'proj-mp', 'proj-node', 'proj-py', 'proj-rust']);
+    expect(names).toEqual(expect.arrayContaining(['proj-git', 'proj-go', 'proj-mp', 'proj-node', 'proj-py', 'proj-rust']));
   });
 
-  it('ignores folders without markers', () => {
+  it('includes marker-less top-level folders (so raw project folders are searchable)', () => {
     const root = setupRoot();
     const projects = discoverProjects(root, 1);
-    expect(projects.map(p => p.name)).not.toContain('not-a-project');
+    const docs = projects.find(p => p.name === 'docs-only');
+    expect(docs).toBeDefined();
+    expect(docs?.markers).toEqual([]);
+  });
+
+  it('skips well-known noise folders even without markers', () => {
+    const root = setupRoot();
+    const names = discoverProjects(root, 1).map(p => p.name);
+    expect(names).not.toContain('node_modules');
   });
 
   it('reports which markers matched', () => {
@@ -36,13 +45,17 @@ describe('discoverProjects', () => {
     expect(p.markers).toContain('.git');
   });
 
-  it('depth=2 recurses one extra level', () => {
+  it('depth=2 recurses one extra level and prefers nested markers over raw parent', () => {
     const root = mkdtempSync(join(tmpdir(), 'disc2-'));
     mkdirSync(join(root, 'monorepo'));
     mkdirSync(join(root, 'monorepo/packages'));
     mkdirSync(join(root, 'monorepo/packages/a'));
     writeFileSync(join(root, 'monorepo/packages/a/package.json'), '{}');
     const projects = discoverProjects(root, 2);
-    expect(projects.map(p => p.name)).toContain('a');
+    const names = projects.map(p => p.name);
+    expect(names).toContain('a');
+    // `monorepo` should NOT double-appear as a raw-folder — a nested project
+    // was found underneath, so we skip the parent to avoid overlap.
+    expect(names).not.toContain('monorepo');
   });
 });

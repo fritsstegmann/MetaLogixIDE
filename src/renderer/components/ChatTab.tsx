@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { usePersistedState } from '@renderer/hooks/usePersistedState';
 
 interface Channel { id: number; project_id: number | null; name: string; is_private: boolean }
 interface MpProject { id: number; name: string; identifier?: string | null }
 interface MsgUser { id: number; username: string; display_name?: string; avatar_url?: string | null }
+interface Attachment {
+  id: number;
+  filename: string;
+  file_size: number;
+  mime_type?: string | null;
+}
+
 interface Msg {
   id: number;
   channel_id: number;
+  /** Null on global channels. Present on project-scoped ones. */
+  project_id?: number | null;
   user_id: number;
   user_name?: string;
   user?: MsgUser;
   message: string;
   created_at: string;
   parent_message_id: number | null;
+  attachments?: Attachment[];
   /** Locally-set flag when the server broadcasts channel_message_deleted. */
   deleted?: boolean;
 }
@@ -50,6 +61,22 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
   const [error, setError] = useState<string | null>(null);
   const [loadingChannels, setLoadingChannels] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  // id → name lookup for the "Other projects" group so the dropdown shows
+  // human labels instead of `— proj 42`. Fetched once when the user logs in
+  // and cached for the session; a project rename in metaproject won't reflect
+  // until app restart, which is acceptable for a hint label.
+  const [projectNames, setProjectNames] = useState<Record<number, string>>({});
+  // Directory of active users — powers the composer's @-autocomplete. Loaded
+  // once at login; small enough that caching in memory is fine.
+  const [users, setUsers] = useState<Array<{ id: number; username: string }>>([]);
+  // Per-channel unread counter. Bumps on channel_message events when the
+  // message's channel isn't the currently-viewed one (or when the chat rail
+  // is hidden entirely). Persisted so restarts don't lose the state.
+  const [unreadByChannel, setUnreadByChannel] = usePersistedState<Record<string, number>>(
+    'metaide.unreadByChannel',
+    {},
+    (v): v is Record<string, number> => typeof v === 'object' && v !== null && !Array.isArray(v),
+  );
   const listRef = useRef<HTMLDivElement>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -58,6 +85,24 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
   }, []);
 
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
+
+  // Hydrate project-name lookup once we're logged in — cheap single call,
+  // reused everywhere a channel needs to name its parent project.
+  useEffect(() => {
+    if (!status?.loggedIn) return;
+    (async () => {
+      try {
+        const { projects } = await api.invoke('metaproject:list-projects', undefined as never);
+        const map: Record<number, string> = {};
+        for (const p of projects) map[p.id] = p.name;
+        setProjectNames(map);
+      } catch { /* names remain empty; fallback shows "proj N" */ }
+      try {
+        const { users } = await api.invoke('metaproject:list-users', undefined as never);
+        setUsers(users);
+      } catch { /* mentions still work by typing usernames verbatim */ }
+    })();
+  }, [status?.loggedIn]);
 
   // Load channels once we're logged in. Uses the workspace-scoped endpoint
   // so the sidebar shows EVERY channel the user is in across every project
@@ -80,6 +125,20 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
             channels.find((c) => c.project_id == null) ||
             channels[0];
           if (preferred) setActiveChannel(preferred);
+        }
+        // Auto-switch when the user picks a different project while the
+        // chat pane is open: jump to that project's first channel so chat
+        // context follows the selection.
+        if (channels.length > 0 && activeChannel && numericMpId != null && activeChannel.project_id !== numericMpId) {
+          const nextForProject = channels.find((c) => c.project_id === numericMpId);
+          if (nextForProject) setActiveChannel(nextForProject);
+        }
+        // Subscribe to EVERY channel the user is in so per-channel unread
+        // counters can bump for background rooms — not just the one that's
+        // currently visible in the pane. Cheap: join is a socket emit.
+        for (const c of channels) {
+          try { await api.invoke('metaproject:join-channel', { channelId: c.id }); }
+          catch { /* per-channel join failure isn't fatal */ }
         }
       } catch (e) {
         setError(String(e).replace(/^Error:\s*/, ''));
@@ -117,6 +176,20 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
     })();
   }, [activeChannel, numericMpId]);
 
+  // Clear the unread dot for the channel the user just opened. Runs whenever
+  // activeChannel changes, including the initial open after channel load.
+  useEffect(() => {
+    if (!activeChannel) return;
+    setUnreadByChannel((prev) => {
+      const key = String(activeChannel.id);
+      if (!prev[key]) return prev;
+      // Rebuild without the cleared key (dynamic delete trips eslint).
+      const next: Record<string, number> = {};
+      for (const [k, v] of Object.entries(prev)) if (k !== key) next[k] = v;
+      return next;
+    });
+  }, [activeChannel, setUnreadByChannel]);
+
   // Subscribe to server events. Fan out to per-channel + notification logic.
   useEffect(() => {
     const off = api.on('metaproject:event', ({ event, payload }) => {
@@ -127,11 +200,18 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
         const msg = typeof p === 'string' ? p : (p?.message ?? 'connect failed');
         setError(`Live chat offline: ${msg}`);
       }
-      if (event === 'channel_message' && activeChannel) {
+      if (event === 'channel_message') {
         const p = payload as { channel_id: number; message: Msg };
-        if (p.channel_id !== activeChannel.id) return;
-        setMessages((prev) => [...prev, p.message]);
-        // OS notification on @mention or when window unfocused.
+        // Live-append when the message is for the currently-viewed channel.
+        if (activeChannel && p.channel_id === activeChannel.id) {
+          setMessages((prev) => [...prev, p.message]);
+        } else {
+          // Different channel → bump that channel's unread counter so a dot
+          // appears in the sidebar. Cleared when the user opens that channel.
+          setUnreadByChannel((prev) => ({ ...prev, [String(p.channel_id)]: (prev[String(p.channel_id)] ?? 0) + 1 }));
+        }
+        // Fire an OS notification if the current user is @mentioned or the
+        // app window is unfocused — regardless of which channel it hit.
         maybeNotify(p.message, status?.userName ?? null);
       }
       if (event === 'channel_message_edited' && activeChannel) {
@@ -213,13 +293,13 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
             return (
               <>
                 {grouped.thisProject.length > 0 && (
-                  <ChannelGroup label="This project" channels={grouped.thisProject} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} />
+                  <ChannelGroup label="This project" channels={grouped.thisProject} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} unread={unreadByChannel} />
                 )}
                 {grouped.global.length > 0 && (
-                  <ChannelGroup label="Global" channels={grouped.global} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} />
+                  <ChannelGroup label="Global" channels={grouped.global} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} unread={unreadByChannel} />
                 )}
                 {grouped.other.length > 0 && (
-                  <ChannelGroup label="Other projects" channels={grouped.other} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} />
+                  <ChannelGroup label="Other projects" channels={grouped.other} activeId={activeChannel?.id ?? null} onPick={setActiveChannel} unread={unreadByChannel} projectNames={projectNames} />
                 )}
               </>
             );
@@ -245,23 +325,39 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
                 <>
                   {grouped.thisProject.length > 0 && (
                     <optgroup label="This project">
-                      {grouped.thisProject.map((c) => (
-                        <option key={c.id} value={c.id}>{c.is_private ? '🔒 ' : '# '}{c.name}</option>
-                      ))}
+                      {grouped.thisProject.map((c) => {
+                        const u = unreadByChannel[String(c.id)] ?? 0;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.is_private ? '🔒 ' : '# '}{c.name}{u > 0 ? ` (${u})` : ''}
+                          </option>
+                        );
+                      })}
                     </optgroup>
                   )}
                   {grouped.global.length > 0 && (
                     <optgroup label="Global">
-                      {grouped.global.map((c) => (
-                        <option key={c.id} value={c.id}>{c.is_private ? '🔒 ' : '🌐 '}{c.name}</option>
-                      ))}
+                      {grouped.global.map((c) => {
+                        const u = unreadByChannel[String(c.id)] ?? 0;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.is_private ? '🔒 ' : '🌐 '}{c.name}{u > 0 ? ` (${u})` : ''}
+                          </option>
+                        );
+                      })}
                     </optgroup>
                   )}
                   {grouped.other.length > 0 && (
                     <optgroup label="Other projects">
-                      {grouped.other.map((c) => (
-                        <option key={c.id} value={c.id}>{c.is_private ? '🔒 ' : '# '}{c.name} — proj {c.project_id}</option>
-                      ))}
+                      {grouped.other.map((c) => {
+                        const parent = c.project_id != null ? (projectNames[c.project_id] ?? `proj ${c.project_id}`) : '';
+                        const u = unreadByChannel[String(c.id)] ?? 0;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.is_private ? '🔒 ' : '# '}{c.name}{parent ? ` — ${parent}` : ''}{u > 0 ? ` (${u})` : ''}
+                          </option>
+                        );
+                      })}
                     </optgroup>
                   )}
                 </>
@@ -289,24 +385,41 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
               <span>Loading messages…</span>
             </div>
           )}
-          <MessageList messages={messages} myUserId={status.userId} channelId={activeChannel?.id ?? null} />
+          <MessageList
+            messages={messages}
+            myUserId={status.userId}
+            channelId={activeChannel?.id ?? null}
+            projectIdForAttachments={
+              activeChannel?.project_id
+              ?? numericMpId
+              ?? channels.find((c) => c.project_id != null)?.project_id
+              ?? null
+            }
+          />
           {!loadingMessages && messages.length === 0 && !error && (
-            <div className="text-center text-[--text-muted] text-sm p-6">
-              {activeChannel ? 'No messages yet — say hi.' : (compact ? 'Pick a channel above.' : 'Pick a channel on the left.')}
+            <div className="h-full min-h-[120px] flex flex-col items-center justify-center gap-2 text-center text-[--text-muted] px-6">
+              <div className="w-10 h-10 rounded-full bg-[--panel-strong] border border-[--border] flex items-center justify-center">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <div className="text-sm font-medium text-[--text]">
+                {activeChannel ? `#${activeChannel.name} is quiet` : 'No channel selected'}
+              </div>
+              <div className="text-xs opacity-70">
+                {activeChannel ? 'Send the first message to get the room going.' : (compact ? 'Pick a channel above.' : 'Pick a channel on the left.')}
+              </div>
             </div>
           )}
         </div>
         <div className="p-2 border-t border-[--border] bg-[--panel]/40">
-          <textarea
+          <MentionComposer
             value={composer}
-            onChange={(e) => setComposer(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
-            }}
+            onChange={setComposer}
+            onSubmit={() => void send()}
             disabled={!activeChannel}
             placeholder={activeChannel ? `Message #${activeChannel.name} — ⌘/Enter to send` : 'Pick a channel first'}
-            rows={2}
-            className="w-full resize-none bg-[--panel-strong] border border-[--border] rounded-md px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
+            users={users}
           />
         </div>
       </div>
@@ -315,6 +428,147 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
       </div>
     </div>
   );
+}
+
+interface MentionCandidate { key: string; label: string; hint?: string }
+
+/**
+ * Composer with @-autocomplete. Detects an in-flight @word at the caret,
+ * shows a popover of matching users + the special `@channel` / `@all`
+ * broadcast targets (metaproject's chat_service resolves both), and
+ * inserts `@handle ` on pick. Falls back to the plain textarea when no
+ * @word is active so ordinary typing is unaffected.
+ */
+function MentionComposer({
+  value, onChange, onSubmit,
+  disabled, placeholder, users,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  disabled: boolean;
+  placeholder: string;
+  users: Array<{ id: number; username: string }>;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [caret, setCaret] = useState(0);
+  const [selected, setSelected] = useState(0);
+
+  // Broadcast targets — chat_service treats these specially and pings every
+  // active member of the channel, so they belong at the top of the picker.
+  const broadcast: MentionCandidate[] = [
+    { key: 'channel', label: '@channel', hint: 'notify everyone in this channel' },
+    { key: 'all',     label: '@all',     hint: 'notify everyone in this channel' },
+  ];
+
+  // Extract the @word the caret currently sits inside, if any. "@" without
+  // any preceding non-space char (or start of line) starts a new mention.
+  const mention = extractMention(value, caret);
+  const q = mention ? mention.query.toLowerCase() : '';
+  const filtered = useMemo<MentionCandidate[]>(() => {
+    if (!mention) return [];
+    const uMatches = users
+      .filter((u) => u.username.toLowerCase().startsWith(q))
+      .slice(0, 8)
+      .map((u) => ({ key: u.username, label: `@${u.username}` }));
+    const bMatches = broadcast.filter((b) => b.key.startsWith(q));
+    return [...bMatches, ...uMatches];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [users, q, !!mention]);
+
+  // Reset selection when the candidate list changes shape.
+  useEffect(() => { setSelected(0); }, [filtered.length, q]);
+
+  function insert(cand: MentionCandidate) {
+    if (!mention) return;
+    const before = value.slice(0, mention.start);
+    const after  = value.slice(mention.end);
+    const replacement = `@${cand.key} `;
+    const next = before + replacement + after;
+    onChange(next);
+    // Move caret past the inserted mention on next tick.
+    const newCaret = (before + replacement).length;
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.selectionStart = el.selectionEnd = newCaret;
+      el.focus();
+    });
+  }
+
+  return (
+    <div className="relative">
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setCaret(e.target.selectionStart ?? 0);
+        }}
+        onKeyDown={(e) => {
+          if (filtered.length > 0) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setSelected((i) => Math.min(filtered.length - 1, i + 1)); return; }
+            if (e.key === 'ArrowUp')   { e.preventDefault(); setSelected((i) => Math.max(0, i - 1)); return; }
+            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insert(filtered[selected]!); return; }
+            if (e.key === 'Escape')    { e.preventDefault(); setCaret(-1); return; }
+          }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSubmit(); }
+        }}
+        onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        disabled={disabled}
+        placeholder={placeholder}
+        rows={2}
+        className="w-full resize-none bg-[--panel-strong] border border-[--border] rounded-md px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
+      />
+      {filtered.length > 0 && mention && (
+        <div className="absolute bottom-full left-0 mb-1 w-64 max-h-56 overflow-y-auto rounded-md border border-[--border] bg-[--panel-strong] shadow-xl z-10">
+          {filtered.map((c, i) => (
+            <button
+              key={c.key}
+              onMouseDown={(e) => { e.preventDefault(); insert(c); }}
+              onMouseEnter={() => setSelected(i)}
+              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${
+                i === selected ? 'bg-[color:var(--accent)]/25' : 'hover:bg-[--panel]'
+              }`}
+            >
+              <span className="font-medium">{c.label}</span>
+              {c.hint && <span className="text-[10px] text-[--text-muted] ml-auto">{c.hint}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Find the @word that surrounds the caret, if any. Returns `{ start, end,
+ * query }` where `start` points at the `@` and `query` is the chars after
+ * it. Returns null when the caret isn't inside an @word — e.g. after a
+ * space, at the very start of an alphanumeric run, or on an already-
+ * completed `@name` followed by other chars.
+ */
+function extractMention(text: string, caret: number): { start: number; end: number; query: string } | null {
+  if (caret < 0 || caret > text.length) return null;
+  // Walk back from caret until we hit whitespace / start / non-mention char.
+  let i = caret;
+  while (i > 0) {
+    const ch = text[i - 1]!;
+    if (ch === '@') {
+      // Ensure the @ is at start or after whitespace/punctuation.
+      const prev = i >= 2 ? text[i - 2]! : ' ';
+      if (!/[\s(\[{,;:!?]/.test(prev)) return null;
+      const query = text.slice(i, caret);
+      if (!/^[A-Za-z0-9._-]*$/.test(query)) return null;
+      // Walk forward to find the end of the @word for replacement.
+      let j = caret;
+      while (j < text.length && /[A-Za-z0-9._-]/.test(text[j]!)) j++;
+      return { start: i - 1, end: j, query };
+    }
+    if (!/[A-Za-z0-9._-]/.test(ch)) return null;
+    i--;
+  }
+  return null;
 }
 
 /** Partition channels into the three groups the sidebar renders. */
@@ -330,36 +584,52 @@ function groupChannels(channels: Channel[], currentMpId: number | null): { thisP
   return { thisProject, global, other };
 }
 
-function ChannelGroup({ label, channels, activeId, onPick }: {
+function ChannelGroup({ label, channels, activeId, onPick, projectNames, unread }: {
   label: string;
   channels: Channel[];
   activeId: number | null;
   onPick: (c: Channel) => void;
+  /** Optional: id → name lookup so "Other projects" rows can show the parent name. */
+  projectNames?: Record<number, string>;
+  /** channelId (string key) → unread count; renders a small pill on rows with unread. */
+  unread?: Record<string, number>;
 }) {
   return (
     <div className="mt-2">
       <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[--text-muted] font-semibold">{label}</div>
-      {channels.map((c) => (
-        <button
-          key={c.id}
-          onClick={() => onPick(c)}
-          className={`w-full text-left px-3 py-1 rounded-md flex items-center gap-1.5 mx-1 ${
-            activeId === c.id ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong]'
-          }`}
-        >
-          <span className="opacity-70">{c.is_private ? '🔒' : c.project_id == null ? '🌐' : '#'}</span>
-          <span className="truncate">{c.name}</span>
-        </button>
-      ))}
+      {channels.map((c) => {
+        const parent = projectNames && c.project_id != null ? projectNames[c.project_id] : undefined;
+        const u = unread?.[String(c.id)] ?? 0;
+        const isActive = activeId === c.id;
+        return (
+          <button
+            key={c.id}
+            onClick={() => onPick(c)}
+            className={`w-full text-left px-3 py-1 rounded-md flex items-center gap-1.5 mx-1 ${
+              isActive ? 'bg-[color:var(--accent)] text-white' : (u > 0 ? 'font-semibold text-[--text] hover:bg-[--panel-strong]' : 'hover:bg-[--panel-strong]')
+            }`}
+            title={parent ? `${parent} · #${c.name}${u ? ` · ${u} unread` : ''}` : `#${c.name}${u ? ` · ${u} unread` : ''}`}
+          >
+            <span className="opacity-70">{c.is_private ? '🔒' : c.project_id == null ? '🌐' : '#'}</span>
+            <span className="truncate flex-1">{c.name}</span>
+            {parent && <span className="text-[10px] text-[--text-muted] opacity-70 truncate max-w-[80px]">{parent}</span>}
+            {u > 0 && !isActive && (
+              <span className="ml-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+                {u > 99 ? '99+' : u}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: number; onLinked: () => void }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<'idle' | 'pick' | 'new'>('idle');
   const [busy, setBusy] = useState(false);
   const [projects, setProjects] = useState<MpProject[]>([]);
+  const [filter, setFilter] = useState('');
   const [newName, setNewName] = useState('');
 
   async function openPicker() {
@@ -367,7 +637,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
     try {
       const { projects } = await api.invoke('metaproject:list-projects', undefined as never);
       setProjects(projects);
-      setPickerOpen(true);
+      setMode('pick');
     } catch (e) {
       toast('Failed to list projects', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     } finally { setBusy(false); }
@@ -378,7 +648,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
     try {
       await api.invoke('metaproject:link-local-project', { projectId: localProjectId, metaprojectProjectId: mpId });
       toast('Linked to metaproject', { kind: 'success' });
-      setPickerOpen(false);
+      setMode('idle');
       onLinked();
     } catch (e) {
       toast('Link failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
@@ -393,7 +663,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
       const { project } = await api.invoke('metaproject:create-project', { name });
       await api.invoke('metaproject:link-local-project', { projectId: localProjectId, metaprojectProjectId: project.id });
       toast(`Created and linked "${name}"`, { kind: 'success' });
-      setCreating(false);
+      setMode('idle');
       setNewName('');
       onLinked();
     } catch (e) {
@@ -401,75 +671,123 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
     } finally { setBusy(false); }
   }
 
+  const filtered = filter.trim()
+    ? projects.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()) || (p.identifier ?? '').toLowerCase().includes(filter.toLowerCase()))
+    : projects;
+
   return (
-    <div className="shrink-0 border-b border-[--border] bg-[color:var(--accent)]/8 text-xs">
-      {!pickerOpen && !creating && (
-        <div className="px-3 py-2 flex items-center gap-2">
-          <span className="flex-1 text-[--text-muted]">
-            This project isn&apos;t linked to a metaproject yet — chat below still works, but there&apos;s no per-project room to post in.
-          </span>
-          <button
-            onClick={openPicker}
-            disabled={busy}
-            className="text-[color:var(--accent)] hover:brightness-110 font-medium"
-          >
-            Link existing…
-          </button>
-          <span className="text-[--text-muted]">·</span>
-          <button
-            onClick={() => setCreating(true)}
-            className="text-[color:var(--accent)] hover:brightness-110 font-medium"
-          >
-            Create new
-          </button>
-        </div>
-      )}
-      {pickerOpen && (
-        <div className="px-3 py-2 space-y-2 max-h-48 overflow-y-auto">
-          <div className="flex items-center gap-2">
-            <div className="font-semibold flex-1">Pick a metaproject project</div>
-            <button className="text-[--text-muted] hover:text-[--text]" onClick={() => setPickerOpen(false)}>Cancel</button>
+    <div className="shrink-0 border-b border-[--border] bg-[--panel]/60 backdrop-blur-md">
+      <div className="px-3 py-2.5">
+        {mode === 'idle' && (
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-md bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/30 flex items-center justify-center shrink-0">
+              <LinkPlugIcon />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-[--text] leading-snug">
+                Link this folder to a project
+              </div>
+              <div className="text-[11px] text-[--text-muted] leading-snug mt-0.5">
+                Pick an existing metaproject to attach team chat to this folder, or spin up a new one — takes one click.
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={openPicker}
+                  disabled={busy}
+                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+                >
+                  {busy ? 'Loading…' : 'Link existing'}
+                </button>
+                <button
+                  onClick={() => setMode('new')}
+                  disabled={busy}
+                  className="text-xs font-medium px-3 py-1.5 rounded-md border border-[--border] hover:bg-[--panel-strong] text-[--text] disabled:opacity-50"
+                >
+                  Create new
+                </button>
+              </div>
+            </div>
           </div>
-          {projects.length === 0 && <div className="text-[--text-muted]">No projects available.</div>}
-          <div className="grid grid-cols-1 gap-1">
-            {projects.map((p) => (
+        )}
+
+        {mode === 'pick' && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="text-[13px] font-semibold flex-1">Pick a project to link</div>
+              <button className="text-[11px] text-[--text-muted] hover:text-[--text] px-1.5 py-0.5" onClick={() => setMode('idle')}>Cancel</button>
+            </div>
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter…"
+              autoFocus
+              className="w-full bg-[--panel-strong] border border-[--border] rounded-md px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-[--accent]/60"
+            />
+            {filtered.length === 0 && (
+              <div className="text-[11px] text-[--text-muted] py-2 text-center">
+                {projects.length === 0 ? 'No projects available.' : 'No matches — try a different filter.'}
+              </div>
+            )}
+            {filtered.length > 0 && (
+              <div className="max-h-52 overflow-y-auto space-y-0.5 -mx-1 px-1">
+                {filtered.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => void linkTo(p.id)}
+                    disabled={busy}
+                    className="group w-full text-left px-2.5 py-2 rounded-md hover:bg-[color:var(--accent)]/15 flex items-center gap-2 border border-transparent hover:border-[color:var(--accent)]/40 disabled:opacity-50"
+                  >
+                    <div className="w-6 h-6 rounded-md bg-[--panel-strong] border border-[--border] flex items-center justify-center text-[10px] font-semibold text-[--text-muted] shrink-0">
+                      {p.name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="flex-1 truncate text-xs font-medium text-[--text]">{p.name}</span>
+                    {p.identifier && <span className="text-[10px] font-mono text-[--text-muted] opacity-70">{p.identifier}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === 'new' && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="text-[13px] font-semibold flex-1">Create a new project</div>
+              <button className="text-[11px] text-[--text-muted] hover:text-[--text] px-1.5 py-0.5" onClick={() => { setMode('idle'); setNewName(''); }}>Cancel</button>
+            </div>
+            <input
+              value={newName}
+              autoFocus
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && newName.trim()) void createAndLink(); }}
+              placeholder="Project name (e.g. lawreader)"
+              className="w-full bg-[--panel-strong] border border-[--border] rounded-md px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-[--accent]/60"
+            />
+            <div className="flex items-center gap-2">
               <button
-                key={p.id}
-                onClick={() => void linkTo(p.id)}
-                disabled={busy}
-                className="text-left px-2 py-1.5 rounded-md bg-[--panel-strong] hover:brightness-110 flex items-center gap-2"
+                onClick={createAndLink}
+                disabled={busy || !newName.trim()}
+                className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-white rounded-md py-1.5 hover:brightness-110 disabled:opacity-50"
               >
-                <span className="flex-1 truncate">{p.name}</span>
-                {p.identifier && <span className="text-[10px] font-mono text-[--text-muted]">{p.identifier}</span>}
+                {busy ? 'Creating…' : 'Create + link'}
               </button>
-            ))}
+            </div>
+            <div className="text-[10px] text-[--text-muted]">
+              Creates a Kanban project on the metaproject board and writes <code className="font-mono opacity-80">project_id</code> to this folder&apos;s <code className="font-mono opacity-80">.metaproject.yaml</code>.
+            </div>
           </div>
-        </div>
-      )}
-      {creating && (
-        <div className="px-3 py-2 space-y-2">
-          <div className="flex items-center gap-2">
-            <div className="font-semibold flex-1">Create a new metaproject</div>
-            <button className="text-[--text-muted] hover:text-[--text]" onClick={() => { setCreating(false); setNewName(''); }}>Cancel</button>
-          </div>
-          <input
-            value={newName}
-            autoFocus
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && newName.trim()) void createAndLink(); }}
-            placeholder="Project name"
-            className="w-full bg-[--panel] border border-[--border] rounded-md px-2 py-1 outline-none focus:ring-1 focus:ring-[--accent]/60"
-          />
-          <button
-            onClick={createAndLink}
-            disabled={busy || !newName.trim()}
-            className="w-full bg-[color:var(--accent)] text-white rounded-md py-1.5 hover:brightness-110 disabled:opacity-50"
-          >
-            {busy ? 'Creating…' : 'Create + link'}
-          </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
+  );
+}
+
+function LinkPlugIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[color:var(--accent)]">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
   );
 }
 
@@ -529,26 +847,39 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
   }
   return (
     <div className="h-full flex items-center justify-center p-6">
-      <div className="w-[360px] space-y-3 bg-[--panel-strong] border border-[--border] rounded-lg p-5">
-        <div className="text-sm font-semibold">Sign in to metaproject</div>
-        <div className="text-xs text-[--text-muted]">Uses the same credentials as the web board. Session cookie stays in the main process.</div>
-        <input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="username or email"
-          autoFocus
-          className="w-full bg-[--panel] border border-[--border] rounded-md px-3 py-2 text-sm"
-          data-testid="mp-login-username"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
-          placeholder="password"
-          className="w-full bg-[--panel] border border-[--border] rounded-md px-3 py-2 text-sm"
-          data-testid="mp-login-password"
-        />
+      <div className="w-[360px] space-y-4 bg-[--panel-strong] border border-[--border] rounded-xl p-6 shadow-xl">
+        <div className="text-center space-y-1.5">
+          <div className="mx-auto w-10 h-10 rounded-md bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/30 flex items-center justify-center">
+            <ChatBubbleIcon />
+          </div>
+          <div className="text-base font-semibold text-[--text]">Sign in to chat</div>
+          <div className="text-xs text-[--text-muted] leading-snug">
+            Same credentials as your metaproject board.
+          </div>
+        </div>
+        <div className="space-y-2">
+          <label className="block text-[10px] uppercase tracking-wider font-semibold text-[--text-muted]">Email or username</label>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="you@example.com"
+            autoFocus
+            className="w-full bg-[--panel] border border-[--border] rounded-md px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
+            data-testid="mp-login-username"
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="block text-[10px] uppercase tracking-wider font-semibold text-[--text-muted]">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            placeholder="••••••••"
+            className="w-full bg-[--panel] border border-[--border] rounded-md px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
+            data-testid="mp-login-password"
+          />
+        </div>
         <label className="flex items-center gap-2 text-xs text-[--text-muted] select-none cursor-pointer">
           <input
             type="checkbox"
@@ -557,13 +888,17 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
             className="accent-[color:var(--accent)]"
             data-testid="mp-login-remember"
           />
-          <span>Remember me on this Mac (uses Keychain)</span>
+          <span>Remember me on this Mac <span className="opacity-60">(stored in Keychain)</span></span>
         </label>
-        {err && <div className="text-xs text-[--danger]">{err}</div>}
+        {err && (
+          <div className="text-xs text-[--danger] bg-[--danger]/10 border border-[--danger]/30 rounded-md px-2 py-1.5">
+            {err}
+          </div>
+        )}
         <button
           onClick={submit}
           disabled={busy || !username || !password}
-          className="w-full bg-[color:var(--accent)] text-white rounded-md py-2 text-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="w-full bg-[color:var(--accent)] text-white rounded-md py-2 text-sm font-medium hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
           data-testid="mp-login-submit"
         >
           {busy && <span className="mp-spinner" aria-hidden />}
@@ -571,13 +906,21 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
         </button>
         <button
           onClick={forget}
-          className="w-full text-[10px] text-[--text-muted] hover:text-[--text] py-1"
+          className="block mx-auto text-[10px] text-[--text-muted] hover:text-[--text]"
           type="button"
         >
           Forget saved password
         </button>
       </div>
     </div>
+  );
+}
+
+function ChatBubbleIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[color:var(--accent)]">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
   );
 }
 
@@ -592,7 +935,7 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
  *  - Chooses a stable HSL colour per user_id so avatars visually cluster
  *    without needing avatar URLs (which the API may not return).
  */
-function MessageList({ messages, myUserId, channelId }: { messages: Msg[]; myUserId: number | null; channelId: number | null }) {
+function MessageList({ messages, myUserId, channelId, projectIdForAttachments }: { messages: Msg[]; myUserId: number | null; channelId: number | null; projectIdForAttachments: number | null }) {
   const rows: React.ReactNode[] = [];
   let prev: Msg | null = null;
   let lastDay = '';
@@ -607,7 +950,7 @@ function MessageList({ messages, myUserId, channelId }: { messages: Msg[]; myUse
     const sameAuthorClose = prev
       && prev.user_id === m.user_id
       && (dt.getTime() - new Date(prev.created_at).getTime()) < 5 * 60 * 1000;
-    rows.push(<MessageRow key={m.id} m={m} grouped={!!sameAuthorClose} mine={myUserId != null && m.user_id === myUserId} channelId={channelId} />);
+    rows.push(<MessageRow key={m.id} m={m} grouped={!!sameAuthorClose} mine={myUserId != null && m.user_id === myUserId} channelId={channelId} projectIdForAttachments={projectIdForAttachments} />);
     prev = m;
   }
   return <div className="space-y-0.5">{rows}</div>;
@@ -639,7 +982,7 @@ function userColor(id: number): string {
   return `hsl(${hue}, 55%, 55%)`;
 }
 
-function MessageRow({ m, grouped, mine, channelId }: { m: Msg; grouped: boolean; mine: boolean; channelId: number | null }) {
+function MessageRow({ m, grouped, mine, channelId, projectIdForAttachments }: { m: Msg; grouped: boolean; mine: boolean; channelId: number | null; projectIdForAttachments: number | null }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.message);
   useEffect(() => { setDraft(m.message); }, [m.message]);
@@ -714,9 +1057,22 @@ function MessageRow({ m, grouped, mine, channelId }: { m: Msg; grouped: boolean;
             </div>
           </div>
         ) : (
-          <div className={`text-[13px] leading-snug whitespace-pre-wrap break-words ${m.deleted ? 'italic text-[--text-muted]' : ''}`}>
-            {renderMessage(m.message)}
-          </div>
+          <>
+            <div className={`text-[13px] leading-snug whitespace-pre-wrap break-words ${m.deleted ? 'italic text-[--text-muted]' : ''}`}>
+              {renderMessage(m.message)}
+            </div>
+            {m.attachments && m.attachments.length > 0 && (
+              <div className="mt-1.5 flex flex-col gap-1">
+                {m.attachments.map((a) => (
+                  <AttachmentRow
+                    key={a.id}
+                    attachment={a}
+                    projectId={m.project_id ?? projectIdForAttachments}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
       {canEditOrDelete && (
@@ -754,6 +1110,104 @@ function MessageRow({ m, grouped, mine, channelId }: { m: Msg; grouped: boolean;
  * stand out even without a proper markdown pipeline. Everything else is
  * rendered as plain text (no HTML injection).
  */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+/**
+ * Renders one chat-message attachment as a compact card with two actions:
+ *   • Download — writes bytes to the OS Downloads folder (avoiding overwrites)
+ *   • Reveal in Finder — only shown after a successful download so the row
+ *     has something to point at. Repeated downloads re-use the last-saved
+ *     path unless the user closes/reopens the pane.
+ * Global-channel attachments still need a project_id in the URL; the parent
+ * (MessageList) computes a fallback from any accessible project.
+ */
+function AttachmentRow({ attachment, projectId }: { attachment: Attachment; projectId: number | null }) {
+  const [busy, setBusy] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  async function download() {
+    if (projectId == null) {
+      toast('No project context — cannot download', { kind: 'warning' });
+      return;
+    }
+    setBusy(true);
+    try {
+      const { path } = await api.invoke('metaproject:download-attachment', {
+        projectId, attachmentId: attachment.id, filename: attachment.filename,
+      });
+      setSavedPath(path);
+      toast(`Downloaded ${attachment.filename}`, { kind: 'success', detail: path });
+    } catch (e) {
+      toast('Download failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally { setBusy(false); }
+  }
+  async function reveal() {
+    if (!savedPath) return;
+    try { await api.invoke('app:reveal-in-folder', { path: savedPath }); }
+    catch (e) { toast('Could not open folder', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') }); }
+  }
+  return (
+    <div className="inline-flex max-w-full items-center gap-2 bg-[--panel-strong] border border-[--border] rounded-md px-2.5 py-1.5">
+      <div className="w-7 h-7 rounded-md bg-[--panel] border border-[--border] flex items-center justify-center text-[--text-muted] shrink-0">
+        <FileIcon />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[12px] font-medium truncate" title={attachment.filename}>{attachment.filename}</div>
+        <div className="text-[10px] text-[--text-muted]">
+          {formatBytes(attachment.file_size)}
+          {attachment.mime_type && <> · {attachment.mime_type}</>}
+        </div>
+      </div>
+      <button
+        onClick={download}
+        disabled={busy}
+        title={savedPath ? `Re-download to Downloads` : 'Download to Downloads'}
+        className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
+      >
+        {busy ? <span className="mp-spinner text-[10px]" aria-hidden /> : <DownloadIcon />}
+      </button>
+      {savedPath && (
+        <button
+          onClick={reveal}
+          title="Show in Finder"
+          className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
+        >
+          <FolderOpenIcon />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+    </svg>
+  );
+}
+function DownloadIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+function FolderOpenIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
 function renderMessage(text: string): React.ReactNode {
   const parts = text.split(/(@[A-Za-z0-9._-]+)/g);
   return parts.map((p, i) =>

@@ -1,15 +1,18 @@
 import type { IpcMain } from 'electron';
-import { dialog, nativeTheme, shell, BrowserWindow } from 'electron';
+import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'electron';
+import log from 'electron-log/main';
 import type { Services } from '@main/services';
 import type { IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
+import { discoverTasks } from '@main/domain/tasks';
+import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
@@ -18,6 +21,34 @@ type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => 
 // account) pair, keyed by username so a user could theoretically sign into
 // multiple accounts by switching the last-used username in settings.
 const KEYTAR_SERVICE = 'metaIDE.metaproject';
+
+/**
+ * Resolve keytar's function bag across the CJS/ESM interop gap. Rollup +
+ * electron-vite's synthetic ESM namespace wraps CJS `module.exports` under
+ * `.default`, so `(await import('keytar')).setPassword` is undefined in the
+ * bundled main process. Some builds expose the functions at the top level;
+ * others only via `.default`. This helper prefers whichever is present so we
+ * never call `undefined` and blow up the login/remember-me path.
+ */
+async function loadKeytar(): Promise<{
+  getPassword: (service: string, account: string) => Promise<string | null>;
+  setPassword: (service: string, account: string, password: string) => Promise<void>;
+  deletePassword: (service: string, account: string) => Promise<boolean>;
+}> {
+  const mod = await import('keytar');
+  const m = mod as unknown as {
+    default?: typeof mod;
+    getPassword?: typeof mod.getPassword;
+    setPassword?: typeof mod.setPassword;
+    deletePassword?: typeof mod.deletePassword;
+  };
+  const flat = m.getPassword ? m : (m.default ?? m);
+  return flat as unknown as {
+    getPassword: (service: string, account: string) => Promise<string | null>;
+    setPassword: (service: string, account: string, password: string) => Promise<void>;
+    deletePassword: (service: string, account: string) => Promise<boolean>;
+  };
+}
 
 /**
  * Merges project-scoped CLI profiles with the global defaults, deduping by
@@ -132,6 +163,65 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const project = s.projects.upsert(rootId, path, name);
     s.projects.markLastOpened(project.id, new Date());
     return { project };
+  },
+  'projects:clone-git': async (s, { rootId, url, name }) => {
+    const root = s.roots.list().find(r => r.id === rootId);
+    if (!root) throw new Error(`no root ${rootId}`);
+    // Derive a folder name from the URL if the caller didn't provide one:
+    //   https://github.com/foo/bar.git → "bar"
+    //   git@github.com:foo/bar        → "bar"
+    let folder = (name ?? '').trim();
+    if (!folder) {
+      const last = url.replace(/\.git$/, '').replace(/[/:]$/, '').split(/[/:]/).pop();
+      folder = last ?? '';
+    }
+    if (!folder || !/^[A-Za-z0-9._-][A-Za-z0-9._ -]*$/.test(folder) || folder === '.' || folder === '..') {
+      throw new Error('project folder name must start with a letter/digit and contain only letters, digits, dot, dash, underscore, or spaces');
+    }
+    const path = join(root.path, folder);
+    if (existsSync(path)) throw new Error(`already exists: ${path}`);
+    // Delegate the clone to system git — much simpler than a JS libgit2
+    // dependency and handles SSH, https, credential helpers, submodules, …
+    // exactly like the user's own terminal would.
+    const r = spawnSync('git', ['clone', '--', url, path], { cwd: root.path });
+    if (r.status !== 0) {
+      const stderr = r.stderr?.toString() || 'git clone failed';
+      throw new Error(stderr.trim());
+    }
+    const project = s.projects.upsert(rootId, path, folder);
+    s.projects.markLastOpened(project.id, new Date());
+    return { project };
+  },
+  'projects:rename': async (s, { id, newName, killShells = true }) => {
+    const project = s.projects.get(id);
+    if (!project) throw new Error(`no project ${id}`);
+    const cleanName = newName.trim();
+    if (!cleanName || !/^[A-Za-z0-9._-][A-Za-z0-9._ -]*$/.test(cleanName) || cleanName === '.' || cleanName === '..') {
+      throw new Error('name must start with a letter/digit and contain only letters, digits, dot, dash, underscore, or spaces');
+    }
+    if (cleanName === project.name && project.path.endsWith(`/${cleanName}`)) {
+      return { project };
+    }
+    const parent = dirname(project.path);
+    const target = join(parent, cleanName);
+    if (existsSync(target)) throw new Error(`already exists: ${target}`);
+    // Kill any live shells for the project first — the pty is chdir'd into
+    // the old path and a rename with an open cwd handle either fails
+    // (Windows) or silently keeps the old path alive (macOS/Linux).
+    if (killShells) {
+      const alive = s.shells.list().filter(r => r.projectId === id);
+      for (const r of alive) {
+        try { await s.ptyManager.kill(r.projectId, r.shellIndex); } catch { /* fine */ }
+        s.shells.remove(r.projectId, r.shellIndex);
+      }
+    }
+    // Stop the file watcher for the old path — a stale watcher would keep
+    // firing "removed" events after the rename lands.
+    try { s.watcher.unwatch(project.path); } catch { /* method may be absent */ }
+    renameSync(project.path, target);
+    const updated = s.projects.relocate(id, target, cleanName);
+    try { s.watcher.watch(target); } catch { /* fine */ }
+    return { project: updated };
   },
   'projects:pin':          async (s, { id, pinned }) => { s.projects.setPinned(id, pinned); return { ok: true } as const; },
   'projects:hide':         async (s, { id, hidden }) => { s.projects.setHidden(id, hidden); return { ok: true } as const; },
@@ -309,6 +399,58 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       });
     return { shells: alive };
   },
+  'shells:ports': async (s) => ({ entries: s.ptyManager.allPorts() }),
+  'shells:live-stats': async (s) => {
+    const live = s.ptyManager.liveShells();
+    if (live.length === 0) return { shells: [] };
+    // One `ps` call for every alive pid — cheap on macOS/Linux (kernel-side
+    // process table lookup, no fork per pid). Format: `%CPU RSS_KB`.
+    const pids = live.map(l => String(l.pid)).join(',');
+    let statsByPid: Record<number, { cpu: number; rssKb: number }> = {};
+    try {
+      const r = spawnSync('ps', ['-o', 'pid=,%cpu=,rss=', '-p', pids], { encoding: 'utf8', timeout: 3000 });
+      if (r.status === 0) {
+        for (const line of r.stdout.trim().split('\n')) {
+          const cols = line.trim().split(/\s+/);
+          if (cols.length < 3) continue;
+          const pid = Number(cols[0]); const cpu = Number(cols[1]); const rss = Number(cols[2]);
+          if (Number.isFinite(pid)) statsByPid[pid] = { cpu: Number.isFinite(cpu) ? cpu : 0, rssKb: Number.isFinite(rss) ? rss : 0 };
+        }
+      }
+    } catch { statsByPid = {}; }
+    const now = Date.now();
+    const projectMap = new Map(s.projects.list().map(p => [p.id, p]));
+    // Same launchName heuristic as useProjectShells so the popover reads
+    // "Claude / Terminal" instead of raw binary paths.
+    const shellRows = s.shells.list();
+    const shellsByKey = new Map(shellRows.map(r => [`${r.projectId}:${r.shellIndex}`, r]));
+    const shells = live.map((l) => {
+      const st = statsByPid[l.pid] ?? { cpu: 0, rssKb: 0 };
+      const idleMs = now - l.lastDataAt;
+      const uptimeMs = now - l.startedAt;
+      // "Hanging" heuristic: alive > 30s, idle > 5 min, CPU under 1%.
+      // Deliberately conservative — we badge but don't auto-kill.
+      const hanging = uptimeMs > 30_000 && idleMs > 5 * 60_000 && st.cpu < 1;
+      const shellRow = shellsByKey.get(`${l.projectId}:${l.shellIndex}`);
+      const bin = shellRow?.launchArgv?.[0] ?? '';
+      const base = bin.replace(/.*\//, '');
+      const launchName = base === '$SHELL' || /^(zsh|bash|sh|fish)$/.test(base)
+        ? 'Terminal'
+        : base ? base[0]!.toUpperCase() + base.slice(1) : `Shell ${l.shellIndex}`;
+      return {
+        projectId: l.projectId,
+        shellIndex: l.shellIndex,
+        projectName: projectMap.get(l.projectId)?.name ?? `#${l.projectId}`,
+        pid: l.pid,
+        cpuPercent: st.cpu,
+        memMB: Math.round(st.rssKb / 1024),
+        uptimeMs, idleMs,
+        launchName,
+        hanging,
+      };
+    });
+    return { shells };
+  },
   'shells:pin':   async (s, { projectId, shellIndex, pinned }) => { s.shells.setPinned(projectId, shellIndex, pinned); return { ok: true } as const; },
   'shells:snapshot': async (s, { projectId, shellIndex }) => {
     const alive = s.ptyManager?.isAlive(projectId, shellIndex) ?? false;
@@ -344,6 +486,16 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     await shell.openExternal(url);
     return { ok: true } as const;
   },
+  'app:get-log-path': async () => ({ path: log.transports.file.getFile().path }),
+  'app:get-version':  async () => ({ version: app.getVersion() }),
+  'app:reveal-log-file': async () => {
+    shell.showItemInFolder(log.transports.file.getFile().path);
+    return { ok: true } as const;
+  },
+  'app:reveal-in-folder': async (_s, { path }) => {
+    shell.showItemInFolder(path);
+    return { ok: true } as const;
+  },
 
   'app:set-window-opacity': async (s, { percent }) => {
     const clamped = Math.max(30, Math.min(100, Math.round(percent)));
@@ -366,7 +518,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // hood — the plaintext never touches disk in userland.
     if (remember) {
       try {
-        const keytar = await import('keytar');
+        const keytar = await loadKeytar();
         await keytar.setPassword(KEYTAR_SERVICE, username, password);
       } catch (err) {
         console.warn('[metaproject] failed to persist credential', err);
@@ -379,7 +531,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const username = s.settings.get('metaproject_last_username') || null;
     if (!username) return { username: null, hasPassword: false };
     try {
-      const keytar = await import('keytar');
+      const keytar = await loadKeytar();
       const pw = await keytar.getPassword(KEYTAR_SERVICE, username);
       return { username, hasPassword: !!pw };
     } catch {
@@ -390,7 +542,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const username = s.settings.get('metaproject_last_username') || null;
     if (username) {
       try {
-        const keytar = await import('keytar');
+        const keytar = await loadKeytar();
         await keytar.deletePassword(KEYTAR_SERVICE, username);
       } catch { /* non-fatal */ }
     }
@@ -402,7 +554,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!username) return { ok: false, reason: 'no-saved-username' };
     let password: string | null = null;
     try {
-      const keytar = await import('keytar');
+      const keytar = await loadKeytar();
       password = await keytar.getPassword(KEYTAR_SERVICE, username);
     } catch (err) {
       return { ok: false, reason: `keychain-error: ${err instanceof Error ? err.message : String(err)}` };
@@ -432,6 +584,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   }),
   'metaproject:list-projects': async (s) => ({
     projects: await s.metaproject.listMetaprojectProjects(),
+  }),
+  'metaproject:list-users': async (s) => ({
+    users: await s.metaproject.listUsers(),
   }),
   'metaproject:create-project': async (s, { name, description, projectType }) => ({
     project: await s.metaproject.createMetaprojectProject({ name, description, projectType }),
@@ -479,6 +634,23 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'metaproject:delete-message': async (s, { channelId, messageId }) => {
     s.metaproject.deleteChannelMessage(channelId, messageId);
     return { ok: true } as const;
+  },
+  'metaproject:download-attachment': async (s, { projectId, attachmentId, filename }) => {
+    const buf = await s.metaproject.fetchAttachment(projectId, attachmentId);
+    const downloads = app.getPath('downloads');
+    // Never silently overwrite an existing file — append ` (2)`, ` (3)`, …
+    // before the extension the way Chromium does.
+    let target = join(downloads, filename);
+    if (existsSync(target)) {
+      const dot = filename.lastIndexOf('.');
+      const stem = dot > 0 ? filename.slice(0, dot) : filename;
+      const ext  = dot > 0 ? filename.slice(dot) : '';
+      let n = 2;
+      while (existsSync(join(downloads, `${stem} (${n})${ext}`))) n++;
+      target = join(downloads, `${stem} (${n})${ext}`);
+    }
+    writeFileSync(target, Buffer.from(buf));
+    return { path: target };
   },
 
   'files:tree':   async (s, { projectId, relPath }) => {
@@ -623,6 +795,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true as const };
   },
 
+  'files:start-drag': async () => {
+    // Real implementation lives inline in registerIpc — it needs
+    // `event.sender` so it can call `webContents.startDrag()`.
+    throw new Error('files:start-drag requires webContents access — see registerIpc');
+  },
+
   'git:status': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
@@ -636,6 +814,87 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     }
     const parsed = parseGitStatus(r.stdout);
     return { isRepo: true, ...parsed, dirty: Object.keys(parsed.files).length > 0 };
+  },
+  'git:panel-status': async (s, { projectId }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (!existsSync(join(p.path, '.git'))) {
+      return { isRepo: false, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    }
+    const r = spawnSync('git', ['-C', p.path, 'status', '--porcelain=v1', '--branch', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000 });
+    if (r.status !== 0) return { isRepo: true, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    // Parse porcelain lines directly here — we need per-column detail
+    // (staged X vs unstaged Y) that the collapsed parseGitStatus loses.
+    const lines = r.stdout.split('\n');
+    let branch: string | null = null;
+    let ahead = 0;
+    let behind = 0;
+    const staged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
+    const unstaged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
+    const untracked: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith('## ')) {
+        const branchMatch = line.slice(3).match(/^([^.\s]+)(?:\.\.\.[^\s]+)?/);
+        if (branchMatch) branch = branchMatch[1] ?? null;
+        const aheadMatch = line.match(/ahead (\d+)/);
+        const behindMatch = line.match(/behind (\d+)/);
+        if (aheadMatch)  ahead  = Number(aheadMatch[1]);
+        if (behindMatch) behind = Number(behindMatch[1]);
+        continue;
+      }
+      if (line.length < 3) continue;
+      const x = line[0]!; const y = line[1]!;
+      const path = line.slice(3);
+      const norm = (c: string): 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' => {
+        if (c === 'M' || c === 'A' || c === 'D' || c === 'R' || c === 'U' || c === '?' || c === '!') return c;
+        return 'M';
+      };
+      if (x === '?' && y === '?') { untracked.push(path); continue; }
+      if (x !== ' ' && x !== '?') staged.push({ path, status: norm(x) });
+      if (y !== ' ' && y !== '?') unstaged.push({ path, status: norm(y) });
+    }
+    return { isRepo: true, branch, ahead, behind, staged, unstaged, untracked };
+  },
+  'git:stage':   async (s, { projectId, paths }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (paths.length === 0) return { ok: true } as const;
+    const r = spawnSync('git', ['-C', p.path, 'add', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
+    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git add failed');
+    return { ok: true } as const;
+  },
+  'git:unstage': async (s, { projectId, paths }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (paths.length === 0) return { ok: true } as const;
+    // `git restore --staged` is the modern equivalent of `git reset HEAD --`.
+    const r = spawnSync('git', ['-C', p.path, 'restore', '--staged', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
+    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git unstage failed');
+    return { ok: true } as const;
+  },
+  'git:commit':  async (s, { projectId, message }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (!message.trim()) throw new Error('commit message is empty');
+    // Pass the message via `-F -` on stdin so we never worry about shell
+    // quoting on multi-line messages or embedded backticks/dollars.
+    const r = spawnSync('git', ['-C', p.path, 'commit', '-F', '-'], { encoding: 'utf8', timeout: 30000, input: message });
+    if (r.status !== 0) throw new Error(r.stderr.trim() || r.stdout.trim() || 'git commit failed');
+    return { ok: true } as const;
+  },
+  'git:push':    async (s, { projectId }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    const r = spawnSync('git', ['-C', p.path, 'push'], { encoding: 'utf8', timeout: 60000 });
+    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git push failed');
+    return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
+  },
+  'git:pull':    async (s, { projectId }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    const r = spawnSync('git', ['-C', p.path, 'pull'], { encoding: 'utf8', timeout: 60000 });
+    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git pull failed');
+    return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
   },
 
   'search:project': async (s, { projectId, query, caseSensitive = false, regex = false, maxFiles = 3000, maxMatchesPerFile = 20 }) => {
@@ -697,7 +956,115 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { matches, filesScanned, truncated };
   },
 
-  'files:read':   async (s, { projectId, relPath }) => {
+  /* ─── Prompt library ─── */
+  'prompts:list':   async (s, { projectId }) => ({ prompts: s.prompts.list(projectId) }),
+  'prompts:save':   async (s, { prompt }) => {
+    const title = prompt.title.trim();
+    const body  = prompt.body;
+    if (!title) throw new Error('title is required');
+    if (!body)  throw new Error('body is required');
+    const id = prompt.id || randomUUID();
+    const saved = s.prompts.upsert({
+      id, projectId: prompt.projectId ?? null,
+      title, body, tags: prompt.tags ?? [],
+    });
+    return { prompt: saved };
+  },
+  'prompts:delete': async (s, { id }) => { s.prompts.remove(id); return { ok: true } as const; },
+  'prompts:paste':  async (s, { projectId, shellIndex, text, submit }) => {
+    if (!s.ptyManager.isAlive(projectId, shellIndex)) throw new Error('shell is not running');
+    // Write via PtyManager so timing / lastDataAt clock stays consistent
+    // with real user input. If submit is true, add \r so the shell runs it.
+    s.ptyManager.write(projectId, shellIndex, submit ? `${text}\r` : text);
+    s.shells.touch(projectId, shellIndex, new Date());
+    return { ok: true } as const;
+  },
+
+  /* ─── Task runner ─── */
+  'tasks:discover': async (s, { projectId }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    return { tasks: discoverTasks(p.path) };
+  },
+  'tasks:run': async (s, { projectId, taskId }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    const task = discoverTasks(p.path).find(t => t.id === taskId);
+    if (!task) throw new Error(`no task ${taskId}`);
+    // Reuse the same shell-slot policy the plain launcher uses.
+    const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
+    let idx = 0;
+    while (used.has(idx)) idx++;
+    const cap = s.settings.get('keep_alive_cap');
+    const alive = s.shells.list();
+    if (alive.length >= cap) {
+      const decision = chooseEvictee(alive, cap, projectId, new Date());
+      if (decision.evictee) {
+        await s.ptyManager.kill(decision.evictee.projectId, decision.evictee.shellIndex);
+        s.shells.remove(decision.evictee.projectId, decision.evictee.shellIndex);
+      } else if (decision.reason === 'all-pinned') {
+        throw new Error('all shells are pinned — unpin one or raise cap');
+      }
+    }
+    const launch = { argv: task.command, cwd: p.path, env: {}, variant: 'first' as const };
+    await s.ptyManager.spawn(projectId, idx, launch);
+    const now = new Date();
+    const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
+    s.shells.upsert({ projectId, shellIndex: idx, model: null, launchArgv: launch.argv, startedAt: nowIso, lastActiveAt: nowIso, pinned: false });
+    return { shellIndex: idx };
+  },
+
+  /* ─── Per-file git diff ─── */
+  'git:file-diff': async (s, { projectId, path, staged, untracked }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (!existsSync(join(p.path, '.git'))) return { diff: '' };
+    // Untracked files aren't in the index; `--no-index` compares against
+    // /dev/null so we get a full add-diff — matches what `git diff` prints
+    // once the file is added, without side-effects.
+    if (untracked) {
+      const r = spawnSync('git', ['-C', p.path, 'diff', '--no-index', '--', '/dev/null', path], { encoding: 'utf8', timeout: 15000 });
+      // `--no-index` returns non-zero when the files differ (they always do
+      // here — one side is /dev/null). Prefer stdout unless it's empty.
+      return { diff: r.stdout || r.stderr || '' };
+    }
+    const args = staged
+      ? ['-C', p.path, 'diff', '--cached', '--', path]
+      : ['-C', p.path, 'diff', '--', path];
+    const r = spawnSync('git', args, { encoding: 'utf8', timeout: 15000 });
+    return { diff: r.stdout || '' };
+  },
+
+  /* ─── Global scrollback search ─── */
+  'shells:search-scrollback': async (s, { query, caseSensitive, regex, contextLines }) => {
+    const raw = s.ptyManager.searchScrollback(query, { caseSensitive, regex, contextLines });
+    const projectMap = new Map(s.projects.list().map(p => [p.id, p]));
+    const shellRows = s.shells.list();
+    const shellsByKey = new Map(shellRows.map(r => [`${r.projectId}:${r.shellIndex}`, r]));
+    const shellsScanned = s.ptyManager.list().length;
+    const matches = raw.map((m) => {
+      const shellRow = shellsByKey.get(`${m.projectId}:${m.shellIndex}`);
+      const bin = shellRow?.launchArgv?.[0] ?? '';
+      const base = bin.replace(/.*\//, '');
+      const launchName = base === '$SHELL' || /^(zsh|bash|sh|fish)$/.test(base)
+        ? 'Terminal'
+        : base ? base[0]!.toUpperCase() + base.slice(1) : `Shell ${m.shellIndex}`;
+      return {
+        projectId: m.projectId,
+        shellIndex: m.shellIndex,
+        projectName: projectMap.get(m.projectId)?.name ?? `#${m.projectId}`,
+        launchName,
+        pid: m.pid,
+        line: m.line,
+        lineNumber: m.lineNumber,
+        contextBefore: m.contextBefore,
+        contextAfter: m.contextAfter,
+      };
+    });
+    return { matches, shellsScanned };
+  },
+
+  'files:read':   async (s, { projectId, relPath, forceText }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     // Prevent path traversal — resolved path must stay within project root.
@@ -707,10 +1074,15 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (st.isDirectory()) throw new Error(`${relPath} is a directory`);
     if (st.size > 2_000_000) return { content: `File too large (${st.size} bytes) — preview capped at 2 MB.`, kind: 'text' as const, sizeBytes: st.size };
     const buf = readFileSync(abs);
-    // Heuristic binary check: NUL byte in first 8KB.
-    const scan = buf.subarray(0, Math.min(8192, buf.length));
-    const isBinary = scan.includes(0);
-    if (isBinary) return { content: '', kind: 'binary' as const, sizeBytes: st.size };
+    // Heuristic binary check: NUL byte in first 8KB. `forceText` skips the
+    // check (used by the "Edit as text anyway" escape hatch on the binary
+    // preview placeholder — some UTF-16 / encoded files trip the heuristic
+    // even though they're valid text).
+    if (!forceText) {
+      const scan = buf.subarray(0, Math.min(8192, buf.length));
+      const isBinary = scan.includes(0);
+      if (isBinary) return { content: '', kind: 'binary' as const, sizeBytes: st.size };
+    }
     return { content: buf.toString('utf8'), kind: 'text' as const, sizeBytes: st.size };
   },
 };
@@ -723,6 +1095,8 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'projects:pin':   ['projects:changed'],
   'projects:hide':  ['projects:changed'],
   'projects:create':['projects:changed'],
+  'projects:clone-git':['projects:changed'],
+  'projects:rename': ['projects:changed', 'alive-shells:changed'],
   'metaproject:link-local-project': ['projects:changed'],
   'shells:launch':  ['alive-shells:changed', 'projects:changed'],
   'shells:launch-plain': ['alive-shells:changed'],
@@ -756,7 +1130,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     });
   }
 
-  const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all']);
+  const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all', 'files:start-drag']);
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
     if (WINDOW_CHANNELS.has(channel)) continue; // wired below
@@ -785,5 +1159,34 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('windows:tile-all', async () => {
     if (!windowHooks) return { arranged: 0 };
     return { arranged: windowHooks.tileAll() };
+  });
+
+  ipcMain.handle('files:start-drag', async (event, req: IpcRequest<'files:start-drag'>) => {
+    const project = services.projects.get(req.projectId);
+    if (!project) throw new Error(`no project ${req.projectId}`);
+    const root = resolve(project.path);
+    // Reject anything that escapes the project root — we only expose files
+    // the user could already see in the Files tab.
+    const absPaths = req.paths.map((p) => resolve(root, p)).filter((abs) => abs.startsWith(root) && existsSync(abs));
+    if (absPaths.length === 0) throw new Error('no valid files to drag');
+    // startDrag needs a non-empty NativeImage. app.getFileIcon returns the
+    // OS's own icon for the file (or a generic folder icon for dirs), which
+    // renders under the cursor in Finder / other targets — matches the
+    // native feel users expect from Chromium's built-in file drag.
+    let icon;
+    try {
+      icon = await app.getFileIcon(absPaths[0]!, { size: 'small' });
+    } catch {
+      // Extremely unlikely — but a 16x16 opaque grey fallback keeps the
+      // drag session valid rather than throwing during the user's gesture.
+      icon = nativeImage.createFromDataURL(
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAAG0lEQVR4AWMYBaNgFIyCUTAKRsEoGAWjYBSMglEAAAgAAeGa4l4AAAAASUVORK5CYII=',
+      );
+    }
+    // Electron's `Item` type requires `file` even when `files` is used —
+    // `file` is the single-drag fallback + hint for anti-macros; `files`
+    // is what actually gets picked up by multi-file targets.
+    event.sender.startDrag({ file: absPaths[0]!, files: absPaths, icon });
+    return { ok: true } as const;
   });
 }

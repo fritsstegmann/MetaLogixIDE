@@ -22,6 +22,21 @@ export interface IpcContract {
   'projects:update-config': { request: { id: number; config: Project['config'] }; response: { project: Project } };
   'projects:recents':       { request: { limit?: number };                      response: { projects: Project[] } };
   'projects:create':        { request: { rootId: number; name: string; initGit?: boolean }; response: { project: Project } };
+  /**
+   * Clones a remote git repo into `<root>/<name>` and registers it as a
+   * project. When `name` is empty, defaults to the URL's repo basename
+   * (`https://…/foo.git` → `foo`).
+   */
+  'projects:clone-git':     { request: { rootId: number; url: string; name?: string }; response: { project: Project } };
+  /**
+   * Rename the project's on-disk folder AND update the project record. The
+   * new folder lives in the same root; passing a name that already exists
+   * on disk fails cleanly. When `killShells: true` (the default) any live
+   * shells for the project are killed first — a running pty holds an inode
+   * handle to the cwd, which on macOS keeps the OLD path accessible but
+   * confuses tools; on Windows the rename would fail outright.
+   */
+  'projects:rename':        { request: { id: number; newName: string; killShells?: boolean }; response: { project: Project } };
 
   // shells
   'shells:launch':      { request: { projectId: number };                       response: { shellIndex: number } };
@@ -55,6 +70,36 @@ export interface IpcContract {
   'shells:alive-list':  { request: undefined;                                   response: { shells: AliveShellSummary[] } };
   'shells:pin':         { request: { projectId: number; shellIndex: number; pinned: boolean }; response: { ok: true } };
   'shells:snapshot':    { request: { projectId: number; shellIndex: number };   response: { output: string; alive: boolean } };
+  /**
+   * Snapshot of every alive shell's currently-detected ports. The main
+   * process scans PTY output for common "listening on 3000" / "Local:
+   * http://localhost:3000/" patterns and keeps a per-shell Set<number>.
+   * The ports:changed event fires whenever that set grows.
+   */
+  'shells:ports':       { request: undefined; response: { entries: Array<{ projectId: number; shellIndex: number; ports: number[] }> } };
+  /**
+   * One-shot resource snapshot for every alive shell. Samples `ps` per pid
+   * so we get real %CPU / RSS from the OS (not a Node approximation). idleMs
+   * is derived from PtyManager's lastDataAt clock — high idle + tiny CPU +
+   * long uptime is the "hanging" heuristic the UI uses to flag rows red.
+   */
+  'shells:live-stats':  {
+    request: undefined;
+    response: {
+      shells: Array<{
+        projectId: number;
+        shellIndex: number;
+        projectName: string;
+        pid: number;
+        cpuPercent: number;   // 0..~100+, from ps
+        memMB: number;        // resident set, MB
+        uptimeMs: number;
+        idleMs: number;       // ms since last pty:data event
+        launchName: string;   // e.g. "Claude", "Terminal"
+        hanging: boolean;
+      }>;
+    };
+  };
 
   // settings
   'settings:get': { request: { key: keyof SettingsMap };                        response: { value: SettingsMap[keyof SettingsMap] } };
@@ -62,18 +107,45 @@ export interface IpcContract {
 
   // files (read-only)
   'files:tree':      { request: { projectId: number; relPath?: string };                    response: { entries: Array<{ name: string; isDir: boolean; relPath: string }> } };
-  'files:read':      { request: { projectId: number; relPath: string };                     response: { content: string; kind: 'text' | 'binary'; sizeBytes: number } };
+  'files:read':      { request: { projectId: number; relPath: string; forceText?: boolean }; response: { content: string; kind: 'text' | 'binary'; sizeBytes: number } };
   'files:list-all':  { request: { projectId: number; limit?: number; filter?: string };     response: { files: Array<{ relPath: string; name: string }>; total: number; truncated: boolean } };
   'files:write':     { request: { projectId: number; relPath: string; content: string };    response: { ok: true; sizeBytes: number } };
   'files:mkdir':     { request: { projectId: number; relPath: string };                     response: { ok: true } };
   'files:rename':    { request: { projectId: number; from: string; to: string };            response: { ok: true } };
   'files:delete':    { request: { projectId: number; relPath: string };                     response: { ok: true } };
   'files:reveal':    { request: { projectId: number; relPath: string };                     response: { ok: true } };
+  /**
+   * Kick off a native OS drag session for one or more project-relative
+   * paths. The renderer calls `preventDefault()` on its own dragstart so
+   * Chromium's HTML5 drag doesn't fight ours, then invokes this channel;
+   * the main process resolves absolute paths and calls
+   * `webContents.startDrag(...)`. Users get a real file drag they can drop
+   * into Finder, VS Code, iMessage, Mail, etc.
+   */
+  'files:start-drag':{ request: { projectId: number; paths: string[] };                      response: { ok: true } };
   'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
   'search:project':  { request: { projectId: number; query: string; caseSensitive?: boolean; regex?: boolean; maxFiles?: number; maxMatchesPerFile?: number }; response: { matches: Array<{ relPath: string; line: number; col: number; preview: string }>; filesScanned: number; truncated: boolean } };
 
   // Git — surfaced for the sidebar + status bar; read-only.
   'git:status':      { request: { projectId: number }; response: { isRepo: boolean; branch: string | null; ahead: number; behind: number; files: Record<string, GitFileStatus>; dirty: boolean } };
+  /** Detailed status for the git panel: staged vs unstaged split. */
+  'git:panel-status': {
+    request: { projectId: number };
+    response: {
+      isRepo: boolean;
+      branch: string | null;
+      ahead: number;
+      behind: number;
+      staged: Array<{ path: string; status: GitFileStatus }>;
+      unstaged: Array<{ path: string; status: GitFileStatus }>;
+      untracked: string[];
+    };
+  };
+  'git:stage':       { request: { projectId: number; paths: string[] }; response: { ok: true } };
+  'git:unstage':     { request: { projectId: number; paths: string[] }; response: { ok: true } };
+  'git:commit':      { request: { projectId: number; message: string }; response: { ok: true } };
+  'git:push':        { request: { projectId: number }; response: { ok: true; output: string } };
+  'git:pull':        { request: { projectId: number }; response: { ok: true; output: string } };
 
   // dialogs
   'dialogs:pick-directory': { request: undefined; response: { path: string | null } };
@@ -92,6 +164,14 @@ export interface IpcContract {
 
   /** Set every open window's opacity. percent: 30..100. */
   'app:set-window-opacity': { request: { percent: number }; response: { ok: true } };
+  /** Returns the absolute path of the current electron-log file so users can attach it to a bug report. */
+  'app:get-log-path':       { request: undefined; response: { path: string } };
+  /** Returns the app version (`app.getVersion()`) for the status-bar footer / About dialog. */
+  'app:get-version':        { request: undefined; response: { version: string } };
+  /** Reveals the log file in Finder / File Explorer. */
+  'app:reveal-log-file':    { request: undefined; response: { ok: true } };
+  /** Reveals an arbitrary absolute file path in Finder / File Explorer. */
+  'app:reveal-in-folder':   { request: { path: string }; response: { ok: true } };
 
   /* ─── metaproject chat (Flask-SocketIO backed) ─── */
   'metaproject:login':          { request: { username: string; password: string; remember?: boolean }; response: { userId: number; userName: string } };
@@ -111,6 +191,8 @@ export interface IpcContract {
   'metaproject:list-all-channels': { request: { scope: 'all' | 'global' | number }; response: { channels: Array<{ id: number; project_id: number | null; name: string; is_private: boolean }> } };
   /** Lists metaproject projects the current user can access — used by the "link project" picker. */
   'metaproject:list-projects':     { request: undefined; response: { projects: Array<{ id: number; name: string; identifier?: string | null }> } };
+  /** Lists active users — used by the @-mention autocomplete in the composer. */
+  'metaproject:list-users':        { request: undefined; response: { users: Array<{ id: number; username: string; email?: string; avatar_url?: string | null }> } };
   /** Creates a new metaproject project (kanban by default). */
   'metaproject:create-project':    { request: { name: string; description?: string; projectType?: 'kanban' | 'sprint' | 'dcad' }; response: { project: { id: number; name: string; identifier?: string | null } } };
   /**
@@ -121,12 +203,88 @@ export interface IpcContract {
    * without needing a full root rescan.
    */
   'metaproject:link-local-project': { request: { projectId: number; metaprojectProjectId: number }; response: { ok: true } };
-  'metaproject:list-messages':  { request: { channelId: number; limit?: number; projectId?: number }; response: { messages: Array<{ id: number; channel_id: number; user_id: number; user_name?: string; user?: { id: number; username: string; display_name?: string; avatar_url?: string | null }; message: string; created_at: string; parent_message_id: number | null }> } };
+  'metaproject:list-messages':  {
+    request: { channelId: number; limit?: number; projectId?: number };
+    response: {
+      messages: Array<{
+        id: number;
+        channel_id: number;
+        project_id?: number | null;
+        user_id: number;
+        user_name?: string;
+        user?: { id: number; username: string; display_name?: string; avatar_url?: string | null };
+        message: string;
+        created_at: string;
+        parent_message_id: number | null;
+        attachments?: Array<{ id: number; filename: string; file_size: number; mime_type?: string | null }>;
+      }>;
+    };
+  };
   'metaproject:join-channel':   { request: { channelId: number }; response: { ok: true } };
   'metaproject:send-message':   { request: { channelId: number; message: string; parentMessageId?: number | null }; response: { ok: true } };
   'metaproject:mark-read':      { request: { channelId: number; lastMessageId: number }; response: { ok: true } };
   'metaproject:edit-message':   { request: { channelId: number; messageId: number; message: string }; response: { ok: true } };
   'metaproject:delete-message': { request: { channelId: number; messageId: number }; response: { ok: true } };
+  /**
+   * Downloads a chat message attachment to the user's Downloads folder and
+   * returns the absolute path we wrote to. Adds a ` (N)` suffix if the file
+   * already exists so we never silently overwrite anything.
+   */
+  'metaproject:download-attachment': {
+    request: { projectId: number; attachmentId: number; filename: string };
+    response: { path: string };
+  };
+
+  /* ─── Prompt library (Claude / CLI snippets) ─── */
+  /**
+   * Lists globals ∪ project-scoped snippets. Pass `projectId: null` to see
+   * only globals (used in the app-wide "manage prompts" surface when no
+   * project is picked).
+   */
+  'prompts:list':   { request: { projectId: number | null }; response: { prompts: Array<{ id: string; projectId: number | null; title: string; body: string; tags: string[]; updatedAt: string }> } };
+  /** Insert or update. Callers mint the id; empty title/body is rejected. */
+  'prompts:save':   { request: { prompt: { id: string; projectId: number | null; title: string; body: string; tags?: string[] } }; response: { prompt: { id: string; projectId: number | null; title: string; body: string; tags: string[]; updatedAt: string } } };
+  'prompts:delete': { request: { id: string }; response: { ok: true } };
+  /**
+   * Type text into a live shell as if the user pasted it. When
+   * `submit: true` we append a carriage return so the shell runs it.
+   * Callers should confirm with the user before submitting destructive
+   * prompts.
+   */
+  'prompts:paste':  { request: { projectId: number; shellIndex: number; text: string; submit?: boolean }; response: { ok: true } };
+
+  /* ─── Task runner (npm scripts / Makefile targets / compose services) ─── */
+  'tasks:discover': { request: { projectId: number }; response: { tasks: Array<{ id: string; source: 'npm' | 'make' | 'compose'; name: string; command: string[]; description?: string }> } };
+  /** Spawns the task as a new shell tab (auto-picked shellIndex). */
+  'tasks:run':      { request: { projectId: number; taskId: string }; response: { shellIndex: number } };
+
+  /* ─── Git diff (per-file) ─── */
+  /**
+   * Returns the unified diff for a single file. `staged: true` diffs the
+   * index vs HEAD (what's in the "Staged" section of the panel); false
+   * diffs the working copy vs the index. For untracked files, returns the
+   * whole file as an add-diff so the viewer works uniformly.
+   */
+  'git:file-diff':  { request: { projectId: number; path: string; staged?: boolean; untracked?: boolean }; response: { diff: string } };
+
+  /* ─── Global scrollback search ─── */
+  'shells:search-scrollback': {
+    request: { query: string; caseSensitive?: boolean; regex?: boolean; contextLines?: number };
+    response: {
+      matches: Array<{
+        projectId: number;
+        shellIndex: number;
+        projectName: string;
+        launchName: string;
+        pid: number;
+        line: string;
+        lineNumber: number;
+        contextBefore: string[];
+        contextAfter: string[];
+      }>;
+      shellsScanned: number;
+    };
+  };
 
   // health / dev
   'app:ping':    { request: undefined; response: 'pong' };
@@ -146,5 +304,12 @@ export interface IpcEvents {
   'alive-shells:changed':   Record<string, never>;
   'popout:changed':         { popped: Array<{ projectId: number; shellIndex: number }> };
   'metaproject:event':      { event: string; payload: unknown };
+  'ports:changed':          { projectId: number; shellIndex: number; ports: number[] };
+  /**
+   * Fired when the user clicks an OS "command finished" notification. The
+   * renderer should switch to the named project, focus the shell tab, and
+   * bring the window forward.
+   */
+  'shell:focus-request':    { projectId: number; shellIndex: number };
 }
 export type IpcEventName = keyof IpcEvents;

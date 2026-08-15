@@ -146,7 +146,29 @@ export function ShellTab({
       try {
         const { output } = await api.invoke('shells:snapshot', { projectId, shellIndex });
         if (termRef.current !== term) return; // component unmounted / re-mounted
-        if (output) term.write(output);
+        if (output) {
+          // Full terminal reset before replay — a bare SGR reset (\x1b[0m)
+          // isn't enough because scrollback can contain unbalanced sequences
+          // like alt-screen enter (\x1b[?1049h from vim/less) or cursor-
+          // hidden mode, which the new terminal inherits and then renders
+          // garbage. term.reset() is xterm's RIS equivalent: attrs, cursor,
+          // wrap, alt-screen — all back to initial.
+          term.reset();
+          // Also strip any partial ANSI escape at the very start of the
+          // scrollback. The main-side truncation already snaps to newlines,
+          // but a mid-CSI cut on a very long line can still slip through.
+          // Drop everything up to (and including) the first newline if the
+          // buffer opens with an ESC that has no `m` / `H` terminator in
+          // the first 32 chars — that's almost certainly a fragment.
+          let safe = output;
+          if (safe.startsWith('\x1b') && !/[A-Za-z]/.test(safe.slice(1, 32))) {
+            const nl = safe.indexOf('\n');
+            if (nl > -1 && nl < 2048) safe = safe.slice(nl + 1);
+          }
+          term.write(safe);
+          // Trailing SGR reset defends the live stream that plays after.
+          term.write('\x1b[0m');
+        }
         if (pendingLive.current) term.write(pendingLive.current);
       } catch { /* ignore — snapshot is best-effort */ }
       finally {

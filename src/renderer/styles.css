@@ -184,6 +184,17 @@ html, body {
 :root[data-theme="light"] { color-scheme: light; }
 :root:not([data-theme]) { color-scheme: light dark; }
 
+/* Unified keyboard-focus ring — every interactive element gets the same
+ * accent halo when navigated via Tab, so keyboard users always know where
+ * they are. Mouse clicks stay clean because :focus-visible only fires for
+ * keyboard focus (Chromium implements the heuristic). */
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* Explicit form-control colors — never leave to browser defaults. */
 input, textarea, select, button {
   color: inherit;
@@ -218,6 +229,35 @@ input::placeholder, textarea::placeholder {
 .live-dot {
   animation: livePulse 2s ease-in-out infinite;
 }
+
+/* Section-tint helper — the ActivityBar sets `data-view` on each sidebar
+ * column so users can tell which pane they're in from the ambient color
+ * without reading a label. Tints are intentionally weak (8-12% blend) so
+ * text contrast stays untouched; only the panel background shifts. */
+.section-panel { position: relative; }
+.section-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--section-tint, transparent);
+  transition: background 220ms ease;
+}
+.section-panel[data-view="projects"] { --section-tint: color-mix(in oklab, var(--accent) 3%, transparent); }
+.section-panel[data-view="chat"]     { --section-tint: color-mix(in oklab, #22d3ee     3%, transparent); }
+.section-panel[data-view="git"]      { --section-tint: color-mix(in oklab, #ef4444     3%, transparent); }
+/* Thin colored strip on the left edge — 2px, low opacity, just a wink. */
+.section-panel::after {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0; width: 1px;
+  pointer-events: none;
+  background: var(--section-stripe, transparent);
+  transition: background 220ms ease;
+}
+.section-panel[data-view="projects"] { --section-stripe: color-mix(in oklab, var(--accent) 35%, transparent); }
+.section-panel[data-view="chat"]     { --section-stripe: color-mix(in oklab, #22d3ee     40%, transparent); }
+.section-panel[data-view="git"]      { --section-stripe: color-mix(in oklab, #ef4444     40%, transparent); }
 
 /* Compact ring spinner — inherits currentColor so it fits any panel. */
 @keyframes mp-spin {

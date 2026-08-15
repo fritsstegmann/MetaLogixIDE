@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type ActivityView = 'projects' | 'chat' | 'settings';
+export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks' | 'settings';
 
 interface Props {
   active: ActivityView;
@@ -9,9 +9,13 @@ interface Props {
   sidebarOpen: boolean;
   /** Unread chat count, rendered as a badge on the Chat icon. */
   chatUnread?: number;
+  /** Dirty-file count from the git panel; shows a subtle pip on the icon. */
+  gitDirty?: number;
+  /** Discovered task count for the tiny "N" pip on the Tasks icon. */
+  taskCount?: number;
 }
 
-export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread }: Props) {
+export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
   return (
     <nav
       className="w-11 shrink-0 h-full border-r border-[--border] bg-[--panel]/40 backdrop-blur-md flex flex-col items-center py-1 gap-0.5"
@@ -42,6 +46,24 @@ export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, ch
         badge={active === 'chat' ? 0 : chatUnread}
       >
         <ChatIcon />
+      </ABButton>
+      <ABButton
+        label={gitDirty ? `Git — ${gitDirty} changed` : 'Git'}
+        active={active === 'git'}
+        onClick={() => onSelect('git')}
+        data-testid="ab-git"
+        badge={active === 'git' ? 0 : gitDirty}
+      >
+        <GitBranchIcon />
+      </ABButton>
+      <ABButton
+        label={taskCount ? `Tasks — ${taskCount} discovered` : 'Tasks'}
+        active={active === 'tasks'}
+        onClick={() => onSelect('tasks')}
+        data-testid="ab-tasks"
+        badge={active === 'tasks' ? 0 : taskCount}
+      >
+        <TasksIcon />
       </ABButton>
 
       <div className="mt-auto flex flex-col items-center gap-0.5">
@@ -106,6 +128,16 @@ function SidebarIcon({ open }: { open: boolean }) {
   );
 }
 
+function GitBranchIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="18" r="2.5" />
+      <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
+    </svg>
+  );
+}
+
 function ChatIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -122,6 +154,16 @@ function ProjectsIcon() {
   );
 }
 
+
+function TasksIcon() {
+  // Play triangle inside a rounded square — reads as "runnable" at 15px.
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 function GearIcon() {
   return (
