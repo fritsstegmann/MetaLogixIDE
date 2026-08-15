@@ -124,17 +124,35 @@ export function ShellTab({
     term.onData((data) => { void api.invoke('shells:write', { projectId, shellIndex, data }); });
     termRef.current = term;
 
+    // Track the last-fit rows/cols so we can drop no-op resize calls that
+    // would otherwise spam the PTY when the container reports the same
+    // size repeatedly.
+    let lastCols = -1, lastRows = -1;
     function syncSize() {
       try {
+        // Skip when the host element hasn't been laid out yet — trying to
+        // fit against a 0×0 element writes a bogus 0-col grid, which then
+        // renders no text even when data arrives later.
+        const host = termHostRef.current;
+        if (!host || host.clientWidth < 20 || host.clientHeight < 20) return;
         fit.fit();
+        if (term.cols === lastCols && term.rows === lastRows) return;
+        lastCols = term.cols; lastRows = term.rows;
         void api.invoke('shells:resize', { projectId, shellIndex, cols: term.cols, rows: term.rows });
       } catch { /* container might be zero-sized during transitions */ }
     }
 
-    // Fit once after mount (allow font metrics to settle), then on resize.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(syncSize);
-    });
+    // Fit staircase: two rAFs (fonts + layout), then follow-ups at 100/300ms
+    // to catch the case where the flex parent hadn't settled on the first
+    // fit — that's the "have to resize the window to refresh" bug. On top of
+    // this the ResizeObserver keeps things sized during genuine changes.
+    requestAnimationFrame(() => requestAnimationFrame(syncSize));
+    const late1 = window.setTimeout(syncSize, 100);
+    const late2 = window.setTimeout(syncSize, 300);
+    // Also whenever this window regains focus, force a refit — Chromium can
+    // pause layout while backgrounded and re-emerge with a wrong grid.
+    const onWinFocus = () => syncSize();
+    window.addEventListener('focus', onWinFocus);
 
     // Replay any existing scrollback from the PTY so late-attaching viewports
     // (a pop-out window, tab switch back, second monitor) don't see an empty
@@ -174,6 +192,14 @@ export function ShellTab({
       finally {
         snapshotReady.current = true;
         pendingLive.current = '';
+        // Snapshot replay lands after mount → re-fit + refresh so the
+        // terminal repaints against whatever the container's ACTUAL size
+        // ended up being (rather than whatever it was during the double-
+        // rAF at mount).
+        requestAnimationFrame(() => {
+          syncSize();
+          try { term.refresh(0, Math.max(0, term.rows - 1)); } catch { /* fine */ }
+        });
       }
     })();
 
@@ -185,6 +211,9 @@ export function ShellTab({
     media.addEventListener('change', onScheme);
 
     return () => {
+      window.clearTimeout(late1);
+      window.clearTimeout(late2);
+      window.removeEventListener('focus', onWinFocus);
       ro.disconnect();
       media.removeEventListener('change', onScheme);
       linkProviderDisposable.dispose();
