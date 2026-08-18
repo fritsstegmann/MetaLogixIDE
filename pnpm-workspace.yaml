@@ -1,5 +1,11 @@
 # single-package workspace
 
+# pnpm >=10 reads settings from this file instead of .npmrc — mirror the
+# hoisted layout configured there (see .npmrc for why electron-builder
+# needs it) so newer pnpm versions don't silently fall back to symlinks.
+nodeLinker: hoisted
+shamefullyHoist: true
+
 allowBuilds:
   better-sqlite3: true
   electron: true

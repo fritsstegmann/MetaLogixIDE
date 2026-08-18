@@ -3,11 +3,15 @@ import { api } from '@renderer/api';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-const STORAGE_KEY = 'metaide.theme';
+// v2: key bump so installs that auto-persisted the old 'system' default
+// re-default to dark; explicit choices made after this persist normally.
+const STORAGE_KEY = 'metaide.theme.v2';
 
 function readInitial(): ThemeMode {
   const v = localStorage.getItem(STORAGE_KEY);
-  return v === 'light' || v === 'dark' || v === 'system' ? v : 'system';
+  // First run defaults to dark (the product look); users can still opt
+  // into light or system-follow via Settings or the theme toggle.
+  return v === 'light' || v === 'dark' || v === 'system' ? v : 'dark';
 }
 
 function applyToDom(mode: ThemeMode): void {

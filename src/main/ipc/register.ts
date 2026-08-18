@@ -8,6 +8,7 @@ import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
+import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -307,8 +308,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const shellBin = process.env.SHELL || '/bin/zsh';
-    const launch = { argv: [shellBin, '-l'] as string[], cwd: project.path, env: {}, variant: 'first' as const };
+    const launch = { argv: defaultShellArgv(), cwd: project.path, env: {}, variant: 'first' as const };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -332,9 +332,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       resolvedEnv = { ...(match.env ?? {}), ...resolvedEnv };
     }
     // Expand a leading $SHELL sentinel so profiles can portably reference
-    // the user's login shell without hard-coding /bin/zsh.
+    // the user's login shell without hard-coding a platform binary.
     if (resolvedArgv[0] === '$SHELL') {
-      resolvedArgv = [process.env.SHELL || '/bin/zsh', ...resolvedArgv.slice(1)];
+      resolvedArgv = [defaultShellBin(), ...resolvedArgv.slice(1)];
     }
     // Persist as a project profile if the caller asked. Dedupe by name.
     if (save && resolvedName && argv && argv.length > 0) {

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { IPty } from 'node-pty';
 import { spawn as ptySpawn } from 'node-pty';
 import type { ResolvedLaunch } from '@main/domain/launch';
+import { toSpawnableArgv } from '@main/domain/shell';
 
 interface Entry {
   projectId: number; shellIndex: number;
@@ -50,7 +51,7 @@ export class PtyManager extends EventEmitter {
   async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols = 100, rows = 30): Promise<{ pid: number }> {
     const k = key(projectId, shellIndex);
     if (this.entries.has(k)) throw new Error(`already spawned: ${k}`);
-    const [command, ...args] = launch.argv;
+    const [command, ...args] = toSpawnableArgv(launch.argv);
     if (!command) throw new Error('empty argv');
     const pty = ptySpawn(command, args, {
       name: 'xterm-256color',

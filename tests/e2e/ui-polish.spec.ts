@@ -65,7 +65,7 @@ test('UI polish: sidebar toggle, in-use section, live indicator, popout window',
   // light first so the first click has a deterministic result.
   const themeBtn = win.getByTestId('theme-toggle');
   await win.evaluate(() => {
-    localStorage.setItem('metaide.theme', 'light');
+    localStorage.setItem('metaide.theme.v2', 'light');
     document.documentElement.setAttribute('data-theme', 'light');
   });
   await win.reload();
