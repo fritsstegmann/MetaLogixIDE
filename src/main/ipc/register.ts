@@ -385,6 +385,17 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.projects.updateConfig(projectId, { cliProfiles: remaining });
     return { ok: true } as const;
   },
+  'shells:set-default-cli': async (s, { projectId, name }) => {
+    const project = s.projects.get(projectId);
+    if (!project) throw new Error(`no project ${projectId}`);
+    // Clearing (name === null) also removes any low-level launchCmd
+    // override so the project falls all the way back to the global
+    // default — otherwise a stale launchCmd would trump defaultCliName.
+    const patch: Partial<typeof project.config> = { defaultCliName: name };
+    if (name === null) patch.launchCmd = null;
+    const updated = s.projects.updateConfig(projectId, patch);
+    return { project: updated };
+  },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
@@ -1102,6 +1113,7 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'shells:launch-plain': ['alive-shells:changed'],
   'shells:launch-cli':   ['alive-shells:changed', 'projects:changed'],
   'shells:cli-profiles-remove': ['projects:changed'],
+  'shells:set-default-cli': ['projects:changed'],
   'shells:kill':    ['alive-shells:changed'],
   'shells:pin':     ['alive-shells:changed'],
 };

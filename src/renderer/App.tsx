@@ -270,7 +270,13 @@ function MainApp() {
         if (!fresh) return;
         const linkedNow    = fresh.config.linkedMetaprojectProjectId ?? fresh.metaprojectProjectId ?? null;
         const linkedBefore = cur.config.linkedMetaprojectProjectId   ?? cur.metaprojectProjectId   ?? null;
-        const materialChange = linkedNow !== linkedBefore || fresh.name !== cur.name || fresh.path !== cur.path;
+        const defaultCliNow    = fresh.config.defaultCliName ?? null;
+        const defaultCliBefore = cur.config.defaultCliName   ?? null;
+        const materialChange =
+          linkedNow !== linkedBefore
+          || defaultCliNow !== defaultCliBefore
+          || fresh.name !== cur.name
+          || fresh.path !== cur.path;
         if (materialChange) setSelected(fresh);              // (2)
       } catch { /* fine — next user action will refresh */ }
     });
@@ -729,6 +735,13 @@ function MainApp() {
                 active={activeShellIndex}
                 onSelect={setActiveShellIndex}
                 onClose={killShell}
+                defaultCliName={selected.config.defaultCliName ?? null}
+                onDefaultCliChanged={(name) => {
+                  // Optimistic local update so the star reflects the click
+                  // immediately; the projects:changed broadcast from main
+                  // will backfill any remote-side normalisation.
+                  setSelected((cur) => cur ? { ...cur, config: { ...cur.config, defaultCliName: name } } : cur);
+                }}
                 onLaunchProfile={(name) => void launchCliProfile(name, 'tab')}
                 onLaunchPlainTab={newPlainShellAsTab}
                 onLaunchCustom={(name, cmdLine, save) => void launchCustomCli(name, cmdLine, save, 'tab')}
@@ -991,15 +1004,21 @@ interface CliProfileEntry {
 
 function NewShellMenu({
   projectId,
+  defaultCliName,
   onLaunchProfile,
   onLaunchPlainTab,
   onLaunchCustom,
+  onDefaultChanged,
   onClose,
 }: {
   projectId: number;
+  /** Current per-project auto-launch CLI (drives the star toggle). */
+  defaultCliName: string | null;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
+  /** Called when the star toggle sets/clears the folder-level default. */
+  onDefaultChanged: (name: string | null) => void;
   onClose: () => void;
 }) {
   const [profiles, setProfiles] = useState<CliProfileEntry[]>([]);
@@ -1098,28 +1117,51 @@ function NewShellMenu({
           No CLIs configured yet. Add one below.
         </div>
       )}
-      {profiles.map((p) => (
-        <div key={p.name} className="group flex items-stretch hover:bg-[--panel]">
-          <button
-            className="flex-1 text-left px-3 py-2 text-xs flex items-center gap-2"
-            onClick={() => onLaunchProfile(p.name)}
-            title={p.argv.join(' ')}
-          >
-            <span className="w-5 text-center text-base leading-none">{p.icon ?? '▸'}</span>
-            <span className="flex-1 truncate font-medium">{p.name}</span>
-            {p.scope === 'project' && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
-          </button>
-          {p.scope === 'project' && (
+      {profiles.map((p) => {
+        const isDefault = defaultCliName === p.name;
+        return (
+          <div key={p.name} className="group flex items-stretch hover:bg-[--panel]">
             <button
-              className="px-2 opacity-0 group-hover:opacity-60 hover:opacity-100 hover:text-[--danger] flex items-center"
-              onClick={() => removeProfile(p.name)}
-              title="Remove from this project"
+              className="flex-1 text-left px-3 py-2 text-xs flex items-center gap-2"
+              onClick={() => onLaunchProfile(p.name)}
+              title={p.argv.join(' ')}
             >
-              <XIcon />
+              <span className="w-5 text-center text-base leading-none">{p.icon ?? '▸'}</span>
+              <span className="flex-1 truncate font-medium">{p.name}</span>
+              {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
+              {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
             </button>
-          )}
-        </div>
-      ))}
+            {/* Star: pin as this folder's auto-launch. Click again to clear. */}
+            <button
+              className={`px-2 flex items-center transition ${isDefault
+                ? 'text-[color:var(--accent)] opacity-100'
+                : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
+              onClick={async () => {
+                try {
+                  await api.invoke('shells:set-default-cli', { projectId, name: isDefault ? null : p.name });
+                  onDefaultChanged(isDefault ? null : p.name);
+                  toast(isDefault ? `Cleared folder default` : `${p.name} will auto-launch in this folder`, { kind: 'success', timeoutMs: 1400 });
+                } catch (e) {
+                  toast('Could not set default', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                }
+              }}
+              title={isDefault ? 'Clear folder default (fall back to global)' : `Make ${p.name} the auto-launch for this folder`}
+              aria-label={isDefault ? 'Clear folder default' : `Set ${p.name} as folder default`}
+            >
+              {isDefault ? <StarFilledIcon /> : <StarIcon />}
+            </button>
+            {p.scope === 'project' && (
+              <button
+                className="px-2 opacity-0 group-hover:opacity-60 hover:opacity-100 hover:text-[--danger] flex items-center"
+                onClick={() => removeProfile(p.name)}
+                title="Remove from this project"
+              >
+                <XIcon />
+              </button>
+            )}
+          </div>
+        );
+      })}
       <div className="border-t border-[--border]">
         <button
           onClick={() => setCustomOpen(true)}
@@ -1157,6 +1199,7 @@ interface ShellTabsBarItem {
 
 function ShellTabsBar({
   projectId, shells, active, onSelect, onClose,
+  defaultCliName, onDefaultCliChanged,
   onLaunchProfile, onLaunchPlainTab, onLaunchCustom,
   splitOn, onToggleSplit,
 }: {
@@ -1165,6 +1208,9 @@ function ShellTabsBar({
   active: number;
   onSelect: (idx: number) => void;
   onClose: (idx: number) => void;
+  /** Current per-folder auto-launch CLI, forwarded to NewShellMenu's star toggle. */
+  defaultCliName: string | null;
+  onDefaultCliChanged: (name: string | null) => void;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
@@ -1234,6 +1280,8 @@ function ShellTabsBar({
         {menuOpen && (
           <NewShellMenu
             projectId={projectId}
+            defaultCliName={defaultCliName}
+            onDefaultChanged={onDefaultCliChanged}
             onLaunchProfile={(name) => { setMenuOpen(false); onLaunchProfile(name); }}
             onLaunchPlainTab={() => { setMenuOpen(false); onLaunchPlainTab(); }}
             onLaunchCustom={(name, cmdLine, save) => {
@@ -1425,6 +1473,21 @@ function SplitIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <line x1="12" y1="4" x2="12" y2="20" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+function StarFilledIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
     </svg>
   );
 }

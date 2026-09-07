@@ -64,6 +64,13 @@ export interface IpcContract {
     response: { profiles: Array<{ name: string; argv: string[]; env?: Record<string, string>; icon?: string; scope: 'project' | 'global' }> };
   };
   'shells:cli-profiles-remove': { request: { projectId: number; name: string }; response: { ok: true } };
+  /**
+   * Set (or clear with `name: null`) the CLI profile that auto-launches
+   * when this project is opened. Name is resolved against project +
+   * global profiles at spawn time, so renaming a profile after pinning
+   * gracefully falls back to the classic Claude default.
+   */
+  'shells:set-default-cli':     { request: { projectId: number; name: string | null }; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };

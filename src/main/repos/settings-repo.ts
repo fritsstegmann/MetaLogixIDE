@@ -14,9 +14,16 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'window_opacity':                100,
   // Seeded named CLIs the "+ new shell" menu shows out of the box. The bare
   // "Terminal" (login $SHELL) is offered by the menu itself as a separate
-  // row — don't duplicate it here.
+  // row — don't duplicate it here. Each entry is spawned via the user's
+  // PATH, so we ship the *invocation*, not the install path — if the CLI
+  // isn't installed the shell will still open and print "command not
+  // found", which is a clearer signal than us silently hiding the entry.
   'default_cli_profiles': [
     { name: 'Claude',       argv: ['claude', '--dangerously-skip-permissions'], icon: '🤖' },
+    { name: 'OpenAI Codex', argv: ['codex'],                                    icon: '🧠' },
+    { name: 'Gemini',       argv: ['gemini'],                                   icon: '✨' },
+    { name: 'Aider',        argv: ['aider'],                                    icon: '🛠' },
+    { name: 'Cursor Agent', argv: ['cursor-agent'],                             icon: '➤' },
   ],
 };
 

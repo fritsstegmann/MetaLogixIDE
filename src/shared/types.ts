@@ -48,6 +48,15 @@ export interface ProjectConfig {
    * one-off (Custom Command… → Save to project).
    */
   cliProfiles?: CliProfile[];
+  /**
+   * Name of the CLI profile that auto-launches on project open. Resolved
+   * against project cliProfiles first, then the global default_cli_profiles
+   * — so "OpenAI Codex" set here will pick up the global entry if the
+   * project hasn't overridden it. Null / unset → falls back to
+   * `default_launch_cmd.first/subsequent` (the classic Claude default).
+   * Lets each folder pick its own agent without editing raw argv.
+   */
+  defaultCliName?: string | null;
 }
 
 export interface Project {
