@@ -1,6 +1,6 @@
 {
   "name": "metaide",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "type": "module",
   "engines": {
@@ -49,6 +49,11 @@
       "node_modules/better-sqlite3/**",
       "node_modules/node-pty/**",
       "node_modules/keytar/**"
+    ],
+    "fileAssociations": [
+      { "ext": "md",       "name": "Markdown",           "role": "Editor" },
+      { "ext": "markdown", "name": "Markdown",           "role": "Editor" },
+      { "ext": "py",       "name": "Python Source File", "role": "Editor" }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

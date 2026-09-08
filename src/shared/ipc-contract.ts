@@ -177,6 +177,12 @@ export interface IpcContract {
   'app:get-version':        { request: undefined; response: { version: string } };
   /** Reveals the log file in Finder / File Explorer. */
   'app:reveal-log-file':    { request: undefined; response: { ok: true } };
+  /**
+   * Renderer→main handshake: "I'm mounted and listening for file-open
+   * events". Main flushes anything buffered from a cold launch (e.g. the
+   * .py the user double-clicked to start the app).
+   */
+  'app:renderer-ready-for-files': { request: undefined; response: { ok: true } };
   /** Reveals an arbitrary absolute file path in Finder / File Explorer. */
   'app:reveal-in-folder':   { request: { path: string }; response: { ok: true } };
 
@@ -318,5 +324,12 @@ export interface IpcEvents {
    * bring the window forward.
    */
   'shell:focus-request':    { projectId: number; shellIndex: number };
+  /**
+   * OS asked metaIDE to open a file (double-click in Finder, drop on the
+   * Dock icon, "Open With…", or a second `metaide <path>` invocation).
+   * Renderer routes to the matching project's Files tab, or offers to
+   * add the file's parent as a new root if nothing matches.
+   */
+  'app:open-file-request':  { path: string };
 }
 export type IpcEventName = keyof IpcEvents;

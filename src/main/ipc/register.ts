@@ -812,6 +812,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     throw new Error('files:start-drag requires webContents access — see registerIpc');
   },
 
+  'app:renderer-ready-for-files': async () => {
+    // Real implementation lives in main/index.ts so it can access the
+    // file-open buffer state. Registered there BEFORE registerIpc runs.
+    throw new Error('app:renderer-ready-for-files is wired in main/index.ts');
+  },
+
   'git:status': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
@@ -1142,7 +1148,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     });
   }
 
-  const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all', 'files:start-drag']);
+  const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all', 'files:start-drag', 'app:renderer-ready-for-files']);
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
     if (WINDOW_CHANNELS.has(channel)) continue; // wired below

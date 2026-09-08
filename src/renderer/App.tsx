@@ -283,6 +283,55 @@ function MainApp() {
     return () => { off(); };
   }, []);
 
+  // Handle "open a file with metaIDE" requests forwarded by the main
+  // process — double-clicks in Finder, "Open With", the Dock drop, a
+  // second `metaide <path>` invocation. We match the incoming absolute
+  // path against every registered root; the longest-prefix root wins and
+  // the file opens in that project's Files tab. If no root contains the
+  // file, prompt to add its directory as a new root (one confirm — the
+  // user just asked to open it, so a friction-free path matters).
+  useEffect(() => {
+    // Tell main we're ready to receive buffered events (files the user
+    // double-clicked to launch the app in the first place). One-shot per
+    // mount; main ignores repeat signals.
+    void api.invoke('app:renderer-ready-for-files', undefined as never).catch(() => {});
+    const off = api.on('app:open-file-request', async ({ path }) => {
+      try {
+        const { projects } = await api.invoke('projects:list', undefined as never);
+        // Longest-prefix wins — a project nested inside a parent project
+        // (rare, but possible with multiple roots) still routes correctly.
+        const match = projects
+          .filter((p) => path === p.path || path.startsWith(p.path.endsWith('/') ? p.path : p.path + '/'))
+          .sort((a, b) => b.path.length - a.path.length)[0];
+        if (match) {
+          const relPath = path === match.path ? '' : path.slice(match.path.length + 1);
+          const { project } = await api.invoke('projects:open', { id: match.id });
+          lastPickIdRef.current = project.id;
+          setSelected(project);
+          try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
+          setMainTab('files');
+          if (relPath) requestAnimationFrame(() => setOpenInFiles({ relPath, line: null }));
+          return;
+        }
+        // No matching root — offer to add the file's parent directory as
+        // a new root. Uses window.confirm intentionally so the user's
+        // "I just clicked a file" gesture doesn't get lost in a modal.
+        const parent = path.replace(/\/[^/]*$/, '');
+        if (parent && window.confirm(`No metaIDE project contains this file.\n\nAdd its folder as a new root?\n\n${parent}`)) {
+          try {
+            await api.invoke('roots:add', { path: parent });
+            toast('Root added — pick the project from the sidebar', { kind: 'success' });
+          } catch (e) {
+            toast('Could not add root', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+          }
+        }
+      } catch (e) {
+        toast('Could not open file', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+      }
+    });
+    return () => { off(); };
+  }, []);
+
   // Click-to-focus for "command done" OS notifications: the main process
   // fires `shell:focus-request` with a (projectId, shellIndex). We look up
   // the project (it may not be the one currently selected), open it, and

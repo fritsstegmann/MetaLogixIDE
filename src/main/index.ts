@@ -62,6 +62,82 @@ augmentPathForGuiLaunch();
 let mainWindow: BrowserWindow | null = null;
 const popoutWindows = new Map<string, BrowserWindow>(); // key = `${projectId}:${shellIndex}`
 
+// ─── File-association / "open with metaIDE" plumbing ───────────────────
+// macOS delivers file opens via `app.on('open-file')` (can arrive BEFORE
+// the app is ready). Windows/Linux hand them as argv on cold launch, or
+// via `second-instance` when a second `metaide <path>` invocation is
+// forwarded by the single-instance lock below. We buffer everything until
+// the renderer is up, then flush and broadcast one event per path.
+const pendingFileOpens: string[] = [];
+let rendererReadyForFiles = false;
+
+function flushPendingFileOpens(): void {
+  if (!rendererReadyForFiles) return;
+  while (pendingFileOpens.length > 0) {
+    const p = pendingFileOpens.shift()!;
+    try {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('app:open-file-request', { path: p });
+      }
+    } catch (e) { console.warn('[metaide] failed to forward open-file', p, e); }
+  }
+}
+
+function queueOpenFile(rawPath: string): void {
+  // Only queue paths that actually exist on disk — swallows the transient
+  // argv[0] (electron binary path itself) and macOS's `-psn_*` flag.
+  if (!rawPath || rawPath.startsWith('-')) return;
+  try {
+    if (!existsSync(rawPath)) return;
+  } catch { return; }
+  pendingFileOpens.push(rawPath);
+  flushPendingFileOpens();
+  // Also raise the main window when a file arrives — the user just asked
+  // to open something, so make sure the UI is visible.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show(); mainWindow.focus();
+  }
+}
+
+// Argv scan for the initial launch (Windows/Linux). The electron binary
+// path is process.argv[0]; process.argv[1] is our own out/main/index.js
+// on unpacked runs and the packaged app entry on installed ones. Anything
+// after that is a user-supplied file.
+function scanArgvForFiles(argv: string[]): void {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === '.' || a === '--') continue;
+    queueOpenFile(a);
+  }
+}
+
+// macOS delivers open-file events; register the listener EARLY so events
+// fired before app.whenReady are still captured.
+app.on('open-file', (event, path) => {
+  event.preventDefault();
+  queueOpenFile(path);
+});
+
+// Single-instance lock. When the user opens a second file via Finder
+// (which spawns `MetaLogix IDE.app --args <path>`), Electron routes the
+// arguments to the running instance's second-instance event instead of
+// launching a second app. Without this the second launch would open a
+// duplicate metaIDE with its own DB handle, which would corrupt the
+// SQLite WAL.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    scanArgvForFiles(argv);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show(); mainWindow.focus();
+    }
+  });
+}
+
 function poppedList(): Array<{ projectId: number; shellIndex: number }> {
   return [...popoutWindows.keys()].map((k) => {
     const [p, s] = k.split(':');
@@ -297,7 +373,19 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
   win.setOpacity(persistedOpacity);
 }
 
+// Renderer signals it's mounted (App.tsx effect) so we can flush any
+// file-open events buffered from a cold launch. Registered outside the
+// ready handler so the receiver is in place before the renderer boots.
+ipcMain.handle('app:renderer-ready-for-files', () => {
+  rendererReadyForFiles = true;
+  flushPendingFileOpens();
+  return { ok: true } as const;
+});
+
 app.whenReady().then(async () => {
+  // Cold-launch argv scan (Windows/Linux + packaged mac when invoked with
+  // args). Runs after ready so `existsSync` sees the app-relative CWD.
+  scanArgvForFiles(process.argv);
   const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations') });
   // Auto-rescan every registered root at boot so folders added on disk since
   // the last launch (or after a discovery-rule change) surface without the
