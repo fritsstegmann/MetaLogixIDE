@@ -244,6 +244,11 @@ export function ShellTab({
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onScheme = () => { term.options.theme = buildTheme(); };
     media.addEventListener('change', onScheme);
+    // Also fire when the in-app theme toggle flips `data-theme` on <html>:
+    // the media query only tracks the OS, so without this the terminal keeps
+    // its old palette after Settings → Appearance → Light/Dark.
+    const themeObserver = new MutationObserver(() => { term.options.theme = buildTheme(); });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     return () => {
       disposed = true;
@@ -252,6 +257,7 @@ export function ShellTab({
       window.removeEventListener('focus', onWinFocus);
       ro.disconnect();
       media.removeEventListener('change', onScheme);
+      themeObserver.disconnect();
       linkProviderDisposable.dispose();
       term.dispose();
       termRef.current = null;

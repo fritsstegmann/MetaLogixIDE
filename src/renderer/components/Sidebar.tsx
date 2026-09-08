@@ -83,9 +83,8 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
   }
   async function addRoot() {
     const picked = await api.invoke('dialogs:pick-directory', undefined as never);
-    const path = picked.path ?? window.prompt('Root directory path (absolute):');
-    if (!path) return;
-    await api.invoke('roots:add', { path });
+    if (!picked.path) return;
+    await api.invoke('roots:add', { path: picked.path });
     await refreshRoots();
     await refreshProjects();
   }

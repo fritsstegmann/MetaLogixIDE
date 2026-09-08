@@ -21,7 +21,12 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'default_cli_profiles': [
     { name: 'Claude',       argv: ['claude', '--dangerously-skip-permissions'], icon: '🤖' },
     { name: 'OpenAI Codex', argv: ['codex'],                                    icon: '🧠' },
+    { name: 'ChatGPT',      argv: ['sgpt', '--repl', 'temp'],                   icon: '💬' },
     { name: 'Gemini',       argv: ['gemini'],                                   icon: '✨' },
+    { name: 'Ollama',       argv: ['ollama', 'run', 'llama3'],                  icon: '🦙' },
+    { name: 'Amp',          argv: ['amp'],                                      icon: '⚡' },
+    { name: 'Cody',         argv: ['cody', 'chat'],                             icon: '🐦' },
+    { name: 'Qwen',         argv: ['qwen-code'],                                icon: '🐉' },
     { name: 'Aider',        argv: ['aider'],                                    icon: '🛠' },
     { name: 'Cursor Agent', argv: ['cursor-agent'],                             icon: '➤' },
   ],
@@ -46,6 +51,21 @@ export class SettingsRepo {
     this.db.prepare(
       `UPDATE settings SET value = ? WHERE key = 'metaproject_base_url' AND value = ?`,
     ).run(JSON.stringify(DEFAULT_SETTINGS['metaproject_base_url']), JSON.stringify(''));
+    // Union new seed CLI profiles into existing installs. Users already past
+    // first-run have their own row for `default_cli_profiles`, so the INSERT
+    // OR IGNORE above skipped it — without this merge they'd never see newly
+    // shipped defaults like ChatGPT/Ollama. User edits and additions are
+    // preserved (match is by `name`); we only add missing seeds to the end.
+    const row = this.db.prepare(`SELECT value FROM settings WHERE key = 'default_cli_profiles'`).get() as { value: string } | undefined;
+    if (row) {
+      const current = JSON.parse(row.value) as SettingsMap['default_cli_profiles'];
+      const have = new Set(current.map(p => p.name));
+      const missing = DEFAULT_SETTINGS['default_cli_profiles'].filter(p => !have.has(p.name));
+      if (missing.length > 0) {
+        this.db.prepare(`UPDATE settings SET value = ? WHERE key = 'default_cli_profiles'`)
+          .run(JSON.stringify([...current, ...missing]));
+      }
+    }
   }
 
   get<K extends keyof SettingsMap>(key: K): SettingsMap[K] {

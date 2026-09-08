@@ -9,9 +9,9 @@
  * so they read as near-solid black even against a bright desktop.
  */
 :root, :root[data-theme="dark"] {
-  --bg: rgba(0, 0, 0, 0.55);
-  --panel: rgba(3, 5, 8, 0.86);
-  --panel-strong: rgba(0, 1, 3, 0.96);
+  --bg: rgba(22, 26, 34, 0.55);
+  --panel: rgba(28, 32, 40, 0.82);
+  --panel-strong: rgba(34, 38, 46, 0.92);
   /* Slightly lifted dark-grey surface for chat & content panes so the
    * message rows read against a subtly different tone than the app chrome. */
   --chat-surface: rgba(22, 26, 33, 0.75);
@@ -19,6 +19,11 @@
   --scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
   --border: rgba(255, 255, 255, 0.06);
+  /* Inputs need their own surface + border so they stand off the panel they
+   * sit on. Modal bodies use `--panel-strong`; reusing the same var on inputs
+   * would render them as invisible text-shaped holes. */
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.18);
   --text: #e6edf3;
   --text-muted: #8b949e;
   --accent: #3b82f6;
@@ -54,14 +59,20 @@
 
 /* ── Light palette (explicit) ── */
 :root[data-theme="light"] {
-  --bg: transparent;
-  --panel: rgba(255, 255, 255, 0.62);
-  --panel-strong: rgba(245, 246, 249, 0.90);
-  --chat-surface: rgba(255, 255, 255, 0.60);
+  /* Mirror dark mode's overlay strategy: dark uses a soft charcoal overlay
+   * on top of vibrancy, so light needs a matching warm off-white overlay —
+   * pure white feels blinding and colourful wallpapers bleed through if the
+   * overlay is too translucent. */
+  --bg: rgba(236, 238, 243, 0.62);
+  --panel: rgba(232, 234, 240, 0.86);
+  --panel-strong: rgba(238, 240, 245, 0.94);
+  --chat-surface: rgba(240, 242, 246, 0.88);
   --chat-row-hover: rgba(0, 0, 0, 0.04);
   --scrollbar-thumb: rgba(0, 0, 0, 0.28);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.45);
-  --border: rgba(0, 0, 0, 0.12);
+  --border: rgba(0, 0, 0, 0.18);
+  --input-bg: rgba(0, 0, 0, 0.04);
+  --input-border: rgba(0, 0, 0, 0.22);
   --text: #111418;
   --text-muted: #4b5563;
   --accent: #2563eb;
@@ -97,14 +108,16 @@
 /* ── System-follow: only applies when no explicit data-theme is set ── */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg: transparent;
-    --panel: rgba(255, 255, 255, 0.62);
-    --panel-strong: rgba(245, 246, 249, 0.90);
-    --chat-surface: rgba(255, 255, 255, 0.60);
+    --bg: rgba(236, 238, 243, 0.62);
+    --panel: rgba(232, 234, 240, 0.86);
+    --panel-strong: rgba(238, 240, 245, 0.94);
+    --chat-surface: rgba(240, 242, 246, 0.88);
     --chat-row-hover: rgba(0, 0, 0, 0.04);
     --scrollbar-thumb: rgba(0, 0, 0, 0.28);
     --scrollbar-thumb-hover: rgba(0, 0, 0, 0.45);
-    --border: rgba(0, 0, 0, 0.12);
+    --border: rgba(0, 0, 0, 0.18);
+    --input-bg: rgba(0, 0, 0, 0.04);
+    --input-border: rgba(0, 0, 0, 0.22);
     --text: #111418;
     --text-muted: #4b5563;
     --accent: #2563eb;

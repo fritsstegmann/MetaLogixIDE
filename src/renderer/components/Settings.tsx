@@ -191,9 +191,8 @@ function RootsPanel() {
 
   async function add() {
     const picked = await api.invoke('dialogs:pick-directory', undefined as never);
-    const path = picked.path ?? window.prompt('Root directory path (absolute):');
-    if (!path) return;
-    await api.invoke('roots:add', { path });
+    if (!picked.path) return;
+    await api.invoke('roots:add', { path: picked.path });
     await refresh();
   }
   async function remove(id: number) {
@@ -289,7 +288,7 @@ function LaunchEditor({ label, value, onChange }: { label: string; value: Launch
         onChange={(e) => setArgvText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } }}
-        className="w-full font-mono text-sm bg-[--panel]/70 border border-[--border] rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+        className="w-full font-mono text-sm bg-[--input-bg] text-[--text] border border-[--input-border] rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
         placeholder='e.g. claude --dangerously-skip-permissions'
       />
       <div className="text-[11px] text-[--text-muted]">argv: <span className="font-mono">{JSON.stringify(value.argv)}</span></div>
@@ -335,7 +334,7 @@ function MetaprojectPanel() {
             onBlur={save}
             onKeyDown={(e) => { if (e.key === 'Enter') { void save(); (e.target as HTMLInputElement).blur(); } }}
             placeholder="https://projects.metalogix.solutions"
-            className="flex-1 bg-[--panel-strong] text-[--text] border border-[--border] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+            className="flex-1 bg-[--input-bg] text-[--text] border border-[--input-border] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
             data-testid="metaproject-base-url"
           />
         </div>

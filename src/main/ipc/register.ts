@@ -15,7 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { dirname, join, relative, resolve } from 'node:path';
 
-type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>) => Promise<IpcResponse<C>>;
+type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
 
 // Keychain service name for the metaproject credential. One row per (service,
@@ -74,11 +74,18 @@ export interface WindowHooks {
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
-  'dialogs:pick-directory': async () => {
+  'dialogs:pick-directory': async (_s, _req, event) => {
     if (process.env.METAIDE_TEST_MODE === '1') {
       return { path: null };
     }
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    // Attach to the invoking window so macOS renders the picker as a proper
+    // sheet — without a parent, the panel can spawn behind vibrancy-backed
+    // windows and appear as "nothing happened" to the user.
+    const parent = event ? BrowserWindow.fromWebContents(event.sender) : null;
+    const options = { properties: ['openDirectory' as const] };
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options);
     const picked = result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
     return { path: picked ?? null };
   },
@@ -1152,9 +1159,9 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
     if (WINDOW_CHANNELS.has(channel)) continue; // wired below
-    ipcMain.handle(channel, async (_e, req) => {
-      const fn = handlers[channel] as (s: Services, req: unknown) => Promise<unknown>;
-      const result = await fn(services, req);
+    ipcMain.handle(channel, async (event, req) => {
+      const fn = handlers[channel] as (s: Services, req: unknown, e?: Electron.IpcMainInvokeEvent) => Promise<unknown>;
+      const result = await fn(services, req, event);
       for (const evt of CHANNEL_EMITS[channel] ?? []) sendEvent(evt, eventPayload(evt));
       return result;
     });
