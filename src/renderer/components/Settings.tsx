@@ -3,6 +3,10 @@ import type { LaunchCmd, Root, SettingsMap } from '@shared/types';
 import { parseArgv } from '@shared/parse-argv';
 import { api } from '@renderer/api';
 import { useTheme, type ThemeMode } from '@renderer/hooks/useTheme';
+import { useClaudePermissionMode } from '@renderer/hooks/useClaudePermissionMode';
+import { PermissionModeControl } from '@renderer/components/PermissionModeControl';
+import { PERMISSION_MODE_COPY, PERMISSION_MODE_TEST_IDS } from '@renderer/permission-mode-copy';
+import type { ClaudePermissionMode } from '@shared/claude-permission-mode';
 
 type Section = 'general' | 'roots' | 'launch' | 'metaproject';
 
@@ -229,9 +233,13 @@ function RootsPanel() {
 
 /* ─────────────────────────── Launch commands ─────────────────────────── */
 
+const LAUNCH_KEYS: ReadonlyArray<keyof SettingsMap> = ['default_launch_cmd.first', 'default_launch_cmd.subsequent'];
+
 function LaunchPanel() {
   const [first, setFirst]           = useState<LaunchCmd | null>(null);
   const [subsequent, setSubsequent] = useState<LaunchCmd | null>(null);
+  const [modeBusy, setModeBusy]     = useState(false);
+  const { mode, choose, error: modeError } = useClaudePermissionMode();
 
   const load = useCallback(async () => {
     const [f, s] = await Promise.all([
@@ -242,7 +250,23 @@ function LaunchPanel() {
     setSubsequent(s.value as LaunchCmd);
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const off = api.on('settings:changed', ({ key }) => {
+      if (LAUNCH_KEYS.includes(key)) void load();
+    });
+    return () => { off(); };
+  }, [load]);
+
+  async function changeMode(next: ClaudePermissionMode) {
+    setModeBusy(true);
+    try {
+      await choose(next);
+      await load();
+    } finally {
+      setModeBusy(false);
+    }
+  }
 
   async function saveFirst(value: LaunchCmd) {
     setFirst(value);
@@ -259,8 +283,12 @@ function LaunchPanel() {
         title="Launch commands"
         subtitle="What runs when you open a project. First launch runs 'first'; subsequent launches use 'subsequent' (typically adds --continue)."
       />
-      {first && <LaunchEditor label="First launch" value={first} onChange={saveFirst} />}
-      {subsequent && <LaunchEditor label="Subsequent launches" value={subsequent} onChange={saveSubsequent} />}
+      <Field label={PERMISSION_MODE_COPY.settingsLabel} hint={PERMISSION_MODE_COPY.settingsHint}>
+        <PermissionModeControl mode={mode} disabled={modeBusy} onChange={(m) => void changeMode(m)} />
+        {modeError && <div role="alert" className="text-xs text-[--danger]">{modeError}</div>}
+      </Field>
+      {first && <LaunchEditor label="First launch" value={first} onChange={saveFirst} testId={PERMISSION_MODE_TEST_IDS.launchEditorFirst} />}
+      {subsequent && <LaunchEditor label="Subsequent launches" value={subsequent} onChange={saveSubsequent} testId={PERMISSION_MODE_TEST_IDS.launchEditorSubsequent} />}
       <div className="text-xs text-[--text-muted] leading-relaxed">
         Tokens supported: <code>${'{HOME}'}</code>, <code>${'{PROJECT_PATH}'}</code>, <code>${'{PROJECT_NAME}'}</code>, <code>${'{env.NAME}'}</code>.
         Interpolation is per-argv-element, so tokens cannot introduce new arguments.
@@ -269,7 +297,7 @@ function LaunchPanel() {
   );
 }
 
-function LaunchEditor({ label, value, onChange }: { label: string; value: LaunchCmd; onChange: (v: LaunchCmd) => void }) {
+function LaunchEditor({ label, value, onChange, testId }: { label: string; value: LaunchCmd; onChange: (v: LaunchCmd) => void; testId: string }) {
   const [argvText, setArgvText] = useState(value.argv.join(' '));
   useEffect(() => { setArgvText(value.argv.join(' ')); }, [value]);
 
@@ -289,7 +317,9 @@ function LaunchEditor({ label, value, onChange }: { label: string; value: Launch
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } }}
         className="w-full font-mono text-sm bg-[--input-bg] text-[--text] border border-[--input-border] rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
-        placeholder='e.g. claude --dangerously-skip-permissions'
+        placeholder='e.g. claude --permission-mode auto'
+        aria-label={label}
+        data-testid={testId}
       />
       <div className="text-[11px] text-[--text-muted]">argv: <span className="font-mono">{JSON.stringify(value.argv)}</span></div>
     </div>
