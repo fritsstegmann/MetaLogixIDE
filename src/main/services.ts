@@ -10,7 +10,7 @@ import { PtyManager } from './pty/manager';
 import { RootWatcher } from './domain/watcher';
 import { MetaprojectClient } from './metaproject/client';
 import { applyClaudePermissionMode } from './domain/claude-permission-mode';
-import { isClaudePermissionMode } from '@shared/claude-permission-mode';
+import { CLAUDE_PERMISSION_MODE_ENV, isClaudePermissionMode } from '@shared/claude-permission-mode';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -38,10 +38,10 @@ export interface Services {
  * has a stored choice is never overridden.
  */
 function applyPermissionModeEnvOverride(settings: SettingsRepo): void {
-  const raw = process.env.METAIDE_CLAUDE_PERMISSION_MODE;
+  const raw = process.env[CLAUDE_PERMISSION_MODE_ENV];
   if (raw === undefined) return;
   if (!isClaudePermissionMode(raw)) {
-    throw new Error(`METAIDE_CLAUDE_PERMISSION_MODE must be 'auto' or 'bypass', got: ${JSON.stringify(raw)}`);
+    throw new Error(`${CLAUDE_PERMISSION_MODE_ENV} must be 'auto' or 'bypass', got: ${JSON.stringify(raw)}`);
   }
   if (settings.get('claude_permission_mode') !== null) return;
   applyClaudePermissionMode(settings, raw);
