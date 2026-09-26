@@ -52,6 +52,11 @@ export class PtyManager extends EventEmitter {
   /** Last size the viewport asked for, per shell — outlives the PTY so a spawn can honour it. */
   private requestedSizes = new Map<string, { cols: number; rows: number }>();
 
+  /**
+   * Spawn the PTY for (projectId, shellIndex). Size precedence: explicit
+   * `cols`/`rows`, then the last size passed to `resize` for this shell,
+   * then 100x30.
+   */
   async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols?: number, rows?: number): Promise<{ pid: number }> {
     const k = key(projectId, shellIndex);
     if (this.entries.has(k)) throw new Error(`already spawned: ${k}`);
@@ -247,6 +252,10 @@ export class PtyManager extends EventEmitter {
     return out;
   }
 
+  /**
+   * Resize the live PTY, and remember the size either way so a PTY that
+   * does not exist yet (or is respawned later) starts at it.
+   */
   resize(projectId: number, shellIndex: number, cols: number, rows: number): void {
     this.requestedSizes.set(key(projectId, shellIndex), { cols, rows });
     const e = this.entries.get(key(projectId, shellIndex));
