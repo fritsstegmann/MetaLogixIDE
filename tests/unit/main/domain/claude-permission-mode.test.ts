@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   isClaudeArgv,
   withPermissionMode,
@@ -172,5 +172,48 @@ describe('applyClaudePermissionMode', () => {
     repo.set('keep_alive_cap', 9);
     applyClaudePermissionMode(repo, 'bypass');
     expect(repo.get('keep_alive_cap')).toBe(9);
+  });
+
+  it('AC14 — writes through exactly one setMany call, never through set (gate Low 3: pins the single-transaction requirement at the service boundary)', () => {
+    const setManySpy = vi.fn();
+    const setSpy = vi.fn();
+    const fakeSettings = {
+      get: (key: string) => {
+        const store: Record<string, unknown> = {
+          claude_permission_mode: null,
+          'default_launch_cmd.first': { argv: ['claude'], env: {} },
+          'default_launch_cmd.subsequent': { argv: ['claude', '--continue'], env: {} },
+          default_cli_profiles: [{ name: 'Claude', argv: ['claude'] }],
+        };
+        return store[key];
+      },
+      setMany: setManySpy,
+      set: setSpy,
+    } as unknown as SettingsRepo;
+
+    applyClaudePermissionMode(fakeSettings, 'auto');
+
+    expect(setManySpy).toHaveBeenCalledTimes(1);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it('AC14 — a setMany failure propagates and nothing else is written (a per-key set loop would swallow this differently)', () => {
+    const setSpy = vi.fn();
+    const fakeSettings = {
+      get: (key: string) => {
+        const store: Record<string, unknown> = {
+          claude_permission_mode: null,
+          'default_launch_cmd.first': { argv: ['claude'], env: {} },
+          'default_launch_cmd.subsequent': { argv: ['claude', '--continue'], env: {} },
+          default_cli_profiles: [{ name: 'Claude', argv: ['claude'] }],
+        };
+        return store[key];
+      },
+      setMany: vi.fn(() => { throw new Error('setMany failed'); }),
+      set: setSpy,
+    } as unknown as SettingsRepo;
+
+    expect(() => applyClaudePermissionMode(fakeSettings, 'auto')).toThrow('setMany failed');
+    expect(setSpy).not.toHaveBeenCalled();
   });
 });

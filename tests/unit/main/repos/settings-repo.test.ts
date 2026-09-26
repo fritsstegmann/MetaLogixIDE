@@ -39,6 +39,16 @@ describe('SettingsRepo', () => {
     expect(repo.get('claude_permission_mode')).toBeNull();
   });
 
+  it('AC15 — fresh seeded launch defaults carry no permission flag (pinned to literals, not DEFAULT_SETTINGS)', () => {
+    // Asserted against literal argv, not the DEFAULT_SETTINGS constant these
+    // values are read from — the whole point is to catch the constant
+    // itself regressing back to a bypass-by-default seed (gate Medium 2).
+    const repo = seed();
+    expect(repo.get('default_launch_cmd.first').argv).toEqual(['claude']);
+    expect(repo.get('default_launch_cmd.subsequent').argv).toEqual(['claude', '--continue']);
+    expect(repo.get('default_cli_profiles').find(p => p.name === 'Claude')!.argv).toEqual(['claude']);
+  });
+
   it('AC2 — an upgraded DB with pre-existing launch rows and no mode row seeds mode null and leaves stored launch argv untouched', () => {
     const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
     runMigrations(db, migrationsDir);

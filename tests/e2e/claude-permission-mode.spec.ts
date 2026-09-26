@@ -14,10 +14,27 @@
  * and points the launch env at that shim.
  */
 
-import { test, expect, _electron as electron } from '@playwright/test';
+import { test, expect, _electron as electron, type Page } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+/**
+ * Reads the shell's raw PTY scrollback via `shells:snapshot` for the given
+ * project's primary (shellIndex 0) shell. Same helper as the other specs
+ * (phase1-smoke.spec.ts etc.) — xterm renders via the WebGL addon with
+ * screenReaderMode off, so there is no DOM text to assert against.
+ */
+async function shellOutput(win: Page, projectName: string): Promise<string> {
+  return win.evaluate(async (name: string) => {
+    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<never> } }).api;
+    const { shells } = (await api.invoke('shells:alive-list', undefined)) as { shells: Array<{ projectId: number; projectName: string; shellIndex: number }> };
+    const shell = shells.find((s) => s.projectName === name && s.shellIndex === 0);
+    if (!shell) return '';
+    const snap = (await api.invoke('shells:snapshot', { projectId: shell.projectId, shellIndex: shell.shellIndex })) as { output: string };
+    return snap.output;
+  }, projectName);
+}
 
 test('Claude permission mode: first-run modal, blocking, argv rewrite, persistence, Settings control', async () => {
   const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
@@ -74,13 +91,24 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
   await expect(dialog).toBeVisible();
 
   // ── AC4: ⌘, does not open Settings while the dialog is up ──────────────────
-  await win.evaluate(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true, bubbles: true, cancelable: true }));
-  });
+  // Real key input (not a synthetic `window.dispatchEvent`): dispatching
+  // directly on `window` has no ancestor chain, so it only ever reaches
+  // listeners bound to `window` itself and never exercises the capturing
+  // phase through `document` — which is exactly where the dialog's own
+  // `stopImmediatePropagation` (PermissionModeDialog.tsx) needs to win
+  // against other document-level listeners (Sidebar/PromptLibrary/etc.) to
+  // actually prove the blocking modal isolates the app. `win.keyboard.press`
+  // goes through Electron's real input pipeline instead. (⌘, is used here,
+  // not ⌘K, because ⌘K risks OS-level Spotlight interception on macOS — see
+  // the dispatchEvent comment below.)
+  await win.keyboard.press('Meta+,');
   await expect(win.getByTestId('settings-modal')).toHaveCount(0);
   await expect(dialog).toBeVisible();
 
   // ── AC4: ⌘K does not open the project switcher while the dialog is up ─────
+  // Kept as a synthetic dispatch (not win.keyboard.press): real ⌘K risks
+  // being intercepted by macOS Spotlight before it ever reaches the
+  // Electron window. The ⌘, chord above now covers the real-input case.
   await win.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
   });
@@ -126,6 +154,14 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
   const flagIdx = firstArgv.indexOf('--permission-mode');
   expect(flagIdx, `launchArgv was ${JSON.stringify(firstArgv)}`).toBeGreaterThanOrEqual(0);
   expect(firstArgv[flagIdx + 1]).toBe('auto');
+
+  // Wait for the shim to actually be live before closing. On a cold build
+  // (first spawn right after electron-rebuild, freshly rebuilt spawn-helper)
+  // the PTY spawn can still be in flight here — closing the app while it's
+  // mid-spawn hangs `app.close()` for ~60s (spawn-helper stuck in open() of
+  // the pty slave, never reaching exec). This also strengthens AC16: it
+  // proves the rewritten argv actually exec'd, not just got recorded.
+  await expect.poll(() => shellOutput(win, 'permproj'), { timeout: 10000 }).toContain('mock-claude ready');
 
   await app.close();
 
