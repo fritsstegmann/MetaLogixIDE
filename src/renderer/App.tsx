@@ -17,6 +17,8 @@ import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
+import { PermissionModeDialog } from './components/PermissionModeDialog';
+import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
@@ -187,6 +189,9 @@ function MainApp() {
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
   const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
+  const permissionMode = useClaudePermissionMode();
+  const shortcutsBlockedRef = useRef(true);
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const { status: git } = useGitStatus(selected?.id ?? null);
@@ -290,11 +295,15 @@ function MainApp() {
   // the file opens in that project's Files tab. If no root contains the
   // file, prompt to add its directory as a new root (one confirm — the
   // user just asked to open it, so a friction-free path matters).
+  // Main buffers file opens until this signal, so holding it until a
+  // permission mode is chosen defers the file's shell launch (spec AC5).
+  const permissionChosen = permissionMode.status === 'chosen';
   useEffect(() => {
-    // Tell main we're ready to receive buffered events (files the user
-    // double-clicked to launch the app in the first place). One-shot per
-    // mount; main ignores repeat signals.
+    if (!permissionChosen) return;
     void api.invoke('app:renderer-ready-for-files', undefined as never).catch(() => {});
+  }, [permissionChosen]);
+
+  useEffect(() => {
     const off = api.on('app:open-file-request', async ({ path }) => {
       try {
         const { projects } = await api.invoke('projects:list', undefined as never);
@@ -357,6 +366,7 @@ function MainApp() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (shortcutsBlockedRef.current) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === 'k')                          { e.preventDefault(); setSwitcherOpen(true); }
       if (mod && e.key === '\\')                         { e.preventDefault(); setSidebarOpen((v) => !v); }
@@ -898,6 +908,9 @@ function MainApp() {
           }
         }}
       />
+      {permissionMode.status === 'unchosen' && (
+        <PermissionModeDialog onConfirm={permissionMode.choose} error={permissionMode.error} />
+      )}
     </div>
   );
 }

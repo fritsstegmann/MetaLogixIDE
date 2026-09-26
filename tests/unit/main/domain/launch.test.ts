@@ -2,6 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { resolveLaunch } from '@main/domain/launch';
 import type { Project } from '@shared/types';
 import { DEFAULT_SETTINGS } from '@main/repos/settings-repo';
+import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
+import { openDb } from '@main/db/connection';
+import { runMigrations } from '@main/db/migrator';
+import { SettingsRepo } from '@main/repos/settings-repo';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 function project(overrides: Partial<Project> = {}): Project {
   return {
@@ -44,5 +51,19 @@ describe('resolveLaunch', () => {
     const p = project({ config: { cwdOverride: '/r/x/sub' } });
     const r = resolveLaunch(p, fakeSettings, '/home/u');
     expect(r.cwd).toBe('/r/x/sub');
+  });
+
+  it('AC16 — after applying Auto, both first and subsequent argv carry --permission-mode auto', () => {
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'lr-')), 'db'));
+    runMigrations(db, resolve(__dirname, '../../../../migrations'));
+    const settings = new SettingsRepo(db);
+    settings.seedDefaults();
+    applyClaudePermissionMode(settings, 'auto');
+
+    const first = resolveLaunch(project(), settings, '/home/u');
+    expect(first.argv).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
+
+    const subsequent = resolveLaunch(project({ firstLaunchedAt: '2026-07-18 10:00:00' }), settings, '/home/u');
+    expect(subsequent.argv).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
   });
 });

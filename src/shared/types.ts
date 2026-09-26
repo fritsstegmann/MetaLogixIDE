@@ -1,3 +1,5 @@
+import type { ClaudePermissionMode } from './claude-permission-mode';
+
 export interface Root {
   id: number;
   path: string;
@@ -107,4 +109,6 @@ export type SettingsMap = {
    * shellIndex 0 launches on project open.
    */
   'default_cli_profiles':          CliProfile[];
+  /** Chosen Claude permission mode; `null` = not chosen yet (first-run modal). */
+  'claude_permission_mode':        ClaudePermissionMode | null;
 };

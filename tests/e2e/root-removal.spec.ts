@@ -15,7 +15,7 @@ test('removing a root in Settings drops it from the sidebar "All projects" list'
     // Own user-data dir: the single-instance lock is keyed on it, so a
     // running dev copy of the app would otherwise make this launch quit.
     args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: { ...process.env, HOME: isolatedHome, METAIDE_TEST_MODE: '1' },
+    env: { ...process.env, HOME: isolatedHome, METAIDE_TEST_MODE: '1', METAIDE_CLAUDE_PERMISSION_MODE: 'bypass' },
   });
   try {
     const win = await app.firstWindow();
