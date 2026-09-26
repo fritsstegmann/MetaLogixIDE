@@ -164,7 +164,7 @@ function darwinChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
   return process.platform === 'darwin'
     ? {
         titleBarStyle: 'hiddenInset',
-        trafficLightPosition: { x: 12, y: 14 },
+        trafficLightPosition: { x: 12, y: 10 },
         vibrancy: 'sidebar',
         visualEffectState: 'active',
         roundedCorners: true,
