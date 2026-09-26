@@ -8,6 +8,12 @@ function launch(extraArgs: string[] = []) {
   return { argv: ['node', MOCK, ...extraArgs], env: {}, cwd: process.cwd(), variant: 'first' as const };
 }
 
+const PRINT_SIZE = 'process.stdout.write(`SIZE=${process.stdout.columns}x${process.stdout.rows}\\n`); setTimeout(() => {}, 500)';
+
+function sizeLaunch() {
+  return { argv: ['node', '-e', PRINT_SIZE], env: {}, cwd: process.cwd(), variant: 'first' as const };
+}
+
 async function untilData(mgr: PtyManager, projectId: number, match: string, timeoutMs = 3000): Promise<string> {
   let buf = '';
   return new Promise((resolveP, rejectP) => {
@@ -53,5 +59,37 @@ describe('PtyManager', () => {
     await mgr.spawn(4, 0, launch());
     await expect(mgr.spawn(4, 0, launch())).rejects.toThrow();
     await mgr.kill(4, 0);
+  });
+  it('spawns at the size requested by a resize that arrived before the PTY existed', async () => {
+    const mgr = new PtyManager();
+    mgr.resize(5, 0, 180, 50);
+    const p = untilData(mgr, 5, '\n');
+    await mgr.spawn(5, 0, sizeLaunch());
+    const out = await p;
+    await mgr.kill(5, 0);
+    expect(out).toContain('SIZE=180x50');
+    expect(out).not.toContain('SIZE=100x30');
+  });
+
+  it('respawns at the last requested size after the previous PTY was killed', async () => {
+    const mgr = new PtyManager();
+    await mgr.spawn(6, 0, launch());
+    mgr.resize(6, 0, 150, 40);
+    await mgr.kill(6, 0);
+    const p = untilData(mgr, 6, '\n');
+    await mgr.spawn(6, 0, sizeLaunch());
+    const out = await p;
+    await mgr.kill(6, 0);
+    expect(out).toContain('SIZE=150x40');
+  });
+
+  it('keeps sizes per shell so one shell\'s resize does not size another', async () => {
+    const mgr = new PtyManager();
+    mgr.resize(7, 1, 180, 50);
+    const p = untilData(mgr, 7, '\n');
+    await mgr.spawn(7, 0, sizeLaunch());
+    const out = await p;
+    await mgr.kill(7, 0);
+    expect(out).toContain('SIZE=100x30');
   });
 });
