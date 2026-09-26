@@ -478,6 +478,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
 
   'settings:get': async (s, { key }) => ({ value: s.settings.get(key) }),
   'settings:set': async (s, { key, value }) => { s.settings.set(key, value as never); return { ok: true } as const; },
+  'settings:set-claude-permission-mode': async () => { throw new Error('not implemented'); },
 
   'windows:popout-shell': async () => {
     throw new Error('windows:popout-shell requires WindowHooks — see registerIpc');
