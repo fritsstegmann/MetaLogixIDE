@@ -30,6 +30,7 @@ import { usePoppedShells } from './hooks/usePoppedShells';
 import { useProjectShells } from './hooks/useProjectShells';
 import { useGitStatus } from './hooks/useGitStatus';
 import { Tooltip } from './components/Tooltip';
+import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 interface PopoutInfo {
@@ -174,6 +175,13 @@ function MainApp() {
     true,
     (v): v is boolean => typeof v === 'boolean',
   );
+  // Mouse toggles animate the sidebar; ⌘B, ⌘\ and the palette stay instant
+  // because they're used far too often for motion to be anything but lag.
+  const [sidebarAnimate, setSidebarAnimate] = useState(false);
+  const toggleSidebar = useCallback((animate: boolean, open?: boolean) => {
+    setSidebarAnimate(animate);
+    setSidebarOpen((v) => open ?? !v);
+  }, [setSidebarOpen]);
   const [sidebarWidth, setSidebarWidth] = usePersistedNumber('metaide.sidebarWidth', 288, 200, 560);
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
@@ -221,7 +229,7 @@ function MainApp() {
     { id: 'nav.scrollback-search', category: 'Go', title: 'Search all shells…',              hint: '⌘⇧O',  run: () => setScrollbackOpen(true) },
     { id: 'shell.prompts',   category: 'Shell',    title: 'Open prompt library',             hint: '⌘⇧K',  run: () => setPromptsOpen(true) },
     { id: 'view.tasks',      category: 'View',     title: 'Show tasks panel',                              run: () => setActiveView('tasks') },
-    { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
+    { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
     { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
@@ -369,8 +377,8 @@ function MainApp() {
       if (shortcutsBlockedRef.current) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === 'k')                          { e.preventDefault(); setSwitcherOpen(true); }
-      if (mod && e.key === '\\')                         { e.preventDefault(); setSidebarOpen((v) => !v); }
-      if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); setSidebarOpen((v) => !v); }
+      if (mod && e.key === '\\')                         { e.preventDefault(); toggleSidebar(false); }
+      if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); toggleSidebar(false); }
       if (mod && e.key === ',')                          { e.preventDefault(); setSettingsOpen(true); }
       if (mod && e.key === 'p' && !e.shiftKey)           { e.preventDefault(); setFinderOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); setNewProjectOpen(true); }
@@ -557,6 +565,9 @@ function MainApp() {
     if (!selected || rightShellIndex == null) return;
     const idx = rightShellIndex;
     setRightShellIndex(null);
+    // Let the pane fold away with its shell still live, rather than showing
+    // an exited terminal on the way out.
+    await new Promise((r) => setTimeout(r, REVEAL_OUT_MS));
     try { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: idx }); }
     catch { /* fine — the shell may already be gone */ }
   }
@@ -621,103 +632,101 @@ function MainApp() {
             if (v === 'chat' || v === 'projects' || v === 'git' || v === 'tasks') {
               // Toggle if the same view is clicked twice — quality-of-life.
               setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
-              if (!sidebarOpen) setSidebarOpen(true);
+              if (!sidebarOpen) toggleSidebar(true, true);
               return;
             }
             setActiveView(v);
           }}
-          onToggleSidebar={() => setSidebarOpen((s) => !s)}
+          onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}
           chatUnread={chatUnread}
           gitDirty={git.dirty ? Object.keys(git.files).length : undefined}
           taskCount={taskCount || undefined}
         />
-        {sidebarOpen && (
-          <>
-            {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-                sits alongside it in its own resizable column instead of
-                replacing it, so the user never has to swap views just to pick
-                a different project. */}
-            <Sidebar
-              selectedProjectId={selected?.id ?? null}
-              onSelect={pick}
-              onNewProject={() => setNewProjectOpen(true)}
-              width={sidebarWidth}
-            />
-            <ResizeHandle
-              value={sidebarWidth}
-              onChange={setSidebarWidth}
-              onReset={() => setSidebarWidth(288)}
-              min={200}
-              max={560}
-              side="left"
-            />
-            {activeView === 'chat' && (
-              <>
-                <div
-                  data-view="chat"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <ChatTab
-                    projectId={selected?.id ?? 0}
-                    metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                    compact
-                  />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={300}
-                  max={640}
-                  side="left"
+        <Reveal show={sidebarOpen} animate={sidebarAnimate} className="flex h-full min-h-0 shrink-0">
+          {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
+              sits alongside it in its own resizable column instead of
+              replacing it, so the user never has to swap views just to pick
+              a different project. */}
+          <Sidebar
+            selectedProjectId={selected?.id ?? null}
+            onSelect={pick}
+            onNewProject={() => setNewProjectOpen(true)}
+            width={sidebarWidth}
+          />
+          <ResizeHandle
+            value={sidebarWidth}
+            onChange={setSidebarWidth}
+            onReset={() => setSidebarWidth(288)}
+            min={200}
+            max={560}
+            side="left"
+          />
+          {activeView === 'chat' && (
+            <>
+              <div
+                data-view="chat"
+                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <ChatTab
+                  projectId={selected?.id ?? 0}
+                  metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                  compact
                 />
-              </>
-            )}
-            {activeView === 'git' && (
-              <>
-                <div
-                  data-view="git"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <GitPanel projectId={selected?.id ?? null} />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={280}
-                  max={640}
-                  side="left"
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={300}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+          {activeView === 'git' && (
+            <>
+              <div
+                data-view="git"
+                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <GitPanel projectId={selected?.id ?? null} />
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={280}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+          {activeView === 'tasks' && (
+            <>
+              <div
+                data-view="tasks"
+                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <TasksPanel
+                  projectId={selected?.id ?? null}
+                  onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
                 />
-              </>
-            )}
-            {activeView === 'tasks' && (
-              <>
-                <div
-                  data-view="tasks"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <TasksPanel
-                    projectId={selected?.id ?? null}
-                    onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                  />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={280}
-                  max={640}
-                  side="left"
-                />
-              </>
-            )}
-          </>
-        )}
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={280}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+        </Reveal>
         <main className="flex-1 flex flex-col min-h-0 bg-[--panel-strong]/40">
           <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
@@ -810,33 +819,22 @@ function MainApp() {
             )}
             {selected ? (
               mainTab === 'shell'
-                ? (rightShellIndex != null
-                    ? <ShellSplit
-                        projectId={selected.id}
-                        projectName={selected.name}
-                        leftIndex={activeShellIndex}
-                        rightIndex={rightShellIndex}
-                        ratio={splitRatio}
-                        onRatioChange={setSplitRatio}
-                        isPoppedLeft={isPopped(selected.id, activeShellIndex)}
-                        isPoppedRight={isPopped(selected.id, rightShellIndex)}
-                        onCloseSplit={closeSplit}
-                        onOpenFile={(relPath, line) => {
-                          setMainTab('files');
-                          setOpenInFiles({ relPath, line });
-                        }}
-                      />
-                    : (isPopped(selected.id, activeShellIndex)
-                        ? <PoppedPlaceholder projectId={selected.id} shellIndex={activeShellIndex} name={selected.name} />
-                        : <ShellTab
-                            key={`${selected.id}:${activeShellIndex}`}
-                            projectId={selected.id}
-                            shellIndex={activeShellIndex}
-                            onOpenFile={(relPath, line) => {
-                              setMainTab('files');
-                              setOpenInFiles({ relPath, line });
-                            }}
-                          />))
+                ? <ShellSplit
+                  key={selected.id}
+                  projectId={selected.id}
+                  projectName={selected.name}
+                  leftIndex={activeShellIndex}
+                  rightIndex={rightShellIndex}
+                  ratio={splitRatio}
+                  onRatioChange={setSplitRatio}
+                  isPoppedLeft={isPopped(selected.id, activeShellIndex)}
+                  isPoppedRight={rightShellIndex != null && isPopped(selected.id, rightShellIndex)}
+                  onCloseSplit={closeSplit}
+                  onOpenFile={(relPath, line) => {
+                    setMainTab('files');
+                    setOpenInFiles({ relPath, line });
+                  }}
+                />
                 : <FilesTab
                     key={selected.id}
                     projectId={selected.id}
@@ -1368,7 +1366,7 @@ function ShellSplit({
   projectId: number;
   projectName: string;
   leftIndex: number;
-  rightIndex: number;
+  rightIndex: number | null;           // null = single shell, no split
   ratio: number;                       // 0..1, share of horizontal space for LEFT
   onRatioChange: (r: number) => void;
   isPoppedLeft: boolean;
@@ -1378,6 +1376,11 @@ function ShellSplit({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+  // Keep rendering the last right shell while its pane animates out.
+  const lastRight = useRef(rightIndex);
+  if (rightIndex != null) lastRight.current = rightIndex;
+  const shownRight = rightIndex ?? lastRight.current;
+
   useEffect(() => {
     if (!dragging) return;
     function onMove(e: MouseEvent) {
@@ -1398,44 +1401,52 @@ function ShellSplit({
   }, [dragging, onRatioChange]);
 
   const leftPercent = `${(ratio * 100).toFixed(2)}%`;
+  // The left pane is always the same element with the same ShellTab key, so
+  // opening or closing the split never remounts its terminal. It only takes
+  // `--split-left` while the right pane is present (see .split-left in CSS).
   return (
     <div ref={wrapRef} className="h-full w-full flex min-h-0">
-      <div className="min-h-0 min-w-0 relative" style={{ width: leftPercent }}>
+      <div className="split-left min-h-0 min-w-0 relative" style={{ '--split-left': leftPercent } as React.CSSProperties}>
         {isPoppedLeft
           ? <PoppedPlaceholder projectId={projectId} shellIndex={leftIndex} name={projectName} />
           : <ShellTab
-              key={`${projectId}:${leftIndex}:left`}
+              key={`${projectId}:${leftIndex}`}
               projectId={projectId}
               shellIndex={leftIndex}
               onOpenFile={onOpenFile}
             />
         }
       </div>
-      {/* Draggable divider — 4 px hit target, 1 px visible line. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        onMouseDown={() => setDragging(true)}
-        className={`shrink-0 w-1 cursor-col-resize bg-transparent hover:bg-[color:var(--accent)]/40 border-l border-[--border] ${dragging ? 'bg-[color:var(--accent)]/60' : ''}`}
-      />
-      <div className="flex-1 min-h-0 min-w-0 relative">
-        <button
-          onClick={onCloseSplit}
-          title="Close split (returns to single shell view)"
-          className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--danger] hover:bg-[--panel-strong]"
-        >
-          <XIcon />
-        </button>
-        {isPoppedRight
-          ? <PoppedPlaceholder projectId={projectId} shellIndex={rightIndex} name={projectName} />
-          : <ShellTab
-              key={`${projectId}:${rightIndex}:right`}
-              projectId={projectId}
-              shellIndex={rightIndex}
-              onOpenFile={onOpenFile}
-            />
-        }
-      </div>
+      {/* Split toggles are click-only, so they always animate. */}
+      <Reveal show={rightIndex != null} animate className="flex-1 flex min-h-0 min-w-0">
+        {/* Draggable divider — 4 px hit target, 1 px visible line. */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={() => setDragging(true)}
+          className={`shrink-0 w-1 cursor-col-resize bg-transparent hover:bg-[color:var(--accent)]/40 border-l border-[--border] ${dragging ? 'bg-[color:var(--accent)]/60' : ''}`}
+        />
+        {shownRight != null && (
+          <div className="flex-1 min-h-0 min-w-0 relative" data-testid="split-right">
+            <button
+              onClick={onCloseSplit}
+              title="Close split (returns to single shell view)"
+              className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--danger] hover:bg-[--panel-strong]"
+            >
+              <XIcon />
+            </button>
+            {isPoppedRight
+              ? <PoppedPlaceholder projectId={projectId} shellIndex={shownRight} name={projectName} />
+              : <ShellTab
+                  key={`${projectId}:${shownRight}:right`}
+                  projectId={projectId}
+                  shellIndex={shownRight}
+                  onOpenFile={onOpenFile}
+                />
+            }
+          </div>
+        )}
+      </Reveal>
     </div>
   );
 }
