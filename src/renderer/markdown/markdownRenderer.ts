@@ -1,5 +1,7 @@
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/common';
+import { mathPlugin } from './math/mathPlugin';
+import { installFenceRule } from './fenceRule';
 
 const md = new MarkdownIt({
   html: false,
@@ -13,6 +15,9 @@ const md = new MarkdownIt({
     return '';
   },
 });
+
+md.use(mathPlugin);
+installFenceRule(md);
 
 /** Renders Markdown source to the preview's HTML string. */
 export function renderMarkdown(source: string): string {

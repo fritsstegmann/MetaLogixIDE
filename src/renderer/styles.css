@@ -342,6 +342,33 @@ input::placeholder, textarea::placeholder {
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .markdown img { max-width: 100%; border-radius: 6px; }
 
+/* Mermaid diagrams: centred in the column with code-block rhythm. The source
+ * stays visible until the diagram renders, and alongside an error. */
+.markdown .mermaid-block { margin: 0.8em 0; }
+.markdown .mermaid-block[data-mermaid-state="rendered"] > .mermaid-source { display: none; }
+.markdown .mermaid-output { display: flex; justify-content: center; }
+/* !important: mermaid writes a fixed max-width inline on some diagram types. */
+.markdown .mermaid-output svg { max-width: 100% !important; height: auto; }
+/* Text mixed toward --text so it clears 4.5:1 on the code-block surface in both themes. */
+.markdown .mermaid-error {
+  margin-top: 0.5em;
+  padding: 0.8em 1em;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--danger) 8%, var(--panel-strong));
+  color: color-mix(in oklab, var(--danger) 80%, var(--text));
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* Math: wide display formulas scroll inside themselves, never the column. */
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
+.markdown .math-error { color: color-mix(in oklab, var(--danger) 80%, var(--text)); }
+
 /* Keyboard hint chip */
 kbd {
   display: inline-block;
