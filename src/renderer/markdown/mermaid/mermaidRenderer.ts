@@ -26,8 +26,18 @@ export interface MermaidDeps {
 
 const CACHE_LIMIT = 50;
 
+const SCRATCH_STYLE: Partial<CSSStyleDeclaration> = {
+  position: 'absolute',
+  top: '0',
+  left: '0',
+  width: '100%',
+  height: '0',
+  overflow: 'hidden',
+  visibility: 'hidden',
+};
+
 const defaultDeps: MermaidDeps = {
-  load: async () => (await import('mermaid')).default as unknown as MermaidApi,
+  load: async () => (await import('mermaid')).default,
   removeNode: (id) => document.getElementById(id)?.remove(),
 };
 
@@ -46,10 +56,19 @@ function mermaidConfig(theme: EffectiveTheme): Record<string, unknown> {
   };
 }
 
+/** Stores a result, evicting the oldest entry once the cache exceeds its bound. */
+function remember(cache: Map<string, DiagramResult>, key: string, result: DiagramResult): void {
+  cache.set(key, result);
+  const oldest = cache.keys().next();
+  if (cache.size > CACHE_LIMIT && !oldest.done) cache.delete(oldest.value);
+}
+
 /**
  * Runs `mermaid.render` inside a throwaway child of `container`, removed
  * afterwards. Mermaid clears the element it is given (`innerHTML = ""`), so it
  * must never receive the block holding the diagram source or earlier output.
+ * The scratch is hidden and out of flow but not `display:none`, since mermaid
+ * measures text with `getBBox` while laying out.
  */
 async function renderInScratch(
   mermaid: MermaidApi,
@@ -58,6 +77,7 @@ async function renderInScratch(
   container: Element,
 ): Promise<{ svg: string }> {
   const scratch = container.ownerDocument.createElement('div');
+  Object.assign(scratch.style, SCRATCH_STYLE);
   container.append(scratch);
   try {
     return await mermaid.render(id, source, scratch);
@@ -87,11 +107,6 @@ export function createMermaidRenderer(deps: Partial<MermaidDeps> = {}): DiagramR
     return loaded;
   }
 
-  function remember(key: string, result: DiagramResult): void {
-    cache.set(key, result);
-    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
-  }
-
   async function renderNow(
     source: string,
     theme: EffectiveTheme,
@@ -107,7 +122,7 @@ export function createMermaidRenderer(deps: Partial<MermaidDeps> = {}): DiagramR
       await mermaid.parse(source);
       const { svg } = await renderInScratch(mermaid, id, source, container);
       const result: DiagramResult = { ok: true, svg };
-      remember(key, result);
+      remember(cache, key, result);
       return result;
     } catch (err) {
       removeNode(`d${id}`);

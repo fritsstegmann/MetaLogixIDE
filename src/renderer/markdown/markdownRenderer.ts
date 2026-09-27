@@ -10,9 +10,13 @@ const md = new MarkdownIt({
   typographer: true,
   highlight: (str: string, lang: string) => {
     if (lang && hljs.getLanguage(lang)) {
-      try { return hljs.highlight(str, { language: lang, ignoreIllegals: true }).value; } catch { /* fall through */ }
+      try {
+        return hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
+      } catch {
+        /* fall through */
+      }
     }
-    return '';
+    return ''; // skip auto-detection — much slower than knowing the fence lang
   },
 });
 

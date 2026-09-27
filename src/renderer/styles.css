@@ -344,7 +344,7 @@ input::placeholder, textarea::placeholder {
 
 /* Mermaid diagrams: centred in the column with code-block rhythm. The source
  * stays visible until the diagram renders, and alongside an error. */
-.markdown .mermaid-block { margin: 0.8em 0; }
+.markdown .mermaid-block { position: relative; margin: 0.8em 0; }
 .markdown .mermaid-block[data-mermaid-state="rendered"] > .mermaid-source { display: none; }
 .markdown .mermaid-output { display: flex; justify-content: center; }
 /* !important: mermaid writes a fixed max-width inline on some diagram types. */

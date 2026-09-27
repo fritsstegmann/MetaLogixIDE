@@ -1,10 +1,6 @@
 import type MarkdownIt from 'markdown-it';
 import type Token from 'markdown-it/lib/token.mjs';
-import {
-  MERMAID_BLOCK_CLASS,
-  MERMAID_SOURCE_CLASS,
-  MERMAID_STATE_ATTR,
-} from './contract';
+import { MERMAID_BLOCK_CLASS, MERMAID_SOURCE_CLASS, MERMAID_STATE_ATTR } from './contract';
 import { renderMath } from './math/renderMath';
 
 type RenderRule = NonNullable<InstanceType<typeof MarkdownIt>['renderer']['rules']['fence']>;
@@ -23,7 +19,8 @@ function renderMermaidBlock(token: Token, md: MarkdownIt): string {
   );
 }
 
-const renderToken: RenderRule = (tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options);
+const renderToken: RenderRule = (tokens, idx, options, _env, self) =>
+  self.renderToken(tokens, idx, options);
 
 /** Overrides the fence renderer for `mermaid` and `math` fences; everything else falls through to the saved default. */
 export function installFenceRule(md: MarkdownIt): void {

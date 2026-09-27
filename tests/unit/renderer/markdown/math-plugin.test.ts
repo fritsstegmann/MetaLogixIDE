@@ -254,3 +254,35 @@ describe('mathPlugin with typographer and linkify', () => {
     expect(texOf(html)).toEqual(['x']);
   });
 });
+
+describe('mathPlugin scan cost', () => {
+  const COUNT = 16_000;
+  const BUDGET_MS = 150;
+  const series = (item: (i: number) => string): string =>
+    Array.from({ length: COUNT }, (_, i) => item(i)).join(' ');
+
+  function timed(src: string): { html: string; ms: number } {
+    const started = performance.now();
+    const html = render(src);
+    return { html, ms: performance.now() - started };
+  }
+
+  it.each([
+    ['prices', series((i) => `$${i}`), (s: string) => s],
+    ['closers rejected by a digit', series((i) => `$a$${i}`), (s: string) => s],
+    ['unmatched \\(', series(() => '\\(a'), (s: string) => s.replaceAll('\\(', '(')],
+    ['unmatched \\[', series(() => '\\[a'), (s: string) => s.replaceAll('\\[', '[')],
+    ['one unclosed $$ before prices', `$$ ${series((i) => `$${i}`)}`, (s: string) => s],
+  ])('renders a paragraph of %s in linear time with unchanged output', (_, src, literal) => {
+    render(src);
+    const { html, ms } = timed(src);
+    expect(html).toBe(`<p>${literal(src)}</p>\n`);
+    expect(ms).toBeLessThan(BUDGET_MS);
+  });
+
+  it('still finds closers of other kinds after many failed openers', () => {
+    const prices = series((i) => `$${i}`);
+    expect(texOf(render(`$$z$$ ${series(() => '\\[a')} ${prices} \\(y\\)`))).toEqual(['z', 'y']);
+    expect(texOf(render(`${series(() => '\\(a')} $x$`))).toEqual(['x']);
+  });
+});

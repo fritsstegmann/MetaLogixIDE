@@ -3,6 +3,8 @@
  * `\[…\]` (as a block or mid-paragraph). An inline `$` opens only before a
  * non-space and closes only after a non-space and before a non-digit; `\$` and
  * unmatched `\(`/`\[` stay literal. Code spans and code blocks are never math.
+ * Closers come from per-source next-closer tables, so scanning stays linear
+ * however many openers go unmatched.
  */
 import type MarkdownIt from 'markdown-it';
 import type StateBlock from 'markdown-it/lib/rules_block/state_block.mjs';
@@ -28,47 +30,109 @@ const BRACKET_CLOSERS: Record<string, { close: string; display: boolean }> = {
 const isSpace = (ch: string | undefined): boolean => ch === undefined || /\s/.test(ch);
 const isDigit = (ch: string | undefined): boolean => ch !== undefined && ch >= '0' && ch <= '9';
 
+type CloserIndex = {
+  single: Int32Array;
+  double: Int32Array;
+  paren: Int32Array;
+  bracket: Int32Array;
+  escaped: Uint8Array;
+};
+
+type ScanContext = { src: string; max: number; index: CloserIndex };
+
+const closerIndexes = new WeakMap<StateInline, CloserIndex>();
+
 function canCloseSingle(src: string, at: number): boolean {
   return !isSpace(src[at - 1]) && !isDigit(src[at + 1]);
 }
 
-function findDollarCloser(src: string, from: number, delim: string): number {
-  for (let i = from; i < src.length; i++) {
-    if (src[i] === '\\') {
-      i++;
-    } else if (src.startsWith(delim, i) && (delim === '$$' || canCloseSingle(src, i))) {
-      return i;
-    }
+function markEscaped(src: string): Uint8Array {
+  const escaped = new Uint8Array(src.length);
+  let run = 0;
+  for (let i = 0; i < src.length; i++) {
+    escaped[i] = run % 2;
+    run = src[i] === '\\' ? run + 1 : 0;
   }
-  return -1;
+  return escaped;
 }
 
-function scanDollar(src: string, pos: number): InlineMatch | null {
-  if (src[pos] !== '$') return null;
-  const delim = src[pos + 1] === '$' ? '$$' : '$';
+function nextMatching(length: number, matches: (i: number) => boolean): Int32Array {
+  const next = new Int32Array(length + 1);
+  next[length] = -1;
+  for (let i = length - 1; i >= 0; i--) next[i] = matches(i) ? i : (next[i + 1] ?? -1);
+  return next;
+}
+
+function buildCloserIndex(src: string): CloserIndex {
+  const escaped = markEscaped(src);
+  const dollar = (i: number): boolean => src[i] === '$' && escaped[i] === 0;
+  return {
+    single: nextMatching(src.length, (i) => dollar(i) && canCloseSingle(src, i)),
+    double: nextMatching(src.length, (i) => dollar(i) && src[i + 1] === '$'),
+    paren: nextMatching(src.length, (i) => src.startsWith('\\)', i)),
+    bracket: nextMatching(src.length, (i) => src.startsWith('\\]', i)),
+    escaped,
+  };
+}
+
+function closerIndexFor(state: StateInline): CloserIndex {
+  let index = closerIndexes.get(state);
+  if (!index) {
+    index = buildCloserIndex(state.src);
+    closerIndexes.set(state, index);
+  }
+  return index;
+}
+
+function charAt(ctx: ScanContext, i: number): string | undefined {
+  return i < ctx.max ? ctx.src[i] : undefined;
+}
+
+function closerBefore(table: Int32Array, from: number, end: number, width: number): number {
+  const at = table[from] ?? -1;
+  return at >= 0 && at + width <= end ? at : -1;
+}
+
+function singleCloserAtEnd(ctx: ScanContext, from: number): number {
+  const at = ctx.max - 1;
+  const free = at >= from && ctx.src[at] === '$' && ctx.index.escaped[at] === 0;
+  return free && !isSpace(ctx.src[at - 1]) ? at : -1;
+}
+
+function findDollarCloser(ctx: ScanContext, from: number, delim: string): number {
+  if (delim === '$$') return closerBefore(ctx.index.double, from, ctx.max, 2);
+  const close = closerBefore(ctx.index.single, from, ctx.max, 1);
+  return close >= 0 ? close : singleCloserAtEnd(ctx, from);
+}
+
+function scanDollar(ctx: ScanContext, pos: number): InlineMatch | null {
+  if (charAt(ctx, pos) !== '$') return null;
+  const delim = charAt(ctx, pos + 1) === '$' ? '$$' : '$';
   const start = pos + delim.length;
-  if (delim === '$' && isSpace(src[start])) return null;
-  const close = findDollarCloser(src, start, delim);
+  if (delim === '$' && isSpace(charAt(ctx, start))) return null;
+  const close = findDollarCloser(ctx, start, delim);
   if (close <= start) {
     return delim === '$$' ? { kind: 'text', content: '$$', end: start } : null;
   }
   return {
     kind: 'math',
-    content: src.slice(start, close),
+    content: ctx.src.slice(start, close),
     display: delim === '$$',
     end: close + delim.length,
   };
 }
 
-function scanBracket(src: string, pos: number): InlineMatch | null {
-  const closer = src[pos] === '\\' ? BRACKET_CLOSERS[src.charAt(pos + 1)] : undefined;
+function scanBracket(ctx: ScanContext, pos: number): InlineMatch | null {
+  const opener = charAt(ctx, pos) === '\\' ? charAt(ctx, pos + 1) : undefined;
+  const closer = opener === '(' || opener === '[' ? BRACKET_CLOSERS[opener] : undefined;
   if (!closer) return null;
   const start = pos + 2;
-  const close = src.indexOf(closer.close, start);
-  if (close < 0 || src.slice(start, close).trim() === '') return null;
+  const table = closer.display ? ctx.index.bracket : ctx.index.paren;
+  const close = closerBefore(table, start, ctx.max, 2);
+  if (close < 0 || ctx.src.slice(start, close).trim() === '') return null;
   return {
     kind: 'math',
-    content: src.slice(start, close),
+    content: ctx.src.slice(start, close),
     display: closer.display,
     end: close + closer.close.length,
   };
@@ -84,8 +148,10 @@ function pushInline(state: StateInline, match: InlineMatch): void {
 }
 
 function mathInline(state: StateInline, silent: boolean): boolean {
-  const src = state.src.slice(0, state.posMax);
-  const match = scanDollar(src, state.pos) ?? scanBracket(src, state.pos);
+  const first = state.src[state.pos];
+  if (first !== '$' && first !== '\\') return false;
+  const ctx = { src: state.src, max: state.posMax, index: closerIndexFor(state) };
+  const match = scanDollar(ctx, state.pos) ?? scanBracket(ctx, state.pos);
   if (!match) return false;
   if (!silent) pushInline(state, match);
   state.pos = match.end;

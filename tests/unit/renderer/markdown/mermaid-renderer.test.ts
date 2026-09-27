@@ -6,6 +6,7 @@ interface FakeElement {
   name: string;
   parent: FakeElement | null;
   children: FakeElement[];
+  style: Record<string, string>;
   ownerDocument: { createElement(tag: string): FakeElement };
   append(child: FakeElement): void;
   remove(): void;
@@ -17,6 +18,7 @@ function fakeElement(name: string): FakeElement {
     name,
     parent: null,
     children: [],
+    style: {},
     ownerDocument: { createElement: (tag) => fakeElement(tag) },
     append(child) {
       child.parent = el;
@@ -133,6 +135,22 @@ describe('createMermaidRenderer', () => {
     expect((await renderer.render('graph TD; A-->B', 'dark', asElement(block))).ok).toBe(false);
     expect(parents).toEqual([block]);
     expect(block.children).toEqual([]);
+  });
+
+  it('keeps the scratch child out of layout but measurable while mermaid lays out', async () => {
+    const block = fakeElement('block');
+    const styles: Array<Record<string, string>> = [];
+    const api = fakeMermaid({
+      render: vi.fn(async (id: string, _text: string, target?: Element) => {
+        styles.push({ ...(target as unknown as FakeElement).style });
+        return { svg: `<svg id="${id}"></svg>` };
+      }),
+    });
+    const { renderer } = setup(api);
+    await renderer.render('graph TD; A-->B', 'dark', asElement(block));
+    expect(styles).toHaveLength(1);
+    expect(styles[0]).toMatchObject({ position: 'absolute', visibility: 'hidden' });
+    expect(styles[0]?.display ?? '').not.toBe('none');
   });
 
   it('maps a parse failure to an error value carrying the parser message and removes stray nodes', async () => {
