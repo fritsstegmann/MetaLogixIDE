@@ -70,75 +70,87 @@ interface PendingRequest { key: ShellKey; at: number }
 const sameKey = (a: ShellKey, b: ShellKey): boolean =>
   a.projectId === b.projectId && a.shellIndex === b.shellIndex;
 
-/** Builds the per-window focus owner. It tracks registered terminals, the
- *  last-used one, a window-focus target still waiting for `term.open()`, and
- *  one notification request that expires after `FOCUS_REQUEST_TTL_MS`. Every
- *  deferred focus re-checks the rule at the moment it would fire. */
-export function createTerminalFocusCoordinator(deps: CoordinatorDeps): TerminalFocusCoordinator {
-  const handles: TerminalHandle[] = [];
-  let overlayOpen = false;
-  let lastUsed: TerminalHandle | null = null;
-  let pendingTarget: TerminalHandle | null = null;
-  let request: PendingRequest | null = null;
+/** Per-window focus owner. It tracks registered terminals, the last-used one,
+ *  a window-focus target still waiting for `term.open()`, and one notification
+ *  request that expires after `FOCUS_REQUEST_TTL_MS`. Every deferred focus
+ *  re-checks the rule at the moment it would fire. */
+class Coordinator implements TerminalFocusCoordinator {
+  private readonly handles: TerminalHandle[] = [];
+  private overlayOpen = false;
+  private lastUsed: TerminalHandle | null = null;
+  private pendingTarget: TerminalHandle | null = null;
+  private request: PendingRequest | null = null;
 
-  const ruleInput = () => ({ overlayOpen, active: deps.activeElementKind() });
+  constructor(private readonly deps: CoordinatorDeps) {}
 
-  function pickTarget(): TerminalHandle | undefined {
-    if (lastUsed) return lastUsed;
-    return handles.find((h) => h.primary) ?? handles[0];
+  register(handle: TerminalHandle): TerminalRegistration {
+    this.handles.push(handle);
+    return {
+      opened: () => this.opened(handle),
+      used: () => { if (this.handles.includes(handle)) this.lastUsed = handle; },
+      unregister: () => this.unregister(handle),
+    };
   }
 
-  function consumeRequest(handle: TerminalHandle): boolean {
-    if (!request) return false;
-    if (deps.now() - request.at > FOCUS_REQUEST_TTL_MS) {
-      request = null;
-      return false;
-    }
-    if (!sameKey(request.key, handle.key)) return false;
-    request = null;
-    return shouldHonourRequest(ruleInput());
+  setOverlayOpen(open: boolean): void {
+    this.overlayOpen = open;
   }
 
-  function opened(handle: TerminalHandle): void {
-    const isPending = pendingTarget === handle;
-    if (isPending) pendingTarget = null;
-    if (consumeRequest(handle) || (isPending && shouldTakeFocus(ruleInput()))) handle.focus();
-  }
-
-  function unregister(handle: TerminalHandle): void {
-    const i = handles.indexOf(handle);
-    if (i >= 0) handles.splice(i, 1);
-    if (lastUsed === handle) lastUsed = null;
-    if (pendingTarget === handle) pendingTarget = null;
-  }
-
-  function onWindowFocus(): void {
-    pendingTarget = null;
-    if (!shouldTakeFocus(ruleInput())) return;
-    const target = pickTarget();
+  onWindowFocus(): void {
+    this.pendingTarget = null;
+    if (!shouldTakeFocus(this.ruleInput())) return;
+    const target = this.pickTarget();
     if (!target) return;
     if (target.isOpen()) target.focus();
-    else pendingTarget = target;
+    else this.pendingTarget = target;
   }
 
-  function requestFocus(key: ShellKey): void {
-    request = { key, at: deps.now() };
-    const target = handles.find((h) => h.isOpen() && sameKey(h.key, key));
-    if (target && consumeRequest(target)) target.focus();
+  onWindowBlur(): void {
+    this.pendingTarget = null;
+    this.request = null;
   }
 
-  return {
-    register(handle) {
-      handles.push(handle);
-      return {
-        opened: () => opened(handle),
-        used: () => { if (handles.includes(handle)) lastUsed = handle; },
-        unregister: () => unregister(handle),
-      };
-    },
-    setOverlayOpen(open) { overlayOpen = open; },
-    onWindowFocus,
-    onWindowBlur() { pendingTarget = null; request = null; },
-    requestFocus,
-  };
+  requestFocus(key: ShellKey): void {
+    this.request = { key, at: this.deps.now() };
+    const target = this.handles.find((h) => h.isOpen() && sameKey(h.key, key));
+    if (target && this.consumeRequest(target)) target.focus();
+  }
+
+  private ruleInput(): { overlayOpen: boolean; active: ActiveElementKind } {
+    return { overlayOpen: this.overlayOpen, active: this.deps.activeElementKind() };
+  }
+
+  private pickTarget(): TerminalHandle | undefined {
+    if (this.lastUsed) return this.lastUsed;
+    return this.handles.find((h) => h.primary) ?? this.handles[0];
+  }
+
+  private consumeRequest(handle: TerminalHandle): boolean {
+    if (!this.request) return false;
+    if (this.deps.now() - this.request.at > FOCUS_REQUEST_TTL_MS) {
+      this.request = null;
+      return false;
+    }
+    if (!sameKey(this.request.key, handle.key)) return false;
+    this.request = null;
+    return shouldHonourRequest(this.ruleInput());
+  }
+
+  private opened(handle: TerminalHandle): void {
+    const isPending = this.pendingTarget === handle;
+    if (isPending) this.pendingTarget = null;
+    if (this.consumeRequest(handle) || (isPending && shouldTakeFocus(this.ruleInput()))) handle.focus();
+  }
+
+  private unregister(handle: TerminalHandle): void {
+    const i = this.handles.indexOf(handle);
+    if (i >= 0) this.handles.splice(i, 1);
+    if (this.lastUsed === handle) this.lastUsed = null;
+    if (this.pendingTarget === handle) this.pendingTarget = null;
+  }
+}
+
+/** Builds the window's terminal-focus coordinator; see `Coordinator`. */
+export function createTerminalFocusCoordinator(deps: CoordinatorDeps): TerminalFocusCoordinator {
+  return new Coordinator(deps);
 }
