@@ -29,6 +29,7 @@ import { usePersistedState } from './hooks/usePersistedState';
 import { usePoppedShells } from './hooks/usePoppedShells';
 import { useProjectShells } from './hooks/useProjectShells';
 import { useGitStatus } from './hooks/useGitStatus';
+import { terminalFocus, useWindowTerminalFocus } from './hooks/useWindowTerminalFocus';
 import { Tooltip } from './components/Tooltip';
 import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -200,6 +201,10 @@ function MainApp() {
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
   shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
+  const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
+    || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
+    || permissionMode.status === 'unchosen';
+  useWindowTerminalFocus(overlayOpen);
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const { status: git } = useGitStatus(selected?.id ?? null);
@@ -355,6 +360,7 @@ function MainApp() {
   // switch to that shell tab.
   useEffect(() => {
     const off = api.on('shell:focus-request', async ({ projectId, shellIndex }) => {
+      terminalFocus.requestFocus({ projectId, shellIndex });
       try {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
@@ -917,6 +923,10 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
   const [projectName, setProjectName] = useState<string>('');
+  useWindowTerminalFocus(false);
+  useEffect(() => {
+    terminalFocus.requestFocus({ projectId, shellIndex });
+  }, [projectId, shellIndex]);
   useEffect(() => {
     (async () => {
       try {
@@ -966,6 +976,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
           <ShellTab
             projectId={projectId}
             shellIndex={shellIndex}
+            primary
             onOpenFile={(relPath, line) => {
               // Open the editor inline in this popout window instead of
               // dropping the user back to Finder.
@@ -1413,6 +1424,7 @@ function ShellSplit({
               key={`${projectId}:${leftIndex}`}
               projectId={projectId}
               shellIndex={leftIndex}
+              primary
               onOpenFile={onOpenFile}
             />
         }

@@ -9,6 +9,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '@renderer/api';
 import { useShellStream } from '@renderer/hooks/useShellStream';
+import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { HoverPreview, type HoverPreviewState } from './HoverPreview';
 
@@ -27,11 +28,13 @@ function buildTheme(): ITheme {
 }
 
 export function ShellTab({
-  projectId, shellIndex, onOpenFile,
+  projectId, shellIndex, onOpenFile, primary = false,
 }: {
   projectId: number;
   shellIndex: number;
   onOpenFile?: (relPath: string, line: number | null) => void;
+  /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
+  primary?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termHostRef = useRef<HTMLDivElement>(null);
@@ -54,6 +57,8 @@ export function ShellTab({
   const [dropActive, setDropActive] = useState(false);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
+  const primaryRef = useRef(primary);
+  primaryRef.current = primary;
 
   useEffect(() => {
     if (!termHostRef.current) return;
@@ -131,6 +136,12 @@ export function ShellTab({
     termRef.current = term;
     let opened = false;
     let disposed = false;
+    const focusReg = terminalFocus.register({
+      key: { projectId, shellIndex },
+      primary: primaryRef.current,
+      isOpen: () => opened,
+      focus: () => term.focus(),
+    });
 
     // Track the last-fit rows/cols so we can drop no-op resize calls that
     // would otherwise spam the PTY when the container reports the same
@@ -216,6 +227,8 @@ export function ShellTab({
         term.loadAddon(webgl);
       } catch (e) { console.warn('[metaide] webgl renderer unavailable, falling back to DOM', e); }
       opened = true;
+      term.textarea?.addEventListener('focus', () => focusReg.used());
+      focusReg.opened();
       // First fit AFTER open so xterm has an element to measure.
       syncSize();
       // Snapshot may already be back — write it into the correctly-sized
@@ -254,6 +267,7 @@ export function ShellTab({
       media.removeEventListener('change', onScheme);
       themeObserver.disconnect();
       linkProviderDisposable.dispose();
+      focusReg.unregister();
       term.dispose();
       termRef.current = null;
       searchRef.current = null;
