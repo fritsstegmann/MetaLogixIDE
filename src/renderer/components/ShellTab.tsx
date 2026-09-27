@@ -167,14 +167,9 @@ export function ShellTab({
       const output = cachedSnapshot ?? '';
       if (output) {
         term.reset();
-        // Strip a partial-ANSI head that survived main-side truncation.
-        let safe = output;
-        if (safe.startsWith('\x1b') && !/[A-Za-z]/.test(safe.slice(1, 32))) {
-          const nl = safe.indexOf('\n');
-          if (nl > -1 && nl < 2048) safe = safe.slice(nl + 1);
-        }
-        term.write(safe);
-        term.write('\x1b[0m');
+        // Main serializes complete terminal state, so write it verbatim — it
+        // also restores the live SGR state the next PTY bytes continue from.
+        term.write(output);
       }
       if (pendingLive.current) term.write(pendingLive.current);
       snapshotReady.current = true;

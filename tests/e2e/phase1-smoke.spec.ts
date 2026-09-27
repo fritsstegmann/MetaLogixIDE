@@ -16,8 +16,10 @@ import { join, resolve } from 'node:path';
 import { rmSync } from 'node:fs';
 
 /**
- * Reads the shell's raw PTY scrollback via `shells:snapshot` for the given
- * project's primary (shellIndex 0) shell. xterm renders via the WebGL
+ * Reads the shell's terminal state via `shells:snapshot` (main's headless
+ * xterm, serialized: screen plus scrollback, with SGR and cursor moves —
+ * not raw PTY bytes) for the given project's primary (shellIndex 0)
+ * shell. xterm renders via the WebGL
  * addon (ShellTab.tsx) with screenReaderMode intentionally off (see
  * b169fd8), so there is no DOM text to assert against — `shells:snapshot`
  * is the only way to read terminal output from the outside.
