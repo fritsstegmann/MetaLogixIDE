@@ -32,10 +32,11 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div
-        className="fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl backdrop-blur-md py-1 text-sm"
+        className="fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl window-material py-1 text-sm"
         style={{ left: clampedX, top: clampedY }}
         role="menu"
         data-testid="context-menu"
+        data-material-surface="context-menu"
       >
         {items.map((it, i) => (
           <div key={i}>

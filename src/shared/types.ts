@@ -103,6 +103,10 @@ export type SettingsMap = {
   'metaproject_last_username':     string;
   /** 30..100 — percentage. 100 = fully opaque, applied to every window. */
   'window_opacity':                number;
+  /** 0..40 — backdrop blur in px for the app's translucent material surfaces. */
+  'window_backdrop_blur':          number;
+  /** 100..200 — backdrop saturation in % for the app's translucent material surfaces. */
+  'window_backdrop_saturation':    number;
   /**
    * Global fallback CLI profiles. Used when a project doesn't set its own
    * `cliProfiles`. The first entry is treated as the "primary" one that

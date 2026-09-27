@@ -572,7 +572,7 @@ function MainApp() {
   return (
     <div className="h-screen w-screen flex flex-col bg-transparent">
       {/* Native-feeling drag region for hidden-inset title bar */}
-      <div className="drag h-9 flex items-center pl-[76px] pr-2 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border]">
+      <div data-material-surface="titlebar" className="drag h-9 flex items-center pl-[76px] pr-2 shrink-0 bg-[--panel]/70 window-material border-b border-[--border]">
         <span className="text-xs opacity-70 ml-1 font-medium">MetaLogix IDE</span>
         {selected && (
           <span className="text-[11px] text-[--text-muted] ml-3 truncate max-w-[360px]" title={selected.path}>
@@ -656,7 +656,8 @@ function MainApp() {
               <>
                 <div
                   data-view="chat"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  data-material-surface="section-panel"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col window-material shrink-0"
                   style={{ width: chatPanelWidth }}
                 >
                   <ChatTab
@@ -679,7 +680,8 @@ function MainApp() {
               <>
                 <div
                   data-view="git"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  data-material-surface="section-panel"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col window-material shrink-0"
                   style={{ width: chatPanelWidth }}
                 >
                   <GitPanel projectId={selected?.id ?? null} />
@@ -698,7 +700,8 @@ function MainApp() {
               <>
                 <div
                   data-view="tasks"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                  data-material-surface="section-panel"
+                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col window-material shrink-0"
                   style={{ width: chatPanelWidth }}
                 >
                   <TasksPanel
@@ -937,7 +940,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   }, [projectName, shellIndex]);
   return (
     <div className="h-screen w-screen flex flex-col bg-transparent">
-      <div className="drag h-9 flex items-center gap-2 pl-[76px] pr-3 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border] min-w-0">
+      <div data-material-surface="popout-titlebar" className="drag h-9 flex items-center gap-2 pl-[76px] pr-3 shrink-0 bg-[--panel]/70 window-material border-b border-[--border] min-w-0">
         {/* Prominent project name — the whole reason a user pops shells out
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
