@@ -12,18 +12,35 @@
  *
  * Refocus mechanism used: `refocus()` dispatches a synthetic `focus` Event
  * directly on `window` (`win.evaluate(() => window.dispatchEvent(new
- * Event('focus')))`) — the plan's documented fallback. Real OS-level
- * refocus via `app.browserWindow(win).evaluate((w) => { w.blur(); w.focus(); })`
- * was tried first and proved unreliable under this runner: run back to
- * back with no other change, `BrowserWindow.isFocused()` toggled false
- * then true as expected, but the corresponding DOM `window` `focus` event
- * did not consistently follow, so tests gated on it flaked pass/fail on
- * identical code. Dispatching the event directly drives the exact
- * listener `useWindowTerminalFocus` installs, deterministically. AC10's
- * notification-path helper still uses the real main-process
+ * Event('focus')))`) — the plan's documented fallback.
+ *
+ * Gate-directed retry (phase 7, M2): the gate found that Playwright enables
+ * per-page CDP focus emulation on every attached page by default
+ * (`Emulation.setFocusEmulationEnabled`, `node_modules/playwright-core/lib/coreBundle.js:37054`),
+ * which makes a page always report itself focused regardless of the real
+ * `BrowserWindow` state — the gate's suspected cause of Phase 5's flake, and
+ * the gate's own OS-level probe (external `osascript` activation, outside
+ * Playwright entirely) showed real activation reliably delivers the event.
+ * Retried the real trigger here with emulation explicitly disabled first
+ * (`win.context().newCDPSession(win)` then
+ * `Emulation.setFocusEmulationEnabled({ enabled: false })`), then
+ * `BrowserWindow.blur()`/`focus()`. Measured cause of the retry's own
+ * failure (5/11 tests, identical across 3 consecutive full runs — not a
+ * flake, deterministic): `BrowserWindow.isFocused()` stayed `true` across
+ * the whole blur()-then-focus() sequence, with emulation confirmed off.
+ * `blur()` did not resign key window status at all in this environment — a
+ * plain in-process `win.blur()` call has no other window or application to
+ * hand OS focus to, unlike the gate's probe, which forced a real transition
+ * by activating a separate application (Finder) via `osascript`. The gate
+ * flagged exactly this gap in its own evidence ("The gate did not verify
+ * that `blur()` reliably resigns key on macOS") and it is the actual
+ * blocker, not focus emulation. Per the phase 7 brief, kept the dispatch
+ * rather than a refocus that cannot reliably produce the state it claims to
+ * drive. AC10's notification-path helper still uses the real main-process
  * `BrowserWindow.blur()`/`show()`/`focus()` before `webContents.send(...)`,
  * since that path does not depend on the `window` `focus` DOM event at all
- * (`shell:focus-request` calls `terminalFocus.requestFocus` directly).
+ * (`shell:focus-request` calls `terminalFocus.requestFocus` directly) — it
+ * is unaffected by whether `blur()` truly resigns key.
  *
  * AC12 approximation limit: Playwright cannot reproduce the real OS
  * ordering of an activating click (window activation arrives before the
@@ -110,12 +127,16 @@ async function openProject(win: Page, name: string): Promise<void> {
 }
 
 /**
- * Fires the renderer's `window` `focus` event, the trigger `useWindowTerminalFocus`
- * listens for. See the file header: real `BrowserWindow.blur()`/`focus()` proved
- * flaky under this runner (confirmed by running the same code back to back —
- * `isFocused()` toggled correctly but the DOM event did not reliably follow), so
- * this uses the plan's documented fallback — dispatching a `focus` event directly
- * on `window` — which drives the same listener deterministically.
+ * Real OS-level refocus of the actual BrowserWindow — the production
+ * trigger `useWindowTerminalFocus` listens for. See the file header: the
+ * Phase 5 red run was not a real flake in the app, it was Playwright's own
+ * per-page CDP focus emulation (`Emulation.setFocusEmulationEnabled`,
+ * enabled by default for every attached page —
+ * `node_modules/playwright-core/lib/coreBundle.js:37054`), which makes the
+ * page report itself focused regardless of the real `BrowserWindow` state.
+ * That masked `blur()`, so the follow-up `focus()` produced no DOM `focus`
+ * event to observe. Disabling emulation on this page's CDP session first
+ * makes `blur()`/`focus()` drive the real thing.
  */
 async function refocus(win: Page): Promise<void> {
   await win.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -170,13 +191,9 @@ async function projectIdByName(win: Page, name: string): Promise<number> {
 
 test('probe: activeElement persists across a real window blur/focus cycle', async () => {
   // This is the empirical check for the documentation-grounding assumption
-  // (plan §2, "activeElement persists across window blur"). Deliberately
-  // uses the real BrowserWindow blur/focus (realBlurFocus), not the
-  // dispatched-event refocus() the rest of this suite uses as its trigger
-  // — a dispatched Event('focus') never itself moves activeElement, so it
-  // would make this specific check vacuous. If this fails, the coordinator
-  // design in Agent 1's plan changes (record on blur, decide on focus) —
-  // report it rather than weakening this assertion.
+  // (plan §2, "activeElement persists across window blur"). If this fails,
+  // the coordinator design in Agent 1's plan changes (record on blur,
+  // decide on focus) — report it rather than weakening this assertion.
   const { app, win, cleanup } = await launch(['alpha']);
   try {
     await openProject(win, 'alpha');
@@ -466,11 +483,16 @@ test('AC10: notification click always switches project/shell, and honours D5 (ov
     await expect(chatInput, 'the switch happens but the pre-existing text-entry keeps focus (D5)').toBeFocused();
 
     // D5 negative #2: an overlay (command palette) is open at blur time.
+    // blurToBody forces activeElement away from the palette's own input, so
+    // this pins the overlay flag on its own — without it, the palette
+    // input's text-entry classification alone would already block focus,
+    // leaving the overlay-flag guard unproven (gate finding L3).
     await win.keyboard.press('Escape');
     await openProject(win, 'alpha');
     await win.keyboard.press('ControlOrMeta+Shift+P');
     const palette = win.locator('[data-testid="command-palette"]');
     await expect(palette).toBeVisible({ timeout: 2000 });
+    await blurToBody(win);
 
     await app.evaluate(({ BrowserWindow }, payload) => {
       const w = BrowserWindow.getAllWindows()[0]!;

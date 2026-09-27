@@ -134,8 +134,9 @@ Not applicable to the preview. It reads only the local file buffer.
   webContents `focus` and `blur` do not fire when the user switches between
   windows, so the coordinator listens on the renderer `window` instead.
   Unit tests cover the coordinator in the node environment. The E2E suite
-  (`tests/e2e/terminal-window-focus.spec.ts`) drives the trigger. Playwright
-  enables focus emulation on every page it attaches, so a real
-  `BrowserWindow.blur()`/`focus()` does not reliably deliver the renderer
-  `focus` event unless the spec turns that emulation off. Real macOS
-  activation delivers the event.
+  (`tests/e2e/terminal-window-focus.spec.ts`) dispatches a synthetic
+  `focus` event on `window`. A real `BrowserWindow.blur()`/`focus()` cannot
+  drive it: Playwright enables focus emulation on every page it attaches,
+  and with emulation off, `blur()` does not resign key while no other window
+  or app can take focus. Real macOS app activation delivers the event; this
+  was verified by hand, not by the suite.
