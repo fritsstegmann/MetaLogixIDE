@@ -99,7 +99,7 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+    <div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <form
         ref={formRef}
         role="dialog"
@@ -107,7 +107,7 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
         aria-labelledby={TITLE_ID}
         aria-describedby={INTRO_ID}
         onSubmit={onSubmit}
-        className="bg-[--panel-strong] w-[520px] max-w-full max-h-full overflow-y-auto rounded-xl shadow-2xl border border-[--border]"
+        className="modal-panel bg-[--panel-strong] w-[520px] max-w-full max-h-full overflow-y-auto rounded-xl shadow-2xl border border-[--border]"
         data-testid={PERMISSION_MODE_TEST_IDS.dialog}
       >
         <div className="px-5 pt-5 pb-4 space-y-4">
@@ -128,7 +128,7 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
           <button
             type="submit"
             disabled={submitting}
-            className="min-h-[44px] min-w-[44px] px-5 text-sm font-medium bg-[--accent] hover:brightness-110 text-white rounded-md disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]"
+            className="min-h-[44px] min-w-[44px] px-5 text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-white rounded-md disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]"
             data-testid={PERMISSION_MODE_TEST_IDS.dialogConfirm}
           >
             {PERMISSION_MODE_COPY.confirm}

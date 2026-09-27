@@ -15,12 +15,12 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={onClose}
       data-testid="settings-modal"
     >
       <div
-        className="relative bg-[--panel-strong] w-[760px] max-w-[92vw] h-[600px] max-h-[92vh] rounded-xl shadow-2xl border border-[--border] overflow-hidden flex flex-col"
+        className="modal-panel relative bg-[--panel-strong] w-[760px] max-w-[92vw] h-[600px] max-h-[92vh] rounded-xl shadow-2xl border border-[--border] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -60,7 +60,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
         <div className="h-12 flex items-center justify-end gap-2 border-t border-[--border] px-4 bg-[--panel]/60">
           <button
             onClick={onClose}
-            className="text-sm px-4 py-1.5 bg-[--accent] hover:brightness-110 text-white rounded-md"
+            className="text-sm px-4 py-1.5 pressable bg-[--accent] hover:brightness-110 text-white rounded-md"
             data-testid="settings-done"
           >
             Done
@@ -213,7 +213,7 @@ function RootsPanel() {
       <Header title="Root directories" subtitle="Folders scanned for projects. Add each parent folder where your projects live." />
       <button
         onClick={add}
-        className="w-full text-sm font-medium bg-[--accent] hover:brightness-110 text-white rounded-md py-2"
+        className="w-full text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-white rounded-md py-2"
       >
         + Add root
       </button>

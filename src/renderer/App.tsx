@@ -956,11 +956,11 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
       <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
         <button
           onClick={() => setTab('shell')}
-          className={`px-3 py-1.5 border-b-2 transition ${tab === 'shell' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1.5 border-b-2 transition-colors ${tab === 'shell' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
         >Shell</button>
         <button
           onClick={() => setTab('files')}
-          className={`px-3 py-1.5 border-b-2 transition ${tab === 'files' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1.5 border-b-2 transition-colors ${tab === 'files' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
         >Files</button>
       </div>
       <div className="flex-1 min-h-0 bg-[--panel-strong]/40">
@@ -992,7 +992,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 border-b-2 transition ${
+      className={`px-3 py-1.5 border-b-2 transition-colors ${
         active
           ? 'border-[--accent] text-[--text]'
           : 'border-transparent text-[--text-muted] hover:text-[--text]'
@@ -1146,7 +1146,7 @@ function NewShellMenu({
         </label>
         <div className="flex gap-2">
           <button
-            className="flex-1 px-2 py-1.5 rounded bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-40"
+            className="flex-1 px-2 py-1.5 rounded pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-40"
             disabled={!customCmd.trim()}
             onClick={() => onLaunchCustom(customName.trim(), customCmd.trim(), customSave && !!customName.trim())}
           >
@@ -1195,7 +1195,7 @@ function NewShellMenu({
             </button>
             {/* Star: pin as this folder's auto-launch. Click again to clear. */}
             <button
-              className={`px-2 flex items-center transition ${isDefault
+              className={`px-2 flex items-center transition-colors ${isDefault
                 ? 'text-[color:var(--accent)] opacity-100'
                 : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
               onClick={async () => {
@@ -1448,7 +1448,7 @@ function PoppedPlaceholder({ projectId, shellIndex, name }: { projectId: number;
         <div className="text-lg font-semibold">{name}</div>
         <button
           onClick={async () => { await api.invoke('windows:return-shell', { projectId, shellIndex }); }}
-          className="text-sm px-4 py-1.5 rounded-md bg-[color:var(--accent)] text-white hover:brightness-110"
+          className="text-sm px-4 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110"
           data-testid="return-popout"
         >
           Bring back to this window
@@ -1498,7 +1498,7 @@ function WelcomeOnboarding() {
         <div className="flex gap-2 justify-center pt-2">
           <button
             onClick={addRoot}
-            className="bg-[color:var(--accent)] text-white text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
+            className="pressable bg-[color:var(--accent)] text-white text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
             data-testid="welcome-add-root"
           >
             + Add a root folder

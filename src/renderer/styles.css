@@ -233,14 +233,102 @@ input::placeholder, textarea::placeholder {
   background: transparent;
 }
 
-/* Subtle pulse for the live-shell indicator dot */
-@keyframes livePulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
-  50%      { opacity: 0.85; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+/* ── Motion ──
+ * Built-in CSS easings are too soft; these give UI motion a decisive start.
+ * Keyboard-summoned surfaces (palette, finders, switcher, prompt library,
+ * shortcuts help) deliberately do NOT animate — they're opened hundreds of
+ * times a day and any delay reads as lag. */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.live-dot {
-  animation: livePulse 2s ease-in-out infinite;
+/* Mouse-opened modals: backdrop fades, panel settles in from 96%. Centered
+ * origin on purpose — modals aren't anchored to a trigger. No transform in
+ * the resting state so the panel never becomes a containing block. */
+.modal-backdrop { transition: opacity 200ms var(--ease-out); }
+.modal-panel {
+  transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+@starting-style {
+  .modal-backdrop { opacity: 0; }
+  .modal-panel { opacity: 0; transform: scale(0.96); }
+}
+
+/* Anchored popovers (context menu, hover preview). Origin is set inline to
+ * the cursor so the pop grows out of where the user clicked. Short — these
+ * open tens of times a day. */
+.popover {
+  transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+@starting-style {
+  .popover { opacity: 0; transform: scale(0.97); }
+}
+
+/* Tooltip: grows from the edge nearest its trigger. `data-instant` skips the
+ * animation when the user is already sweeping across a toolbar. */
+.tooltip {
+  --tooltip-y: 0%;
+  transform: translate(-50%, var(--tooltip-y));
+  transform-origin: top center;
+  transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out);
+}
+.tooltip[data-side="top"] { --tooltip-y: -100%; transform-origin: bottom center; }
+.tooltip[data-instant] { transition: none; }
+@starting-style {
+  .tooltip { opacity: 0; transform: translate(-50%, var(--tooltip-y)) scale(0.97); }
+}
+
+/* Toasts rise from below the stack; exit is quicker than entry. Transitions
+ * (not keyframes) so a rapid burst of toasts retargets smoothly. */
+.toast {
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.toast[data-leaving] {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-duration: 180ms;
+  pointer-events: none;
+}
+@starting-style {
+  .toast { opacity: 0; transform: translateY(100%); }
+}
+
+/* Press feedback for primary actions — confirms the click landed. */
+.pressable {
+  transition-property: color, background-color, border-color, filter, transform;
+  transition-duration: 160ms;
+  transition-timing-function: var(--ease-out);
+}
+.pressable:not(:disabled):active { transform: scale(0.97); }
+
+/* Live-shell indicator: a ring expands off the dot. Animating transform and
+ * opacity on a pseudo-element stays on the compositor, unlike the previous
+ * box-shadow pulse which repainted every dot every frame. */
+@keyframes livePulse {
+  from { transform: scale(1); opacity: 0.6; }
+  to   { transform: scale(2.6); opacity: 0; }
+}
+
+.live-dot { position: relative; }
+.live-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: livePulse 2s var(--ease-out) infinite;
+  pointer-events: none;
+}
+
+/* Reduced motion: keep fades (they aid comprehension), drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  .live-dot::after { animation: none; opacity: 0; }
+  .pressable:not(:disabled):active { transform: none; }
+  @starting-style {
+    .modal-panel, .popover, .toast { transform: none; }
+    .tooltip { transform: translate(-50%, var(--tooltip-y)); }
+  }
+  .toast[data-leaving] { transform: none; }
 }
 
 /* Section-tint helper — the ActivityBar sets `data-view` on each sidebar
