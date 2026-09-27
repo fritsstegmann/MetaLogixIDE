@@ -5,6 +5,7 @@ import { api } from '@renderer/api';
 import { useTheme, type ThemeMode } from '@renderer/hooks/useTheme';
 import { useClaudePermissionMode } from '@renderer/hooks/useClaudePermissionMode';
 import { PermissionModeControl } from '@renderer/components/PermissionModeControl';
+import { WindowMaterialFields } from '@renderer/components/WindowMaterialFields';
 import { PERMISSION_MODE_COPY, PERMISSION_MODE_TEST_IDS } from '@renderer/permission-mode-copy';
 import type { ClaudePermissionMode } from '@shared/claude-permission-mode';
 
@@ -100,31 +101,22 @@ function GeneralPanel() {
   const [cap, setCap] = useState<number | null>(null);
   const [scanDepth, setScanDepth] = useState<number | null>(null);
   const [maxWatched, setMaxWatched] = useState<number | null>(null);
-  const [opacity, setOpacity] = useState<number>(100);
 
   const load = useCallback(async () => {
-    const [c, d, w, o] = await Promise.all([
+    const [c, d, w] = await Promise.all([
       api.invoke('settings:get', { key: 'keep_alive_cap' }),
       api.invoke('settings:get', { key: 'scan_depth' }),
       api.invoke('settings:get', { key: 'max_watched_paths' }),
-      api.invoke('settings:get', { key: 'window_opacity' }),
     ]);
     setCap(c.value as number);
     setScanDepth(d.value as number);
     setMaxWatched(w.value as number);
-    setOpacity((o.value as number) ?? 100);
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
   async function save<K extends keyof SettingsMap>(key: K, value: SettingsMap[K]) {
     await api.invoke('settings:set', { key, value });
-  }
-
-  async function applyOpacity(v: number) {
-    const clamped = Math.max(30, Math.min(100, Math.round(v)));
-    setOpacity(clamped);
-    await api.invoke('app:set-window-opacity', { percent: clamped });
   }
 
   return (
@@ -162,21 +154,7 @@ function GeneralPanel() {
         <NumberInput value={maxWatched} min={50} max={5000} step={50} onChange={(v) => { setMaxWatched(v); void save('max_watched_paths', v); }} />
       </Field>
 
-      <Field label="Window opacity" hint="How opaque every MetaLogix IDE window is. Drop below 100 % to see your desktop through the app.">
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={30}
-            max={100}
-            step={1}
-            value={opacity}
-            onChange={(e) => void applyOpacity(Number(e.target.value))}
-            className="flex-1 accent-[--accent]"
-            data-testid="window-opacity-slider"
-          />
-          <span className="w-14 text-right text-sm text-[--text] font-mono">{opacity}%</span>
-        </div>
-      </Field>
+      <WindowMaterialFields />
     </div>
   );
 }

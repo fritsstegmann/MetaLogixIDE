@@ -18,8 +18,9 @@ interface Props {
 export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
   return (
     <nav
-      className="w-11 shrink-0 h-full border-r border-[--border] bg-[--panel]/40 backdrop-blur-md flex flex-col items-center py-1 gap-0.5"
+      className="w-11 shrink-0 h-full border-r border-[--border] bg-[--panel]/40 window-material flex flex-col items-center py-1 gap-0.5"
       data-testid="activity-bar"
+      data-material-surface="activitybar"
     >
       <ABButton
         label="Toggle sidebar (⌘B)"

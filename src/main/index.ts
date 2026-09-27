@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, Notification, screen, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -7,6 +7,8 @@ import log from 'electron-log/main';
 import { buildServices } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
+import { readWindowMaterial } from './domain/window-material';
+import { createMaterialController, type MaterialController } from './windows/material-controller';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -61,6 +63,7 @@ augmentPathForGuiLaunch();
 
 let mainWindow: BrowserWindow | null = null;
 const popoutWindows = new Map<string, BrowserWindow>(); // key = `${projectId}:${shellIndex}`
+let materialController: MaterialController | null = null;
 
 // ─── File-association / "open with metaIDE" plumbing ───────────────────
 // macOS delivers file opens via `app.on('open-file')` (can arrive BEFORE
@@ -202,7 +205,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
   });
   win.once('ready-to-show', () => win.show());
   wireExternalLinks(win);
-  applyPersistedOpacity(win);
+  materialController?.prepareNewWindow(win);
   // Detect renderer crashes ("blank screen" symptom) and auto-recover by
   // reloading the window. Without this, an OOM / WebGL context loss / stray
   // exception leaves the user with a blank webview and nothing else to do.
@@ -214,8 +217,9 @@ async function createMainWindow(): Promise<BrowserWindow> {
   });
   win.webContents.on('unresponsive', () => console.warn('[metaide] renderer unresponsive'));
   win.webContents.on('responsive', () => console.log('[metaide] renderer responsive again'));
-  if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else await win.loadFile(join(__dirname, '../renderer/index.html'));
+  const query = materialController?.queryString() ?? '';
+  if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(query ? `${process.env.ELECTRON_RENDERER_URL}?${query}` : process.env.ELECTRON_RENDERER_URL);
+  else await win.loadFile(join(__dirname, '../renderer/index.html'), query ? { search: `?${query}` } : undefined);
   return win;
 }
 
@@ -234,9 +238,10 @@ export async function createPopoutWindow(projectId: number, shellIndex: number):
     ...darwinChrome(),
     webPreferences: baseWebPreferences(),
   });
-  const query = `popout=1&projectId=${projectId}&shellIndex=${shellIndex}`;
+  const materialQuery = materialController ? `&${materialController.queryString()}` : '';
+  const query = `popout=1&projectId=${projectId}&shellIndex=${shellIndex}${materialQuery}`;
   wireExternalLinks(win);
-  applyPersistedOpacity(win);
+  materialController?.prepareNewWindow(win);
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
   else await win.loadFile(join(__dirname, '../renderer/index.html'), { search: `?${query}` });
   win.once('ready-to-show', () => {
@@ -368,11 +373,6 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-let persistedOpacity = 1.0;
-export function applyPersistedOpacity(win: BrowserWindow): void {
-  win.setOpacity(persistedOpacity);
-}
-
 // Renderer signals it's mounted (App.tsx effect) so we can flush any
 // file-open events buffered from a cold launch. Registered outside the
 // ready handler so the receiver is in place before the renderer boots.
@@ -406,14 +406,21 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[metaide] boot rescan failed', e);
   }
-  // Load persisted opacity so it's applied to the first window right away.
-  try { persistedOpacity = Math.max(30, Math.min(100, services.settings.get('window_opacity'))) / 100; } catch { /* keep 1.0 */ }
+  const controller = createMaterialController({
+    platform: process.platform,
+    getReducedTransparency: () => nativeTheme.prefersReducedTransparency,
+    listWindows: () => BrowserWindow.getAllWindows(),
+    initial: readWindowMaterial(services.settings),
+  });
+  materialController = controller;
+  nativeTheme.on('updated', controller.onReducedTransparencyChanged);
   mainWindow = await createMainWindow();
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
     listPopped: () => listPopped(),
     tileAll: () => tileAllOurWindows(),
+    applyWindowMaterial: (m) => controller.apply(m),
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
 

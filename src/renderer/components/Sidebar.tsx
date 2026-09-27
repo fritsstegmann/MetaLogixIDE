@@ -92,7 +92,8 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
   return (
     <aside
       data-view="projects"
-      className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+      data-material-surface="sidebar"
+      className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col window-material shrink-0"
       style={{ width: width ?? 288 }}
     >
       <div className="p-3 border-b border-[--border] space-y-2">

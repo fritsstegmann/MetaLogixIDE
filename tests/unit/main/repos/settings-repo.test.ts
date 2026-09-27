@@ -136,4 +136,39 @@ describe('SettingsRepo', () => {
       expect(repo.get('scan_depth')).toBe(DEFAULT_SETTINGS.scan_depth);
     });
   });
+
+  describe('window material seeding', () => {
+    function rawValue(db: ReturnType<typeof openDb>, key: string): unknown {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+      return row ? JSON.parse(row.value) : undefined;
+    }
+
+    it('AC1 — a fresh seed writes blur 20 and saturation 180 rows', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      new SettingsRepo(db).seedDefaults();
+      expect(rawValue(db, 'window_backdrop_blur')).toBe(20);
+      expect(rawValue(db, 'window_backdrop_saturation')).toBe(180);
+      expect(rawValue(db, 'window_opacity')).toBe(100);
+    });
+
+    it('AC2 — an upgraded DB keeps its window_opacity and gains the material defaults', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('window_opacity', JSON.stringify(70));
+      expect(rawValue(db, 'window_backdrop_blur')).toBeUndefined();
+      new SettingsRepo(db).seedDefaults();
+      expect(rawValue(db, 'window_opacity')).toBe(70);
+      expect(rawValue(db, 'window_backdrop_blur')).toBe(20);
+      expect(rawValue(db, 'window_backdrop_saturation')).toBe(180);
+    });
+
+    it('seedDefaults keeps user-set material values', () => {
+      const repo = seed();
+      repo.setMany({ window_backdrop_blur: 4, window_backdrop_saturation: 120 });
+      repo.seedDefaults();
+      expect(repo.get('window_backdrop_blur')).toBe(4);
+      expect(repo.get('window_backdrop_saturation')).toBe(120);
+    });
+  });
 });

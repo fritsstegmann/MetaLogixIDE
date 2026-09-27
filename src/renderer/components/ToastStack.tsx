@@ -20,7 +20,8 @@ export function ToastStack() {
             key={t.id}
             role="status"
             data-testid="toast"
-            className={`pointer-events-auto relative bg-[--panel-strong] border ${s.border} rounded-md shadow-lg pl-3 pr-2 py-2 flex items-start gap-2 backdrop-blur-md overflow-hidden`}
+            data-material-surface="toast"
+            className={`pointer-events-auto relative bg-[--panel-strong] border ${s.border} rounded-md shadow-lg pl-3 pr-2 py-2 flex items-start gap-2 window-material overflow-hidden`}
           >
             <span className={`absolute left-0 top-0 bottom-0 w-1 ${s.stripe}`} aria-hidden />
             <span className={`${s.accent} shrink-0 mt-0.5`} aria-hidden><Icon /></span>

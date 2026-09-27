@@ -38,34 +38,67 @@ export type MaterialSurface = typeof MATERIAL_SURFACES[number];
 
 export const MATERIAL_QUERY_PARAM = 'material';
 
+const MATERIAL_FIELDS = Object.keys(WINDOW_MATERIAL_RANGES) as Array<keyof WindowMaterial>;
+const QUERY_PART = /^\d+(\.\d+)?$/;
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function clampField(field: keyof WindowMaterial, value: number): number {
+  const { min, max } = WINDOW_MATERIAL_RANGES[field];
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
 /**
  * Round then clamp each known field. Non-number or non-finite fields are
- * treated as absent and take the value from `fallback`. Unknown fields are
- * dropped.
+ * treated as absent and take the value from `fallback`. Unknown fields,
+ * inherited fields and a non-object `raw` are ignored.
  */
 export function normalizeWindowMaterial(
-  _raw: Partial<Record<keyof WindowMaterial, unknown>>,
-  _fallback: WindowMaterial = DEFAULT_WINDOW_MATERIAL,
+  raw: Partial<Record<keyof WindowMaterial, unknown>>,
+  fallback: WindowMaterial = DEFAULT_WINDOW_MATERIAL,
 ): WindowMaterial {
-  throw new Error('not implemented');
+  const source: object = typeof raw === 'object' && raw !== null ? raw : {};
+  const pick = (field: keyof WindowMaterial): number => {
+    const v: unknown = Object.hasOwn(source, field) ? (source as Record<string, unknown>)[field] : undefined;
+    return clampField(field, isFiniteNumber(v) ? v : fallback[field]);
+  };
+  return { opacity: pick('opacity'), blur: pick('blur'), saturation: pick('saturation') };
 }
 
 /** darwin: surfaceAlpha = opacity / 100. Other platforms: surfaceAlpha = 1. */
-export function toRenderMaterial(_m: WindowMaterial, _platform: string): WindowMaterialRender {
-  throw new Error('not implemented');
+export function toRenderMaterial(m: WindowMaterial, platform: string): WindowMaterialRender {
+  return {
+    surfaceAlpha: platform === 'darwin' ? m.opacity / 100 : 1,
+    blurPx: m.blur,
+    saturatePct: m.saturation,
+  };
 }
 
 /** darwin → 1; reduced transparency → 1; otherwise opacity / 100. */
-export function nativeOpacityFor(_m: WindowMaterial, _platform: string, _reducedTransparency: boolean): number {
-  throw new Error('not implemented');
+export function nativeOpacityFor(m: WindowMaterial, platform: string, reducedTransparency: boolean): number {
+  if (platform === 'darwin' || reducedTransparency) return 1;
+  return m.opacity / 100;
 }
 
-/** Value of the `material` query parameter for a new window's URL. */
-export function serializeMaterialQuery(_r: WindowMaterialRender): string {
-  throw new Error('not implemented');
+/** Value of the `material` query parameter for a new window's URL: `<alpha>,<blurPx>,<saturatePct>`. */
+export function serializeMaterialQuery(r: WindowMaterialRender): string {
+  return `${r.surfaceAlpha},${r.blurPx},${r.saturatePct}`;
+}
+
+function inRenderRange(r: WindowMaterialRender): boolean {
+  const { opacity, blur, saturation } = WINDOW_MATERIAL_RANGES;
+  return r.surfaceAlpha >= opacity.min / 100 && r.surfaceAlpha <= opacity.max / 100
+    && Number.isInteger(r.blurPx) && r.blurPx >= blur.min && r.blurPx <= blur.max
+    && Number.isInteger(r.saturatePct) && r.saturatePct >= saturation.min && r.saturatePct <= saturation.max;
 }
 
 /** Parse a `location.search` string; `null` on missing, malformed or out-of-range input. */
-export function parseMaterialQuery(_search: string): WindowMaterialRender | null {
-  throw new Error('not implemented');
+export function parseMaterialQuery(search: string): WindowMaterialRender | null {
+  const parts = new URLSearchParams(search).get(MATERIAL_QUERY_PARAM)?.split(',') ?? [];
+  if (parts.length !== MATERIAL_FIELDS.length || !parts.every((p) => QUERY_PART.test(p))) return null;
+  const [surfaceAlpha, blurPx, saturatePct] = parts.map(Number) as [number, number, number];
+  const render = { surfaceAlpha, blurPx, saturatePct };
+  return inRenderRange(render) ? render : null;
 }
