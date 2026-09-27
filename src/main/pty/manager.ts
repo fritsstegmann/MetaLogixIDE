@@ -12,7 +12,7 @@ interface Entry {
   startedAt: number;
   earlyBuffer: string;   // captured output within the first 3s
   bufferOpen: boolean;
-  /** Rolling scrollback used by new viewports to replay recent output on mount. */
+  /** Rolling raw output (most recent ≤256 KiB), used by scrollback search. Viewports replay `getSnapshot` instead. */
   scrollback: string;
   /** Headless terminal fed every output byte; the source of `getSnapshot`. */
   screen: ScreenMirror;
@@ -122,7 +122,7 @@ export class PtyManager extends EventEmitter {
     return this.entries.get(key(projectId, shellIndex))?.earlyBuffer ?? '';
   }
 
-  /** Rolling scrollback (most recent ≤256 KiB). Empty if the shell isn't alive. */
+  /** Rolling raw output (most recent ≤256 KiB) for text search. Empty if the shell isn't alive. Not a replay source: use `getSnapshot`. */
   getScrollback(projectId: number, shellIndex: number): string {
     return this.entries.get(key(projectId, shellIndex))?.scrollback ?? '';
   }
