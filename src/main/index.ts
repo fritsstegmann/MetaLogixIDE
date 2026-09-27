@@ -368,8 +368,9 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-// Reads the stored `window_opacity` (30..100). Set once services exist; a
-// window created before then, or a failed read, stays fully opaque.
+// Reads the stored `window_opacity`. Set once services exist. The value is
+// clamped to 30..100 here; a window created before then, a failed read or a
+// non-numeric value stays fully opaque.
 let readWindowOpacity: (() => number) | null = null;
 export function applyPersistedOpacity(win: BrowserWindow): void {
   let opacity = 1;
