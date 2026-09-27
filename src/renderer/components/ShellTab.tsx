@@ -361,7 +361,7 @@ export function ShellTab({
         const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
         void api.invoke('shells:write', { projectId, shellIndex, data: quoted });
       }}
-      className="relative w-full h-full px-3 pt-2 pb-3 bg-transparent focus:outline-none"
+      className="relative w-full h-full min-h-0 px-3 pt-2 pb-3 bg-transparent focus:outline-none"
     >
       <div ref={termHostRef} className="w-full h-full" />
       {dropActive && (
