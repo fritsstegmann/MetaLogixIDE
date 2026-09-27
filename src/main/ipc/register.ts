@@ -478,7 +478,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:pin':   async (s, { projectId, shellIndex, pinned }) => { s.shells.setPinned(projectId, shellIndex, pinned); return { ok: true } as const; },
   'shells:snapshot': async (s, { projectId, shellIndex }) => {
     const alive = s.ptyManager?.isAlive(projectId, shellIndex) ?? false;
-    const output = s.ptyManager?.getScrollback(projectId, shellIndex) ?? '';
+    const output = await s.ptyManager?.getSnapshot(projectId, shellIndex) ?? '';
     return { output, alive };
   },
 

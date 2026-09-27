@@ -29,7 +29,7 @@ function realSettings(): SettingsRepo {
 
 /** Minimal ptyManager stand-in: every method is a spy, so a test can assert nothing was spawned. */
 function fakePtyManager() {
-  return { on: vi.fn(), off: vi.fn(), spawn: vi.fn(async () => {}), kill: vi.fn(async () => {}), isAlive: vi.fn(() => false), resize: vi.fn(), write: vi.fn(), getScrollback: vi.fn(() => ''), allPorts: vi.fn(() => []), liveShells: vi.fn(() => []) };
+  return { on: vi.fn(), off: vi.fn(), spawn: vi.fn(async () => {}), kill: vi.fn(async () => {}), isAlive: vi.fn(() => false), resize: vi.fn(), write: vi.fn(), getScrollback: vi.fn(() => ''), getSnapshot: vi.fn(async () => ''), allPorts: vi.fn(() => []), liveShells: vi.fn(() => []) };
 }
 
 describe('registerIpc', () => {
@@ -69,6 +69,25 @@ describe('registerIpc', () => {
     const handler = ipc.handlers.get('settings:set-claude-permission-mode')!;
     await expect(handler({}, { mode })).rejects.toThrow();
     expect(settings.get('claude_permission_mode')).toBe(before);
+  });
+
+  it('shells:snapshot returns the serialized terminal state, not the raw scrollback tail', async () => {
+    const ipc = fakeIpcMain();
+    const ptyManager = fakePtyManager();
+    ptyManager.isAlive.mockReturnValue(true);
+    ptyManager.getScrollback.mockReturnValue('RAW-TAIL');
+    ptyManager.getSnapshot.mockResolvedValue('\x1b[1mSERIALIZED');
+    const services = { ptyManager } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    const result = await ipc.handlers.get('shells:snapshot')!({}, { projectId: 4, shellIndex: 2 });
+    expect(result).toEqual({ output: '\x1b[1mSERIALIZED', alive: true });
+    expect(ptyManager.getSnapshot).toHaveBeenCalledWith(4, 2);
+  });
+
+  it('shells:snapshot returns an empty dead snapshot when no ptyManager is wired', async () => {
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, {} as unknown as Parameters<typeof registerIpc>[1], () => {});
+    await expect(ipc.handlers.get('shells:snapshot')!({}, { projectId: 1, shellIndex: 0 })).resolves.toEqual({ output: '', alive: false });
   });
 
   it('shells:launch rejects while the permission mode is unchosen, without spawning', async () => {

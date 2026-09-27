@@ -3,6 +3,7 @@ import type { IPty } from 'node-pty';
 import { spawn as ptySpawn } from 'node-pty';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { toSpawnableArgv } from '@main/domain/shell';
+import { ScreenMirror } from './screen-mirror';
 
 interface Entry {
   projectId: number; shellIndex: number;
@@ -13,6 +14,8 @@ interface Entry {
   bufferOpen: boolean;
   /** Rolling scrollback used by new viewports to replay recent output on mount. */
   scrollback: string;
+  /** Headless terminal fed every output byte; the source of `getSnapshot`. */
+  screen: ScreenMirror;
   /**
    * ms epoch when the user last submitted a line (input containing \r). We
    * fire the "command completed" notification only for commands that have
@@ -74,7 +77,7 @@ export class PtyManager extends EventEmitter {
     const entry: Entry = {
       projectId, shellIndex, pty, pid: pty.pid, cols, rows,
       startedAt: Date.now(), earlyBuffer: '', bufferOpen: true,
-      scrollback: '',
+      scrollback: '', screen: new ScreenMirror(cols, rows),
       cmdStartedAt: null, lastDataAt: Date.now(), cmdNotified: false,
       ports: new Set<number>(),
     };
@@ -101,38 +104,15 @@ export class PtyManager extends EventEmitter {
       if (entry.bufferOpen && entry.earlyBuffer.length < EARLY_BUFFER_CAP) {
         entry.earlyBuffer += data;
       }
-      // Keep rolling scrollback so late-attaching viewports can replay. The
-      // raw-slice truncation used to cut mid-escape-sequence (e.g. inside a
-      // `\033[38;5;208m` colour code), and the replayed terminal then
-      // interpreted the leftover fragment as garbage — that's what produced
-      // the red/green splice bug on project-switch. Snap the truncation to
-      // the next newline and drop any partial ESC prefix before the newline
-      // so we always resume from a clean line boundary. See ShellTab's
-      // snapshot flow for the replay side.
-      entry.scrollback += data;
-      if (entry.scrollback.length > SCROLLBACK_CAP) {
-        let cut = entry.scrollback.length - SCROLLBACK_CAP;
-        const nextNl = entry.scrollback.indexOf('\n', cut);
-        // Only advance to the newline if it lands within a reasonable window
-        // (otherwise a single very long line could hold us hostage).
-        if (nextNl > -1 && nextNl - cut < 8192) cut = nextNl + 1;
-        // If we still land inside an ANSI escape (long CSI without any
-        // terminator letter in the next 32 bytes → almost certainly a
-        // fragment), advance to the following newline to skip it entirely.
-        const window = entry.scrollback.slice(cut, cut + 32);
-        if (window.includes('\x1b') && !/[A-Za-z]/.test(window)) {
-          const skipTo = entry.scrollback.indexOf('\n', cut);
-          if (skipTo > -1 && skipTo - cut < 16384) cut = skipTo + 1;
-        }
-        entry.scrollback = entry.scrollback.slice(cut);
-      }
+      entry.scrollback = appendScrollback(entry.scrollback, data);
       this.emit('data', { projectId, shellIndex, data });
+      entry.screen.write(data);
     });
     setTimeout(() => { entry.bufferOpen = false; entry.earlyBuffer = ''; }, EARLY_BUFFER_MS);
     pty.onExit(({ exitCode }: { exitCode: number }) => {
       const captured = entry.earlyBuffer;
       const uptimeMs = Date.now() - entry.startedAt;
-      this.entries.delete(k);
+      this.releaseEntry(k, entry);
       this.emit('exit', { projectId, shellIndex, code: exitCode, uptimeMs, earlyOutput: captured });
     });
     return { pid: pty.pid };
@@ -145,6 +125,15 @@ export class PtyManager extends EventEmitter {
   /** Rolling scrollback (most recent ≤256 KiB). Empty if the shell isn't alive. */
   getScrollback(projectId: number, shellIndex: number): string {
     return this.entries.get(key(projectId, shellIndex))?.scrollback ?? '';
+  }
+
+  /**
+   * Serialized terminal state (screen, scrollback, SGR, cursor) of the live
+   * shell, for a remounting viewport to replay into a terminal of the same
+   * size. Resolves '' if the shell is unknown or has exited.
+   */
+  async getSnapshot(projectId: number, shellIndex: number): Promise<string> {
+    return this.entries.get(key(projectId, shellIndex))?.screen.snapshot() ?? '';
   }
 
   write(projectId: number, shellIndex: number, data: string): void {
@@ -261,6 +250,7 @@ export class PtyManager extends EventEmitter {
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
     e.pty.resize(cols, rows);
+    e.screen.resize(cols, rows);
     e.cols = cols; e.rows = rows;
   }
 
@@ -268,7 +258,13 @@ export class PtyManager extends EventEmitter {
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
     e.pty.kill();
-    this.entries.delete(key(projectId, shellIndex));
+    this.releaseEntry(key(projectId, shellIndex), e);
+  }
+
+  /** Drop the entry and its headless terminal, unless a respawn already replaced it. */
+  private releaseEntry(k: string, entry: Entry): void {
+    entry.screen.dispose();
+    if (this.entries.get(k) === entry) this.entries.delete(k);
   }
 
   isAlive(projectId: number, shellIndex: number): boolean {
@@ -280,4 +276,24 @@ export class PtyManager extends EventEmitter {
       projectId: e.projectId, shellIndex: e.shellIndex, pid: e.pid, cols: e.cols, rows: e.rows, startedAt: e.startedAt,
     }));
   }
+}
+
+/**
+ * Append PTY output to the raw rolling scrollback, keeping the most recent
+ * ~256 KiB. The cut snaps to a line boundary and skips a dangling escape
+ * fragment, because replaying a sequence cut mid-way (e.g. inside
+ * `\x1b[38;5;208m`) renders garbage.
+ */
+function appendScrollback(scrollback: string, data: string): string {
+  const next = scrollback + data;
+  if (next.length <= SCROLLBACK_CAP) return next;
+  let cut = next.length - SCROLLBACK_CAP;
+  const nextNl = next.indexOf('\n', cut);
+  if (nextNl > -1 && nextNl - cut < 8192) cut = nextNl + 1;
+  const window = next.slice(cut, cut + 32);
+  if (window.includes('\x1b') && !/[A-Za-z]/.test(window)) {
+    const skipTo = next.indexOf('\n', cut);
+    if (skipTo > -1 && skipTo - cut < 16384) cut = skipTo + 1;
+  }
+  return next.slice(cut);
 }
