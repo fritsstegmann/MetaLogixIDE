@@ -47,6 +47,26 @@ function mermaidConfig(theme: EffectiveTheme): Record<string, unknown> {
 }
 
 /**
+ * Runs `mermaid.render` inside a throwaway child of `container`, removed
+ * afterwards. Mermaid clears the element it is given (`innerHTML = ""`), so it
+ * must never receive the block holding the diagram source or earlier output.
+ */
+async function renderInScratch(
+  mermaid: MermaidApi,
+  id: string,
+  source: string,
+  container: Element,
+): Promise<{ svg: string }> {
+  const scratch = container.ownerDocument.createElement('div');
+  container.append(scratch);
+  try {
+    return await mermaid.render(id, source, scratch);
+  } finally {
+    scratch.remove();
+  }
+}
+
+/**
  * Builds a diagram renderer over mermaid. `deps.load` supplies the library
  * (called once, on the first non-empty render) and `deps.removeNode` drops
  * the temporary nodes mermaid leaves behind on failure; both are injectable
@@ -85,7 +105,7 @@ export function createMermaidRenderer(deps: Partial<MermaidDeps> = {}): DiagramR
       const mermaid = await library();
       mermaid.initialize(mermaidConfig(theme));
       await mermaid.parse(source);
-      const { svg } = await mermaid.render(id, source, container);
+      const { svg } = await renderInScratch(mermaid, id, source, container);
       const result: DiagramResult = { ok: true, svg };
       remember(key, result);
       return result;

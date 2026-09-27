@@ -2,7 +2,43 @@ import { describe, expect, it, vi } from 'vitest';
 import { MERMAID_EMPTY_MESSAGE } from '@renderer/markdown/contract';
 import { createMermaidRenderer, type MermaidApi } from '@renderer/markdown/mermaid/mermaidRenderer';
 
-const container = { tag: 'container' } as unknown as Element;
+interface FakeElement {
+  name: string;
+  parent: FakeElement | null;
+  children: FakeElement[];
+  ownerDocument: { createElement(tag: string): FakeElement };
+  append(child: FakeElement): void;
+  remove(): void;
+  innerHTML: string;
+}
+
+function fakeElement(name: string): FakeElement {
+  const el: FakeElement = {
+    name,
+    parent: null,
+    children: [],
+    ownerDocument: { createElement: (tag) => fakeElement(tag) },
+    append(child) {
+      child.parent = el;
+      el.children.push(child);
+    },
+    remove() {
+      if (el.parent) el.parent.children = el.parent.children.filter((c) => c !== el);
+      el.parent = null;
+    },
+    set innerHTML(_: string) {
+      for (const child of el.children) child.parent = null;
+      el.children = [];
+    },
+    get innerHTML() {
+      return '';
+    },
+  };
+  return el;
+}
+
+const asElement = (el: FakeElement): Element => el as unknown as Element;
+const container = asElement(fakeElement('container'));
 
 function fakeMermaid(overrides: Partial<MermaidApi> = {}) {
   const api = {
@@ -46,7 +82,7 @@ describe('createMermaidRenderer', () => {
     expect(last).toMatchObject({ theme: mermaidTheme });
   });
 
-  it('returns the svg and renders into the given container with a unique mmd id', async () => {
+  it('returns the svg, rendering with a unique mmd id', async () => {
     const { api, renderer } = setup();
     const a = await renderer.render('graph TD; A-->B', 'dark', container);
     const b = await renderer.render('graph TD; C-->D', 'dark', container);
@@ -55,10 +91,48 @@ describe('createMermaidRenderer', () => {
     const ids = calls.map(([id]) => id);
     expect(new Set(ids).size).toBe(3);
     for (const id of ids) expect(id).toMatch(/^mmd[A-Za-z0-9_-]*$/);
-    for (const call of calls) expect(call[2]).toBe(container);
+    for (const call of calls) expect(call[2]).not.toBe(container);
     expect(a).toEqual({ ok: true, svg: `<svg id="${ids[0]}"></svg>` });
     expect(b).toEqual({ ok: true, svg: `<svg id="${ids[1]}"></svg>` });
     expect(c).toEqual({ ok: true, svg: `<svg id="${ids[2]}"></svg>` });
+  });
+
+  it('never hands mermaid the block itself, so the block keeps its source and earlier output', async () => {
+    const block = fakeElement('block');
+    const source = fakeElement('pre.mermaid-source');
+    const output = fakeElement('div.mermaid-output');
+    block.append(source);
+    block.append(output);
+    const api = fakeMermaid({
+      render: vi.fn(async (id: string, _text: string, target?: Element) => {
+        if (target) target.innerHTML = '';
+        return { svg: `<svg id="${id}"></svg>` };
+      }),
+    });
+    const { renderer } = setup(api);
+    await renderer.render('graph TD; A-->B', 'dark', asElement(block));
+    await renderer.render('graph TD; A-->B', 'light', asElement(block));
+    for (const [, , target] of vi.mocked(api.render).mock.calls) {
+      expect(target).toBeDefined();
+      expect(target).not.toBe(asElement(block));
+      expect((target as unknown as FakeElement).parent).toBeNull();
+    }
+    expect(block.children).toEqual([source, output]);
+  });
+
+  it('renders inside a scratch child of the block and removes it even on failure', async () => {
+    const block = fakeElement('block');
+    const parents: Array<FakeElement | null> = [];
+    const api = fakeMermaid({
+      render: vi.fn(async (_id: string, _text: string, target?: Element) => {
+        parents.push((target as unknown as FakeElement).parent);
+        throw new Error('layout failed');
+      }),
+    });
+    const { renderer } = setup(api);
+    expect((await renderer.render('graph TD; A-->B', 'dark', asElement(block))).ok).toBe(false);
+    expect(parents).toEqual([block]);
+    expect(block.children).toEqual([]);
   });
 
   it('maps a parse failure to an error value carrying the parser message and removes stray nodes', async () => {
