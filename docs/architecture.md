@@ -70,16 +70,18 @@ Not applicable to the preview. It reads only the local file buffer.
 ## Architectural Decisions
 
 - **Mermaid loads lazily.** `mermaidRenderer.ts` reaches `mermaid` only
-  through `import('mermaid')` (`mermaidRenderer.ts:30`). Vite puts it in a
+  through `import('mermaid')` (`mermaidRenderer.ts:40`). Vite puts it in a
   separate chunk. A document without diagrams does not load it.
 - **Mermaid security configuration.** The adapter calls `initialize` with
   `securityLevel: 'strict'`, `suppressErrorRendering: true` and
-  `startOnLoad: false` (`mermaidRenderer.ts:40-45`). It does not set
+  `startOnLoad: false` (`mermaidRenderer.ts:50-57`). It does not set
   `secure`, so the Mermaid default secure keys apply and an `%%{init}%%`
   directive cannot change `securityLevel`.
 - **Mermaid renders into a scratch element.** `mermaid.render` clears the
   element it receives. The adapter gives it a temporary child of the block
-  and removes that child after the render (`mermaidRenderer.ts:54`). This
+  and removes that child after the render (`mermaidRenderer.ts:73`). The
+  child is absolutely positioned and hidden, so it does not change the block
+  height while Mermaid lays out the diagram. This
   keeps the block source for the next render.
 - **Diagram results are cached.** The adapter keeps up to 50 SVG results,
   keyed by source and theme (`mermaidRenderer.ts:27`).
@@ -87,7 +89,7 @@ Not applicable to the preview. It reads only the local file buffer.
   `maxSize: 20` and `maxExpand: 1000`.
 - **Own math plugin.** No maintained plugin supports `markdown-it` 14 and all
   five delimiters. The inline rule runs before the `escape` rule
-  (`mathPlugin.ts:172`), so it sees `\(` and `\[`.
+  (`mathPlugin.ts:238`), so it sees `\(` and `\[`.
 - **Theme comes from the document.** `useDocumentTheme` reads
   `<html data-theme>`, then the `prefers-color-scheme` media query
   (`useDocumentTheme.ts:13-15`). It does not use `useTheme`, because each
