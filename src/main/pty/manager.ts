@@ -33,6 +33,8 @@ const EARLY_BUFFER_CAP = 32 * 1024;
 const SCROLLBACK_CAP = 256 * 1024;   // 256 KiB rolling
 const DONE_MIN_MS  = 8_000;   // ignore commands shorter than 8s
 const DONE_IDLE_MS = 1_200;   // no data for 1.2s ⇒ "command is done"
+const DEFAULT_COLS = 100;
+const DEFAULT_ROWS = 30;
 
 /** Regex bank for port-detection. Each match's group 1 is the port number. */
 const PORT_PATTERNS: RegExp[] = [
@@ -47,10 +49,20 @@ const MAX_PORT = 65535;
 
 export class PtyManager extends EventEmitter {
   private entries = new Map<string, Entry>();
+  /** Last size the viewport asked for, per shell — outlives the PTY so a spawn can honour it. */
+  private requestedSizes = new Map<string, { cols: number; rows: number }>();
 
-  async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols = 100, rows = 30): Promise<{ pid: number }> {
+  /**
+   * Spawn the PTY for (projectId, shellIndex). Size precedence: explicit
+   * `cols`/`rows`, then the last size passed to `resize` for this shell,
+   * then 100x30.
+   */
+  async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols?: number, rows?: number): Promise<{ pid: number }> {
     const k = key(projectId, shellIndex);
     if (this.entries.has(k)) throw new Error(`already spawned: ${k}`);
+    const requested = this.requestedSizes.get(k);
+    cols ??= requested?.cols ?? DEFAULT_COLS;
+    rows ??= requested?.rows ?? DEFAULT_ROWS;
     const [command, ...args] = toSpawnableArgv(launch.argv);
     if (!command) throw new Error('empty argv');
     const pty = ptySpawn(command, args, {
@@ -240,7 +252,12 @@ export class PtyManager extends EventEmitter {
     return out;
   }
 
+  /**
+   * Resize the live PTY, and remember the size either way so a PTY that
+   * does not exist yet (or is respawned later) starts at it.
+   */
   resize(projectId: number, shellIndex: number, cols: number, rows: number): void {
+    this.requestedSizes.set(key(projectId, shellIndex), { cols, rows });
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
     e.pty.resize(cols, rows);
