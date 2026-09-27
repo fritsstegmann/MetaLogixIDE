@@ -8,7 +8,7 @@ import { buildServices } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { readWindowMaterial } from './domain/window-material';
-import { createMaterialController, type MaterialController } from './windows/material-controller';
+import { createMaterialController, readInitialMaterial, type MaterialController } from './windows/material-controller';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -382,6 +382,26 @@ ipcMain.handle('app:renderer-ready-for-files', () => {
   return { ok: true } as const;
 });
 
+/**
+ * Build the app's window material controller from the stored material
+ * (defaults when storage cannot be read), make it the one new windows use,
+ * and re-apply it whenever the OS transparency preference changes.
+ */
+function initWindowMaterial(services: ReturnType<typeof buildServices>): MaterialController {
+  const controller = createMaterialController({
+    platform: process.platform,
+    getReducedTransparency: () => nativeTheme.prefersReducedTransparency,
+    listWindows: () => BrowserWindow.getAllWindows(),
+    initial: readInitialMaterial(
+      () => readWindowMaterial(services.settings),
+      (cause) => console.warn('[metaide] window material read failed; using defaults', cause),
+    ),
+  });
+  materialController = controller;
+  nativeTheme.on('updated', controller.onReducedTransparencyChanged);
+  return controller;
+}
+
 app.whenReady().then(async () => {
   // Cold-launch argv scan (Windows/Linux + packaged mac when invoked with
   // args). Runs after ready so `existsSync` sees the app-relative CWD.
@@ -406,14 +426,7 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[metaide] boot rescan failed', e);
   }
-  const controller = createMaterialController({
-    platform: process.platform,
-    getReducedTransparency: () => nativeTheme.prefersReducedTransparency,
-    listWindows: () => BrowserWindow.getAllWindows(),
-    initial: readWindowMaterial(services.settings),
-  });
-  materialController = controller;
-  nativeTheme.on('updated', controller.onReducedTransparencyChanged);
+  const controller = initWindowMaterial(services);
   mainWindow = await createMainWindow();
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,

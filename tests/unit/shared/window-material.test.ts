@@ -4,6 +4,7 @@ import {
   MATERIAL_QUERY_PARAM,
   WINDOW_MATERIAL_RANGES,
   WINDOW_MATERIAL_SETTING_KEYS,
+  changedMaterialKeys,
   nativeOpacityFor,
   normalizeWindowMaterial,
   parseMaterialQuery,
@@ -169,5 +170,23 @@ describe('material query', () => {
     ['whitespace padded', '?material=%200.7,12,150'],
   ])('returns null for %s', (_label, search) => {
     expect(parseMaterialQuery(search)).toBeNull();
+  });
+});
+
+describe('changedMaterialKeys', () => {
+  it('is empty for equal materials', () => {
+    expect(changedMaterialKeys(CUSTOM, { ...CUSTOM })).toEqual([]);
+  });
+
+  it.each([
+    ['opacity', 'window_opacity'],
+    ['blur', 'window_backdrop_blur'],
+    ['saturation', 'window_backdrop_saturation'],
+  ] as const)('reports only the setting key of a changed %s', (field, key) => {
+    expect(changedMaterialKeys(CUSTOM, { ...CUSTOM, [field]: CUSTOM[field] + 1 })).toEqual([key]);
+  });
+
+  it('reports every changed key once, in field order', () => {
+    expect(changedMaterialKeys(CUSTOM, DEFAULT_WINDOW_MATERIAL)).toEqual(['window_opacity', 'window_backdrop_blur', 'window_backdrop_saturation']);
   });
 });

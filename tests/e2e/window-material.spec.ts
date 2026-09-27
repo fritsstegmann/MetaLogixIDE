@@ -106,6 +106,46 @@ async function rootVar(page: Page, name: string): Promise<number> {
   return page.evaluate((n) => parseFloat(document.documentElement.style.getPropertyValue(n)), name);
 }
 
+/** The theme surface colours whose alpha `--material-alpha` scales (AC8). */
+const SURFACE_VARS = ['--bg', '--panel', '--panel-strong', '--chat-surface'] as const;
+type SurfaceVar = typeof SURFACE_VARS[number];
+
+/** Chromium stores colour alpha as n/255; compare alphas on that grid. */
+function to8Bit(alpha: number): number {
+  return Math.round(alpha * 255);
+}
+
+/**
+ * Resolved alpha of each surface var and of its `*-base` theme tint.
+ * `getPropertyValue` returns the unresolved `rgb(from …)` token, so each
+ * var is painted onto a throwaway element and read back as a computed colour.
+ */
+async function surfaceVarAlphas(page: Page): Promise<Record<SurfaceVar, { base: number; derived: number }>> {
+  const raw = await page.evaluate((vars) => {
+    const probe = document.createElement('div');
+    document.body.appendChild(probe);
+    const read = (v: string) => { probe.style.backgroundColor = `var(${v})`; return getComputedStyle(probe).backgroundColor; };
+    const out = vars.map((v) => ({ v, base: read(`${v}-base`), derived: read(v) }));
+    probe.remove();
+    return out;
+  }, [...SURFACE_VARS]);
+  const result = {} as Record<SurfaceVar, { base: number; derived: number }>;
+  for (const r of raw) result[r.v as SurfaceVar] = { base: parseAlpha(r.base), derived: parseAlpha(r.derived) };
+  return result;
+}
+
+/** Switches to an explicit theme with the title-bar toggle (it flips dark ↔ light). */
+async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
+  const html = page.locator('html');
+  if ((await html.getAttribute('data-theme')) !== theme) await page.getByTestId('theme-toggle').click();
+  await expect(html).toHaveAttribute('data-theme', theme);
+}
+
+async function surfaceAlphasIn(page: Page, theme: 'dark' | 'light'): Promise<Record<SurfaceVar, { base: number; derived: number }>> {
+  await setTheme(page, theme);
+  return surfaceVarAlphas(page);
+}
+
 async function readStoredMaterial(page: Page): Promise<WindowMaterial> {
   return page.evaluate(async (keys) => {
     const api = (window as unknown as { api: Api }).api;
@@ -570,22 +610,42 @@ test.describe('window material', () => {
       await waitForPopoutShell(popout);
 
       const sidebar = '[data-material-surface="sidebar"]';
-      const base = parseAlpha(await win.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--panel-base')));
-      expect(base, 'dark --panel base alpha (spec AC8 example)').toBeCloseTo(0.82, 3);
 
-      // At 100: the theme alpha exactly.
-      await expect(win.locator('html')).toHaveAttribute('data-theme', 'dark');
-      expect(parseAlpha((await colours(win, sidebar)).bg)).toBeCloseTo(base, 3);
+      // At 100: every surface var keeps exactly its theme alpha, in both themes.
+      const dark100 = await surfaceAlphasIn(win, 'dark');
+      const light100 = await surfaceAlphasIn(win, 'light');
+      // Positive control: the theme switch really changed the bases.
+      expect(to8Bit(light100['--panel'].base)).not.toBe(to8Bit(dark100['--panel'].base));
+      for (const [theme, alphas] of [['dark', dark100], ['light', light100]] as const) {
+        for (const v of SURFACE_VARS) {
+          const { base, derived } = alphas[v];
+          expect(base, `${theme} ${v}-base is translucent`).toBeGreaterThan(0);
+          expect(base, `${theme} ${v}-base is translucent`).toBeLessThan(1);
+          expect(to8Bit(derived), `${theme} ${v} at 100%`).toBe(to8Bit(base));
+        }
+      }
+      // The probe matches a real surface: the sidebar paints `--panel`.
+      await setTheme(win, 'dark');
+      expect(to8Bit(parseAlpha((await colours(win, sidebar)).bg))).toBe(to8Bit(dark100['--panel'].base));
 
       await setMaterial(win, { opacity: 70 });
       const opacities = await ide.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.getOpacity()));
       expect(opacities.length, 'main + popout').toBeGreaterThanOrEqual(2);
       for (const o of opacities) expect(o).toBe(1);
 
-      await expect.poll(async () => parseAlpha((await colours(win, sidebar)).bg), { timeout: 5000 })
-        .toBeCloseTo(base * 0.7, 2);
+      // At 70: alpha = base × 0.7, within one 8-bit step (Chromium stores alpha as n/255).
+      await expect.poll(async () => to8Bit(parseAlpha((await colours(win, sidebar)).bg)), { timeout: 5000 })
+        .not.toBe(to8Bit(dark100['--panel'].base));
+      for (const theme of ['dark', 'light'] as const) {
+        const alphas = await surfaceAlphasIn(win, theme);
+        for (const v of SURFACE_VARS) {
+          const { base, derived } = alphas[v];
+          expect(Math.abs(to8Bit(derived) - base * 0.7 * 255), `${theme} ${v} at 70%`).toBeLessThanOrEqual(1);
+        }
+      }
+      await setTheme(win, 'dark');
       const scaled = parseAlpha((await colours(win, sidebar)).bg);
-      expect(Math.abs(scaled - base * 0.7)).toBeLessThanOrEqual(0.005);
+      expect(Math.abs(to8Bit(scaled) - dark100['--panel'].base * 0.7 * 255)).toBeLessThanOrEqual(1);
       // Text is never scaled.
       expect(parseAlpha((await colours(win, sidebar)).fg)).toBe(1);
       // The popout's surfaces scale too (its <html> carries the same alpha).
@@ -593,7 +653,10 @@ test.describe('window material', () => {
 
       // Back to 100: exact theme alpha again.
       await setMaterial(win, { opacity: 100 });
-      await expect.poll(async () => parseAlpha((await colours(win, sidebar)).bg)).toBeCloseTo(base, 3);
+      await expect.poll(async () => to8Bit(parseAlpha((await colours(win, sidebar)).bg)))
+        .toBe(to8Bit(dark100['--panel'].base));
+      const darkAgain = await surfaceAlphasIn(win, 'dark');
+      for (const v of SURFACE_VARS) expect(to8Bit(darkAgain[v].derived), `dark ${v} back at 100%`).toBe(to8Bit(dark100[v].base));
     } finally {
       await teardown(ide);
     }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createMaterialController, type MaterialControllerDeps, type MaterialWindow } from '@main/windows/material-controller';
-import { MATERIAL_QUERY_PARAM, parseMaterialQuery, type WindowMaterial } from '@shared/window-material';
+import { createMaterialController, readInitialMaterial, type MaterialControllerDeps, type MaterialWindow } from '@main/windows/material-controller';
+import { DEFAULT_WINDOW_MATERIAL, MATERIAL_QUERY_PARAM, parseMaterialQuery, type WindowMaterial } from '@shared/window-material';
 
 const INITIAL: WindowMaterial = { opacity: 80, blur: 20, saturation: 180 };
 const CHANGED: WindowMaterial = { opacity: 50, blur: 8, saturation: 120 };
@@ -117,5 +117,26 @@ describe('createMaterialController', () => {
     const listener = controller.onReducedTransparencyChanged;
     listener();
     expect(win.setOpacity).toHaveBeenCalledWith(0.8);
+  });
+});
+
+describe('readInitialMaterial', () => {
+  it('returns the stored material when the read succeeds, without reporting an error', () => {
+    const onError = vi.fn();
+    expect(readInitialMaterial(() => CHANGED, onError)).toEqual(CHANGED);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the defaults and reports the cause when the read throws', () => {
+    const cause = new Error('db locked');
+    const onError = vi.fn();
+    expect(readInitialMaterial(() => { throw cause; }, onError)).toEqual(DEFAULT_WINDOW_MATERIAL);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(cause);
+  });
+
+  it('returns a copy of the defaults, so the shared constant cannot be mutated through it', () => {
+    const initial = readInitialMaterial(() => { throw new Error('x'); }, () => {});
+    expect(initial).not.toBe(DEFAULT_WINDOW_MATERIAL);
   });
 });

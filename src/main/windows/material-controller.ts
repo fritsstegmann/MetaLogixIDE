@@ -5,6 +5,7 @@
  * from stale values. It depends on injected functions only, never `electron`.
  */
 import {
+  DEFAULT_WINDOW_MATERIAL,
   MATERIAL_QUERY_PARAM,
   nativeOpacityFor,
   serializeMaterialQuery,
@@ -18,6 +19,7 @@ export interface MaterialWindow {
   isDestroyed(): boolean;
 }
 
+/** Platform facts, window access and the seed material a controller is built from. */
 export interface MaterialControllerDeps {
   platform: string;
   getReducedTransparency: () => boolean;
@@ -55,4 +57,18 @@ export function createMaterialController(deps: MaterialControllerDeps): Material
     queryString: () => `${MATERIAL_QUERY_PARAM}=${encodeURIComponent(serializeMaterialQuery(toRenderMaterial(material, deps.platform)))}`,
     onReducedTransparencyChanged: applyToAll,
   };
+}
+
+/**
+ * Seed material for boot: the result of `read`, or a copy of the defaults
+ * when `read` throws, so a storage failure never blocks the first window.
+ * The cause is passed to `onError`.
+ */
+export function readInitialMaterial(read: () => WindowMaterial, onError: (cause: unknown) => void): WindowMaterial {
+  try {
+    return read();
+  } catch (cause) {
+    onError(cause);
+    return { ...DEFAULT_WINDOW_MATERIAL };
+  }
 }

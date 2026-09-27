@@ -3,11 +3,14 @@
  * `--material-alpha`, `--material-blur` and `--material-saturate` CSS
  * variables on the document root (from the new window's URL query before
  * first paint, then live on every `settings:changed` for a material key),
- * and provides the latest-wins sender the Settings sliders write through.
+ * and provides the latest-wins sender and the load/save controller behind
+ * the Settings sliders.
  */
 import {
+  DEFAULT_WINDOW_MATERIAL,
   parseMaterialQuery,
   WINDOW_MATERIAL_SETTING_KEYS,
+  type WindowMaterial,
   type WindowMaterialRender,
 } from '@shared/window-material';
 
@@ -22,6 +25,9 @@ export interface MaterialSyncApi {
 
 /** Runs a callback once, later (`requestAnimationFrame` in the app). */
 export type FrameScheduler = (cb: () => void) => unknown;
+
+/** Settings group state before the first load settles. */
+export const INITIAL_MATERIAL_STATE: WindowMaterialState = { material: DEFAULT_WINDOW_MATERIAL, loaded: false, error: null };
 
 const MATERIAL_KEYS: ReadonlySet<string> = new Set(Object.values(WINDOW_MATERIAL_SETTING_KEYS));
 
@@ -117,5 +123,84 @@ export function createLatestWinsSender<T, R>(
   return (value: T) => {
     if (inFlight) pending = { value };
     else start(value);
+  };
+}
+
+/** State of the Settings "Window material" group. */
+export interface WindowMaterialState { material: WindowMaterial; loaded: boolean; error: string | null }
+
+type MaterialField = keyof WindowMaterial;
+type MaterialSettingKey = typeof WINDOW_MATERIAL_SETTING_KEYS[MaterialField];
+
+/** Reads one stored setting value and saves a full material (returns it normalised). */
+export interface WindowMaterialIo {
+  read(key: MaterialSettingKey): Promise<unknown>;
+  save(material: WindowMaterial): Promise<WindowMaterial>;
+}
+
+/** Display text for a caught value: its string form without an `Error: ` prefix. */
+export function errorText(e: unknown): string {
+  return String(e).replace(/^Error:\s*/, '');
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+async function readMaterial(io: WindowMaterialIo): Promise<WindowMaterial> {
+  const read = (field: MaterialField) => io.read(WINDOW_MATERIAL_SETTING_KEYS[field]);
+  const [opacity, blur, saturation] = await Promise.all([read('opacity'), read('blur'), read('saturation')]);
+  return {
+    opacity: numberOr(opacity, DEFAULT_WINDOW_MATERIAL.opacity),
+    blur: numberOr(blur, DEFAULT_WINDOW_MATERIAL.blur),
+    saturation: numberOr(saturation, DEFAULT_WINDOW_MATERIAL.saturation),
+  };
+}
+
+/**
+ * Logic behind the Settings sliders. `load()` reads the stored material (a
+ * non-number field falls back to its default; a failure becomes `error` and
+ * still unlocks the controls) and returns a cancel that discards its outcome.
+ * `change(field, value)` and `reset()` update state optimistically and send
+ * the full material through a latest-wins sender; the normalised response
+ * replaces state and clears `error`, a failure sets `error`. Every new state
+ * is passed to `onState`, starting from `INITIAL_MATERIAL_STATE`.
+ */
+export function createWindowMaterialController(io: WindowMaterialIo, onState: (state: WindowMaterialState) => void) {
+  let state = INITIAL_MATERIAL_STATE;
+  const update = (patch: Partial<WindowMaterialState>) => {
+    state = { ...state, ...patch };
+    onState(state);
+  };
+  const push = createLatestWinsSender(
+    (material: WindowMaterial) => io.save(material),
+    (saved) => update({ material: saved, error: null }),
+    (e) => {
+      console.error('window material save failed', e);
+      update({ error: errorText(e) });
+    },
+  );
+
+  function load(): () => void {
+    let live = true;
+    readMaterial(io).then(
+      (material) => { if (live) update({ material, loaded: true }); },
+      (e: unknown) => {
+        console.error('window material load failed', e);
+        if (live) update({ error: errorText(e), loaded: true });
+      },
+    );
+    return () => { live = false; };
+  }
+
+  function write(material: WindowMaterial): void {
+    update({ material });
+    push(material);
+  }
+
+  return {
+    load,
+    change: (field: MaterialField, value: number) => write({ ...state.material, [field]: value }),
+    reset: () => write(DEFAULT_WINDOW_MATERIAL),
   };
 }

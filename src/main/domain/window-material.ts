@@ -5,9 +5,11 @@
  */
 import type { SettingsRepo } from '@main/repos/settings-repo';
 import type { SettingsMap } from '@shared/types';
-import { normalizeWindowMaterial, WINDOW_MATERIAL_SETTING_KEYS, type WindowMaterial } from '@shared/window-material';
+import { changedMaterialKeys, normalizeWindowMaterial, WINDOW_MATERIAL_SETTING_KEYS, type WindowMaterial } from '@shared/window-material';
 
-const FIELDS = Object.keys(WINDOW_MATERIAL_SETTING_KEYS) as Array<keyof WindowMaterial>;
+const FIELD_BY_KEY = Object.fromEntries(
+  Object.entries(WINDOW_MATERIAL_SETTING_KEYS).map(([field, key]) => [key, field as keyof WindowMaterial]),
+) as Record<typeof WINDOW_MATERIAL_SETTING_KEYS[keyof WindowMaterial], keyof WindowMaterial>;
 
 /** Read the stored window material, clamping any out-of-range stored value. */
 export function readWindowMaterial(settings: SettingsRepo): WindowMaterial {
@@ -29,10 +31,9 @@ export function applyWindowMaterial(
 ): { material: WindowMaterial; changedKeys: Array<keyof SettingsMap> } {
   const current = readWindowMaterial(settings);
   const material = normalizeWindowMaterial(patch, current);
-  const changed = FIELDS.filter((field) => material[field] !== current[field]);
-  const changedKeys = changed.map((field) => WINDOW_MATERIAL_SETTING_KEYS[field]);
-  if (changed.length > 0) {
-    settings.setMany(Object.fromEntries(changed.map((field) => [WINDOW_MATERIAL_SETTING_KEYS[field], material[field]])));
+  const changedKeys = changedMaterialKeys(current, material);
+  if (changedKeys.length > 0) {
+    settings.setMany(Object.fromEntries(changedKeys.map((key) => [key, material[FIELD_BY_KEY[key]]])));
   }
   return { material, changedKeys };
 }

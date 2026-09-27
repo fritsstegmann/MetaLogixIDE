@@ -12,7 +12,7 @@ import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
-import { toRenderMaterial, WINDOW_MATERIAL_SETTING_KEYS, type WindowMaterial } from '@shared/window-material';
+import { changedMaterialKeys, toRenderMaterial, WINDOW_MATERIAL_SETTING_KEYS, type WindowMaterial } from '@shared/window-material';
 import { applyWindowMaterial, readWindowMaterial } from '@main/domain/window-material';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -546,9 +546,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true } as const;
   },
 
-  'app:set-window-material': async () => {
-    throw new Error('app:set-window-material is wired in registerIpc');
-  },
+  'app:set-window-material': async (s, patch) => applyWindowMaterial(s.settings, patch).material,
   'app:get-window-render': async (s) => toRenderMaterial(readWindowMaterial(s.settings), process.platform),
 
   /* ─── metaproject chat ─── */
@@ -1205,7 +1203,9 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   });
 
   ipcMain.handle('app:set-window-material', async (_e, req: IpcRequest<'app:set-window-material'>) => {
-    const { material, changedKeys } = applyWindowMaterial(services.settings, req);
+    const before = readWindowMaterial(services.settings);
+    const material = await handlers['app:set-window-material'](services, req);
+    const changedKeys = changedMaterialKeys(before, material);
     for (const key of changedKeys) sendEvent('settings:changed', { key });
     if (changedKeys.length > 0) windowHooks?.applyWindowMaterial?.(material);
     return material;

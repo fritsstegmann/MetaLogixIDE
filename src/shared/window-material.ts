@@ -13,6 +13,7 @@ export interface WindowMaterial { opacity: number; blur: number; saturation: num
 /** Values a renderer applies as CSS variables. */
 export interface WindowMaterialRender { surfaceAlpha: number; blurPx: number; saturatePct: number }
 
+/** Inclusive valid range per field, in the field's unit (opacity %, blur px, saturation %). */
 export const WINDOW_MATERIAL_RANGES: { readonly [K in keyof WindowMaterial]: { readonly min: number; readonly max: number } } = {
   opacity:    { min: 30,  max: 100 },
   blur:       { min: 0,   max: 40 },
@@ -22,20 +23,21 @@ export const WINDOW_MATERIAL_RANGES: { readonly [K in keyof WindowMaterial]: { r
 /** Apple-like defaults: `saturate(180%) blur(20px)`, fully opaque surfaces. */
 export const DEFAULT_WINDOW_MATERIAL: WindowMaterial = { opacity: 100, blur: 20, saturation: 180 };
 
+/** The `SettingsMap` key each field is persisted under. */
 export const WINDOW_MATERIAL_SETTING_KEYS = {
   opacity:    'window_opacity',
   blur:       'window_backdrop_blur',
   saturation: 'window_backdrop_saturation',
 } as const;
 
-export const WINDOW_MATERIAL_CLASS = 'window-material';
-
+/** Surfaces that carry the material backdrop, named by their `data-material-surface` attribute. */
 export const MATERIAL_SURFACES = [
   'titlebar', 'popout-titlebar', 'statusbar', 'activitybar', 'sidebar',
   'section-panel', 'chat-header', 'context-menu', 'hover-preview', 'toast',
 ] as const;
 export type MaterialSurface = typeof MATERIAL_SURFACES[number];
 
+/** URL query parameter that carries a new window's render values. */
 export const MATERIAL_QUERY_PARAM = 'material';
 
 const MATERIAL_FIELDS = Object.keys(WINDOW_MATERIAL_RANGES) as Array<keyof WindowMaterial>;
@@ -65,6 +67,14 @@ export function normalizeWindowMaterial(
     return clampField(field, isFiniteNumber(v) ? v : fallback[field]);
   };
   return { opacity: pick('opacity'), blur: pick('blur'), saturation: pick('saturation') };
+}
+
+/** Setting keys of the fields that differ between `before` and `after`, in field order. */
+export function changedMaterialKeys(
+  before: WindowMaterial,
+  after: WindowMaterial,
+): Array<typeof WINDOW_MATERIAL_SETTING_KEYS[keyof WindowMaterial]> {
+  return MATERIAL_FIELDS.filter((field) => before[field] !== after[field]).map((field) => WINDOW_MATERIAL_SETTING_KEYS[field]);
 }
 
 /** darwin: surfaceAlpha = opacity / 100. Other platforms: surfaceAlpha = 1. */
