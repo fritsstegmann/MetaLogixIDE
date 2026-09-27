@@ -368,9 +368,16 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-let persistedOpacity = 1.0;
+// Reads the stored `window_opacity` (30..100). Set once services exist; a
+// window created before then, or a failed read, stays fully opaque.
+let readWindowOpacity: (() => number) | null = null;
 export function applyPersistedOpacity(win: BrowserWindow): void {
-  win.setOpacity(persistedOpacity);
+  let opacity = 1;
+  try {
+    const percent = readWindowOpacity?.();
+    if (typeof percent === 'number' && Number.isFinite(percent)) opacity = Math.max(30, Math.min(100, percent)) / 100;
+  } catch { /* keep 1.0 */ }
+  win.setOpacity(opacity);
 }
 
 // Renderer signals it's mounted (App.tsx effect) so we can flush any
@@ -406,8 +413,8 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[metaide] boot rescan failed', e);
   }
-  // Load persisted opacity so it's applied to the first window right away.
-  try { persistedOpacity = Math.max(30, Math.min(100, services.settings.get('window_opacity'))) / 100; } catch { /* keep 1.0 */ }
+  // New windows read the current opacity setting when they are created.
+  readWindowOpacity = () => services.settings.get('window_opacity');
   mainWindow = await createMainWindow();
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
