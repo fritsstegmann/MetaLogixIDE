@@ -12,8 +12,6 @@ import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
-import { changedMaterialKeys, toRenderMaterial, WINDOW_MATERIAL_SETTING_KEYS, type WindowMaterial } from '@shared/window-material';
-import { applyWindowMaterial, readWindowMaterial } from '@main/domain/window-material';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
@@ -21,10 +19,6 @@ import { dirname, join, relative, resolve } from 'node:path';
 
 type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
-
-const MATERIAL_FIELD_BY_KEY = new Map<string, keyof WindowMaterial>(
-  Object.entries(WINDOW_MATERIAL_SETTING_KEYS).map(([field, key]) => [key, field as keyof WindowMaterial]),
-);
 
 // Keychain service name for the metaproject credential. One row per (service,
 // account) pair, keyed by username so a user could theoretically sign into
@@ -79,8 +73,6 @@ export interface WindowHooks {
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
   listPopped: () => Array<{ projectId: number; shellIndex: number }>;
   tileAll: () => number;
-  /** Apply the (already normalised) window material to every open window. */
-  applyWindowMaterial?: (m: WindowMaterial) => void;
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
@@ -490,17 +482,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { output, alive };
   },
 
-  'settings:get': async (s, { key }) => {
-    const field = MATERIAL_FIELD_BY_KEY.get(key);
-    if (field) return { value: readWindowMaterial(s.settings)[field] };
-    return { value: s.settings.get(key) };
-  },
+  'settings:get': async (s, { key }) => ({ value: s.settings.get(key) }),
   'settings:set': async (s, { key, value }) => {
     // The permission mode can only change through applyClaudePermissionMode
     // (settings:set-claude-permission-mode), which keeps it in lockstep with
     // the managed launch commands it rewrites — never via the generic setter.
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
-    if (MATERIAL_FIELD_BY_KEY.has(key)) throw new Error(`${key} can only be changed via app:set-window-material`);
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -546,8 +533,14 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true } as const;
   },
 
-  'app:set-window-material': async (s, patch) => applyWindowMaterial(s.settings, patch).material,
-  'app:get-window-render': async (s) => toRenderMaterial(readWindowMaterial(s.settings), process.platform),
+  'app:set-window-opacity': async (s, { percent }) => {
+    const clamped = Math.max(30, Math.min(100, Math.round(percent)));
+    s.settings.set('window_opacity', clamped);
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.setOpacity(clamped / 100);
+    }
+    return { ok: true } as const;
+  },
 
   /* ─── metaproject chat ─── */
   'metaproject:login': async (s, { username, password, remember }) => {
@@ -1184,7 +1177,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   // Wired separately below: its emitted `settings:changed` events are keyed
   // per changed setting, which the fixed per-channel CHANNEL_EMITS payload
   // (one static payload per event name) can't express.
-  const CUSTOM_EMIT_CHANNELS = new Set<IpcChannelName>(['settings:set-claude-permission-mode', 'app:set-window-material']);
+  const CUSTOM_EMIT_CHANNELS = new Set<IpcChannelName>(['settings:set-claude-permission-mode']);
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
     if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS.has(channel)) continue; // wired below
@@ -1200,15 +1193,6 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     const result = await handlers['settings:set-claude-permission-mode'](services, req);
     for (const key of result.changedKeys) sendEvent('settings:changed', { key });
     return result;
-  });
-
-  ipcMain.handle('app:set-window-material', async (_e, req: IpcRequest<'app:set-window-material'>) => {
-    const before = readWindowMaterial(services.settings);
-    const material = await handlers['app:set-window-material'](services, req);
-    const changedKeys = changedMaterialKeys(before, material);
-    for (const key of changedKeys) sendEvent('settings:changed', { key });
-    if (changedKeys.length > 0) windowHooks?.applyWindowMaterial?.(material);
-    return material;
   });
 
   ipcMain.handle('windows:popout-shell', async (_e, req: IpcRequest<'windows:popout-shell'>) => {

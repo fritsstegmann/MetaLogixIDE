@@ -55,8 +55,7 @@ export function HoverPreview({ state, onOpen }: { state: HoverPreviewState | nul
   const canClick = data?.found;
   return (
     <div
-      className="fixed z-50 w-[480px] max-h-[300px] rounded-md border border-[--border] bg-[--panel-strong] shadow-2xl window-material overflow-hidden text-[12px] pointer-events-auto"
-      data-material-surface="hover-preview"
+      className="fixed z-50 w-[480px] max-h-[300px] rounded-md border border-[--border] bg-[--panel-strong] shadow-2xl backdrop-blur-md overflow-hidden text-[12px] pointer-events-auto"
       style={{ left, top }}
       onClick={() => { if (canClick) onOpen(data.relPath, state.line); }}
       onMouseDown={(e) => e.preventDefault()}

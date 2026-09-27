@@ -9,12 +9,12 @@
  * so they read as near-solid black even against a bright desktop.
  */
 :root, :root[data-theme="dark"] {
-  --bg-base: rgba(22, 26, 34, 0.55);
-  --panel-base: rgba(28, 32, 40, 0.82);
-  --panel-strong-base: rgba(34, 38, 46, 0.92);
+  --bg: rgba(22, 26, 34, 0.55);
+  --panel: rgba(28, 32, 40, 0.82);
+  --panel-strong: rgba(34, 38, 46, 0.92);
   /* Slightly lifted dark-grey surface for chat & content panes so the
    * message rows read against a subtly different tone than the app chrome. */
-  --chat-surface-base: rgba(22, 26, 33, 0.75);
+  --chat-surface: rgba(22, 26, 33, 0.75);
   --chat-row-hover: rgba(255, 255, 255, 0.04);
   --scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
@@ -63,10 +63,10 @@
    * on top of vibrancy, so light needs a matching warm off-white overlay —
    * pure white feels blinding and colourful wallpapers bleed through if the
    * overlay is too translucent. */
-  --bg-base: rgba(236, 238, 243, 0.62);
-  --panel-base: rgba(232, 234, 240, 0.86);
-  --panel-strong-base: rgba(238, 240, 245, 0.94);
-  --chat-surface-base: rgba(240, 242, 246, 0.88);
+  --bg: rgba(236, 238, 243, 0.62);
+  --panel: rgba(232, 234, 240, 0.86);
+  --panel-strong: rgba(238, 240, 245, 0.94);
+  --chat-surface: rgba(240, 242, 246, 0.88);
   --chat-row-hover: rgba(0, 0, 0, 0.04);
   --scrollbar-thumb: rgba(0, 0, 0, 0.28);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.45);
@@ -108,10 +108,10 @@
 /* ── System-follow: only applies when no explicit data-theme is set ── */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg-base: rgba(236, 238, 243, 0.62);
-    --panel-base: rgba(232, 234, 240, 0.86);
-    --panel-strong-base: rgba(238, 240, 245, 0.94);
-    --chat-surface-base: rgba(240, 242, 246, 0.88);
+    --bg: rgba(236, 238, 243, 0.62);
+    --panel: rgba(232, 234, 240, 0.86);
+    --panel-strong: rgba(238, 240, 245, 0.94);
+    --chat-surface: rgba(240, 242, 246, 0.88);
     --chat-row-hover: rgba(0, 0, 0, 0.04);
     --scrollbar-thumb: rgba(0, 0, 0, 0.28);
     --scrollbar-thumb-hover: rgba(0, 0, 0, 0.45);
@@ -177,45 +177,6 @@
 ::selection {
   background: color-mix(in oklab, var(--accent) 60%, transparent);
   color: var(--text);
-}
-
-/* ── Window material ──
- * Each theme sets its surface tints as `*-base`; the public surface vars are
- * derived here with `--material-alpha` (the macOS "Window opacity" setting,
- * 0.30–1) scaling only their alpha, so text and icons are never faded.
- * `.window-material` gives translucent surfaces the Apple material,
- * `saturate(180%) blur(20px)` by default. `backdrop-filter` only sees what the
- * app itself paints behind an element: the desktop seen through the window is
- * blurred by the OS vibrancy material, which Electron exposes no control over.
- * window-material-sync.ts overrides the three `--material-*` vars inline on
- * <html>; these are the fallbacks until then.
- */
-:root {
-  --material-alpha: 1;
-  --material-blur: 20px;
-  --material-saturate: 180%;
-  --bg: rgb(from var(--bg-base) r g b / calc(alpha * var(--material-alpha)));
-  --panel: rgb(from var(--panel-base) r g b / calc(alpha * var(--material-alpha)));
-  --panel-strong: rgb(from var(--panel-strong-base) r g b / calc(alpha * var(--material-alpha)));
-  --chat-surface: rgb(from var(--chat-surface-base) r g b / calc(alpha * var(--material-alpha)));
-}
-
-.window-material {
-  backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturate));
-}
-
-/* OS "Reduce transparency": opaque surfaces and no backdrop blur anywhere
- * (material surfaces and modal scrims alike), live and whatever the settings. */
-@media (prefers-reduced-transparency: reduce) {
-  :root {
-    --bg: rgb(from var(--bg-base) r g b / 1);
-    --panel: rgb(from var(--panel-base) r g b / 1);
-    --panel-strong: rgb(from var(--panel-strong-base) r g b / 1);
-    --chat-surface: rgb(from var(--chat-surface-base) r g b / 1);
-  }
-  *, *::before, *::after {
-    backdrop-filter: none !important;
-  }
 }
 
 html, body {

@@ -16,8 +16,6 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'metaproject_base_url':          'https://projects.metalogix.solutions',
   'metaproject_last_username':     '',
   'window_opacity':                100,
-  'window_backdrop_blur':          20,
-  'window_backdrop_saturation':    180,
   'claude_permission_mode':        null,
   // Seeded named CLIs the "+ new shell" menu shows out of the box. The bare
   // "Terminal" (login $SHELL) is offered by the menu itself as a separate

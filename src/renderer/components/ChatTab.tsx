@@ -676,7 +676,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
     : projects;
 
   return (
-    <div data-material-surface="chat-header" className="shrink-0 border-b border-[--border] bg-[--panel]/60 window-material">
+    <div className="shrink-0 border-b border-[--border] bg-[--panel]/60 backdrop-blur-md">
       <div className="px-3 py-2.5">
         {mode === 'idle' && (
           <div className="flex items-start gap-3">
