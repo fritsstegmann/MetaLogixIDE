@@ -22,12 +22,19 @@
  *     text and the Terminal is private to ShellTab, so the spec reaches it
  *     through React's fiber on the terminal host element — the ref whose
  *     value is an xterm Terminal. The buffer is what the renderer paints.
- *  2. `shells:snapshot`, replayed the way ShellTab replays it into an
- *     `@xterm/headless` terminal of the same size — the IPC contract alone
- *     must reconstitute the screen.
+ *  2. `shells:snapshot`, replayed verbatim into an `@xterm/headless`
+ *     terminal of the same size — the IPC contract alone must reconstitute
+ *     the screen.
  * Positive control on both: the flood's last line (FLOOD-END, row 1) is on
  * screen — it is in the raw tail too, so it proves the reading works and
  * that only the footer is at stake.
+ *
+ * The last test covers ShellTab's replay itself (gate finding M1): ShellTab
+ * stripped a "partial ANSI head" — output starting with ESC and no letter in
+ * its first 32 characters lost everything up to the first newline. A
+ * serialized snapshot whose first cell has a truecolor fg and bg starts with
+ * exactly such an SGR, so row 1 was deleted and the screen and cursor moved
+ * up a row. mock-claude's `/truecolor-top` draws that screen.
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
@@ -52,11 +59,19 @@ const INPUT_BOX = '| > INPUT-BOX-MARK';
 const STATUS_PREFIX = 'STATUS-LINE-MARK model=mock tokens=';
 const FLOOD_END_RE = /FLOOD-END lines=(\d+) bytes=(\d+) size=(\d+)x(\d+)/;
 const SIZE_RE = /size: (\d+)x(\d+)/g;
+// /truecolor-top: row 1 marker with fg rgb(255,200,100) and bg rgb(100,150,200),
+// footer on the last row, cursor parked at row 3, column 5.
+const TC_TOP = 'TRUECOLOR-TOP-MARK';
+const TC_FOOTER_RE = /^TRUECOLOR-FOOTER-MARK size=(\d+)x(\d+)$/;
+const TC_FIRST_CELL = { fgRGB: true, bgRGB: true, fg: 0xffc864, bg: 0x6496c8 };
+const TC_CURSOR = { x: 4, y: 2 };
 
 type Size = { cols: number; rows: number };
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 type AliveShell = { projectId: number; projectName: string; shellIndex: number };
-type Screen = { cols: number; rows: number; lines: string[] };
+/** First cell's colours: `fg`/`bg` are 0xRRGGBB when the matching `*RGB` flag is set. */
+type Cell = { fgRGB: boolean; bgRGB: boolean; fg: number; bg: number };
+type Screen = { cols: number; rows: number; lines: string[]; cursor: { x: number; y: number }; firstCell: Cell | null };
 type Flood = { lines: number; bytes: number; size: Size };
 
 /** `shells:snapshot` output of one of the project's live shells. */
@@ -118,8 +133,10 @@ async function settledPtySize(win: Page, projectName: string): Promise<Size> {
  */
 async function visibleTerminalScreen(win: Page): Promise<Screen | null> {
   return win.evaluate(() => {
-    type Line = { translateToString: (trim: boolean) => string };
-    type Term = { cols: number; rows: number; buffer: { active: { viewportY: number; getLine: (y: number) => Line | undefined } } };
+    type BufCell = { isFgRGB: () => boolean; isBgRGB: () => boolean; getFgColor: () => number; getBgColor: () => number };
+    type Line = { translateToString: (trim: boolean) => string; getCell: (x: number) => BufCell | undefined };
+    type Buf = { viewportY: number; baseY: number; cursorX: number; cursorY: number; getLine: (y: number) => Line | undefined };
+    type Term = { cols: number; rows: number; buffer: { active: Buf } };
     type Hook = { memoizedState: unknown; next: Hook | null };
     type Fiber = { tag: number; memoizedState: unknown; return: Fiber | null };
     const isTerm = (v: unknown): v is Term =>
@@ -147,28 +164,31 @@ async function visibleTerminalScreen(win: Page): Promise<Screen | null> {
     const buf = term.buffer.active;
     const lines: string[] = [];
     for (let r = 0; r < term.rows; r++) lines.push(buf.getLine(buf.viewportY + r)?.translateToString(true) ?? '');
-    return { cols: term.cols, rows: term.rows, lines };
+    const c = buf.getLine(buf.viewportY)?.getCell(0);
+    const firstCell = c ? { fgRGB: c.isFgRGB(), bgRGB: c.isBgRGB(), fg: c.getFgColor(), bg: c.getBgColor() } : null;
+    // cursorY is relative to baseY; report it relative to the visible top row.
+    return { cols: term.cols, rows: term.rows, lines, cursor: { x: buf.cursorX, y: buf.baseY + buf.cursorY - buf.viewportY }, firstCell };
   });
 }
 
 /**
- * Replays a snapshot the way ShellTab.writeSnapshotAndFlush does — reset,
- * drop a partial-ANSI head, write, SGR reset — into a headless xterm of the
- * tab's size, and returns the rows on screen.
+ * Replays a snapshot verbatim — write, then SGR reset — into a headless xterm
+ * of the tab's size, and returns what is on screen. Deliberately NOT a copy
+ * of ShellTab's replay: whatever ShellTab does to the snapshot beyond this
+ * (it used to strip a "partial ANSI head", which ate row 0 of a serialized
+ * snapshot starting with a long truecolor SGR) is what the remounted-xterm
+ * reading is there to catch; this reading checks the IPC contract alone.
  */
-async function replaySnapshot(output: string, size: Size): Promise<string[]> {
+async function replaySnapshot(output: string, size: Size): Promise<Screen> {
   const term = new HeadlessTerminal({ cols: size.cols, rows: size.rows, scrollback: 10000, allowProposedApi: true });
   try {
-    let safe = output;
-    if (safe.startsWith('\x1b') && !/[A-Za-z]/.test(safe.slice(1, 32))) {
-      const nl = safe.indexOf('\n');
-      if (nl > -1 && nl < 2048) safe = safe.slice(nl + 1);
-    }
-    await new Promise<void>((done) => term.write(safe + '\x1b[0m', done));
+    await new Promise<void>((done) => term.write(output + '\x1b[0m', done));
     const buf = term.buffer.active;
     const lines: string[] = [];
     for (let r = 0; r < size.rows; r++) lines.push(buf.getLine(buf.viewportY + r)?.translateToString(true) ?? '');
-    return lines;
+    const c = buf.getLine(buf.viewportY)?.getCell(0);
+    const firstCell = c ? { fgRGB: c.isFgRGB(), bgRGB: c.isBgRGB(), fg: c.getFgColor(), bg: c.getBgColor() } : null;
+    return { cols: size.cols, rows: size.rows, lines, cursor: { x: buf.cursorX, y: buf.baseY + buf.cursorY - buf.viewportY }, firstCell };
   } finally {
     term.dispose();
   }
@@ -214,7 +234,7 @@ async function expectRemountedClaudeTab(win: Page, flood: Flood): Promise<void> 
   expectClaudeScreen(s.lines, flood, 'remounted xterm');
 
   const replayed = await replaySnapshot(await snapshotOutput(win, 'demo'), flood.size);
-  expectClaudeScreen(replayed, flood, 'shells:snapshot replay');
+  expectClaudeScreen(replayed.lines, flood, 'shells:snapshot replay');
 }
 
 async function setWindowSize(app: ElectronApplication, size: { width: number; height: number }): Promise<void> {
@@ -324,6 +344,58 @@ test('Claude tab shows its input box and status line after a long session when y
     await win.getByText('Node', { exact: true }).click();
 
     await expectRemountedClaudeTab(win, flood);
+  } finally {
+    await app.close();
+    cleanup();
+  }
+});
+
+/** What every reading of the /truecolor-top screen must show. */
+function expectTruecolorScreen(screen: Screen, size: Size, source: string): void {
+  // Positive control — the footer text survives the old strip (it only moves up a row).
+  expect(screen.lines.some((l) => TC_FOOTER_RE.test(l.trimEnd())), `${source}: footer somewhere on screen (positive control)`).toBe(true);
+  expect(screen.lines, `${source}: one line per terminal row`).toHaveLength(size.rows);
+  expect(screen.lines[0]!.trimEnd(), `${source}: truecolor marker on row 1`).toBe(TC_TOP);
+  expect(screen.firstCell, `${source}: row 1 first cell keeps its truecolor fg and bg`).toEqual(TC_FIRST_CELL);
+  expect(screen.lines[size.rows - 1]!.trimEnd(), `${source}: footer on the last row`).toBe(`TRUECOLOR-FOOTER-MARK size=${size.cols}x${size.rows}`);
+  expect(screen.cursor, `${source}: cursor at row 3, column 5`).toEqual(TC_CURSOR);
+}
+
+test('Claude tab keeps its first row and cursor after a remount when the screen starts with a truecolor cell', async () => {
+  const { app, win, cleanup } = await openDemoProject();
+  try {
+    const size = await settledPtySize(win, 'demo');
+    await writeToShell(win, 'demo', '/truecolor-top\r');
+    let output = '';
+    await expect.poll(async () => {
+      output = await snapshotOutput(win, 'demo');
+      return output.includes('TRUECOLOR-FOOTER-MARK');
+    }, { timeout: 10000 }).toBe(true);
+    // Precondition: the snapshot really opens with an ESC and no letter in
+    // its first 32 characters — the shape the old ShellTab strip cut.
+    expect(output.startsWith('\x1b') && !/[A-Za-z]/.test(output.slice(1, 32)),
+      `snapshot opens with a long SGR: ${JSON.stringify(output.slice(0, 48))}`).toBe(true);
+
+    // Control: the tab that stayed mounted shows the screen as drawn.
+    await expect.poll(async () => (await visibleTerminalScreen(win))?.lines.some((l) => TC_FOOTER_RE.test(l.trimEnd())) ?? false,
+      { timeout: 10000 }).toBe(true);
+    expectTruecolorScreen((await visibleTerminalScreen(win))!, size, 'live xterm before leaving the tab');
+
+    await win.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(win.locator('.xterm')).toHaveCount(0, { timeout: 5000 });
+    await win.getByRole('button', { name: 'Shell', exact: true }).click();
+    await expect(win.locator('.xterm').first()).toBeVisible({ timeout: 10000 });
+
+    let screen: Screen | null = null;
+    await expect.poll(async () => {
+      screen = await visibleTerminalScreen(win);
+      return screen?.lines.some((l) => TC_FOOTER_RE.test(l.trimEnd())) ?? false;
+    }, { timeout: 10000, message: 'remounted Claude terminal shows the footer' }).toBe(true);
+    const remounted = screen as unknown as Screen;
+    expect({ cols: remounted.cols, rows: remounted.rows }, 'remounted xterm size vs size the screen was drawn at').toEqual(size);
+    expectTruecolorScreen(remounted, size, 'remounted xterm');
+
+    expectTruecolorScreen(await replaySnapshot(await snapshotOutput(win, 'demo'), size), size, 'shells:snapshot replay');
   } finally {
     await app.close();
     cleanup();
