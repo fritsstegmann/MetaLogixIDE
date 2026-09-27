@@ -127,16 +127,12 @@ async function openProject(win: Page, name: string): Promise<void> {
 }
 
 /**
- * Real OS-level refocus of the actual BrowserWindow — the production
- * trigger `useWindowTerminalFocus` listens for. See the file header: the
- * Phase 5 red run was not a real flake in the app, it was Playwright's own
- * per-page CDP focus emulation (`Emulation.setFocusEmulationEnabled`,
- * enabled by default for every attached page —
- * `node_modules/playwright-core/lib/coreBundle.js:37054`), which makes the
- * page report itself focused regardless of the real `BrowserWindow` state.
- * That masked `blur()`, so the follow-up `focus()` produced no DOM `focus`
- * event to observe. Disabling emulation on this page's CDP session first
- * makes `blur()`/`focus()` drive the real thing.
+ * Dispatches a synthetic `focus` event on `window`, the event
+ * `useWindowTerminalFocus` listens for. This does not drive the real OS
+ * trigger. Playwright enables CDP focus emulation on every attached page
+ * (`node_modules/playwright-core/lib/coreBundle.js:37054`), and with that
+ * emulation off, `BrowserWindow.blur()` does not resign key while no other
+ * window or app can take focus. See the file header.
  */
 async function refocus(win: Page): Promise<void> {
   await win.evaluate(() => window.dispatchEvent(new Event('focus')));
