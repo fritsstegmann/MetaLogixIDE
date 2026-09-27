@@ -116,14 +116,14 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
         <div className="flex gap-1">
           <button
             onClick={addRoot}
-            className="flex-1 text-xs font-medium bg-[--panel-strong] border border-[--border] hover:bg-[--panel] transition rounded-md py-1.5"
+            className="flex-1 text-xs font-medium bg-[--panel-strong] border border-[--border] hover:bg-[--panel] pressable rounded-md py-1.5"
             title="Add a root directory"
           >
             + Root
           </button>
           <button
             onClick={onNewProject}
-            className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-white hover:brightness-110 active:brightness-95 transition rounded-md py-1.5"
+            className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-white hover:brightness-110 active:brightness-95 pressable rounded-md py-1.5"
             title="Create a new project (⌘⇧N)"
             data-testid="new-project-btn"
             disabled={!onNewProject}
@@ -279,7 +279,7 @@ function ProjectRow({
     <div
       onContextMenu={onContextMenu}
       title={`${project.path}\n(right-click for options)`}
-      className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition ${
+      className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition-colors ${
         selected ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong]'
       }`}
     >
@@ -302,7 +302,7 @@ function ProjectRow({
         <button
           onClick={unload}
           data-testid="row-unload"
-          className={`w-4 h-4 flex items-center justify-center rounded transition ${
+          className={`w-4 h-4 flex items-center justify-center rounded transition-colors ${
             selected
               ? 'text-white/80 hover:text-white hover:bg-white/15 opacity-100'
               : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--panel] opacity-0 group-hover:opacity-100 focus:opacity-100'
@@ -324,7 +324,6 @@ function RescanIcon({ spinning }: { spinning: boolean }) {
     <svg
       width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      className={spinning ? 'animate-spin-slow' : ''}
       style={spinning ? { animation: 'mp-spin 0.7s linear infinite' } : undefined}
     >
       <polyline points="23 4 23 10 17 10" />
@@ -493,7 +492,7 @@ function RenameProjectDialog({
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="text-xs font-medium px-3 py-1.5 rounded-md bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+            className="text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
           >
             {busy ? 'Renaming…' : 'Rename'}
           </button>

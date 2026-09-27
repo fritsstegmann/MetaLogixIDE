@@ -293,7 +293,7 @@ function FileTabBar({
             <span className="truncate max-w-[160px]">{name}</span>
             <button
               onClick={(e) => { e.stopPropagation(); onClose(f.relPath); }}
-              className={`w-4 h-4 flex items-center justify-center rounded transition ${
+              className={`w-4 h-4 flex items-center justify-center rounded transition-colors ${
                 active
                   ? 'text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]'
                   : 'text-[--text-muted] opacity-0 group-hover:opacity-100 hover:text-[--danger]'
@@ -574,7 +574,7 @@ function FilePreview({
               onClick={onSave}
               disabled={!dirty}
               className={`text-[11px] px-2 py-0.5 rounded ${
-                dirty ? 'bg-[color:var(--accent)] text-white hover:brightness-110' : 'bg-[--panel] text-[--text-muted] cursor-not-allowed'
+                dirty ? 'pressable bg-[color:var(--accent)] text-white hover:brightness-110' : 'bg-[--panel] text-[--text-muted] cursor-not-allowed'
               }`}
               title="Save (⌘S)"
               data-testid="file-save"
