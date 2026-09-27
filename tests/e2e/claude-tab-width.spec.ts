@@ -32,7 +32,7 @@ type Size = { cols: number; rows: number };
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 type AliveShell = { projectId: number; projectName: string; shellIndex: number };
 
-/** Raw PTY scrollback of the project's live primary shell (see project-lifecycle.spec.ts). */
+/** Serialized terminal state (screen + scrollback, not raw PTY bytes) of the project's live primary shell (see project-lifecycle.spec.ts). */
 async function shellOutput(win: Page, projectName: string): Promise<string> {
   return win.evaluate(async (name: string) => {
     const api = (window as unknown as { api: Api }).api;

@@ -20,8 +20,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Reads the shell's raw PTY scrollback via `shells:snapshot` for the given
- * project's primary (shellIndex 0) shell. Same helper as the other specs
+ * Reads the shell's terminal state via `shells:snapshot` (main's headless
+ * xterm, serialized: screen plus scrollback, with SGR and cursor moves —
+ * not raw PTY bytes) for the given project's primary (shellIndex 0)
+ * shell. Same helper as the other specs
  * (phase1-smoke.spec.ts etc.) — xterm renders via the WebGL addon with
  * screenReaderMode off, so there is no DOM text to assert against.
  */
