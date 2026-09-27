@@ -1,5 +1,6 @@
 import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
 import type { ClaudePermissionMode } from './claude-permission-mode';
+import type { WindowMaterial, WindowMaterialRender } from './window-material';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -173,6 +174,10 @@ export interface IpcContract {
 
   /** Set every open window's opacity. percent: 30..100. */
   'app:set-window-opacity': { request: { percent: number }; response: { ok: true } };
+  /** Persist a (partial) window material, clamped, and apply it to every window. Returns the normalised material. */
+  'app:set-window-material': { request: Partial<WindowMaterial>; response: WindowMaterial };
+  /** The render values (surface alpha, blur px, saturate %) this platform applies for the current material. */
+  'app:get-window-render':   { request: undefined; response: WindowMaterialRender };
   /** Returns the absolute path of the current electron-log file so users can attach it to a bug report. */
   'app:get-log-path':       { request: undefined; response: { path: string } };
   /** Returns the app version (`app.getVersion()`) for the status-bar footer / About dialog. */

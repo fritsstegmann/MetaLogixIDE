@@ -12,6 +12,7 @@ import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
+import type { WindowMaterial } from '@shared/window-material';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
@@ -73,6 +74,8 @@ export interface WindowHooks {
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
   listPopped: () => Array<{ projectId: number; shellIndex: number }>;
   tileAll: () => number;
+  /** Apply the (already normalised) window material to every open window. */
+  applyWindowMaterial?: (m: WindowMaterial) => void;
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
@@ -540,6 +543,13 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       if (!w.isDestroyed()) w.setOpacity(clamped / 100);
     }
     return { ok: true } as const;
+  },
+
+  'app:set-window-material': async () => {
+    throw new Error('not implemented');
+  },
+  'app:get-window-render': async () => {
+    throw new Error('not implemented');
   },
 
   /* ─── metaproject chat ─── */
