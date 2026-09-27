@@ -8,7 +8,7 @@ renderer calls the main process through the IPC API that the preload script
 exposes as `window.api` (`src/renderer/api.ts:4`).
 
 This document is incomplete. At this time it describes only the Markdown
-preview pipeline. The product design is in
+preview pipeline and terminal focus. The product design is in
 `docs/superpowers/specs/2026-07-18-metaide-design.md`.
 
 ## Components
@@ -57,8 +57,11 @@ Rules:
 - A notification click or a popout open requests a specific shell. The
   request expires after `FOCUS_REQUEST_TTL_MS`. It is honoured when no
   overlay is open and no text-entry element has focus.
-- The focus call runs synchronously in the window `focus` handler. An
-  activating click on a text field therefore keeps that field focused.
+- The focus call runs synchronously in the window `focus` handler. On
+  Windows and Linux, an activating click on a text field therefore keeps that
+  field focused. On macOS the activating click does not reach the page,
+  because `acceptFirstMouse` is off. The terminal takes focus, and a second
+  click moves focus to the field.
 - In-app shell tab and project switches do not move focus.
 
 ## Data Flow
@@ -131,6 +134,8 @@ Not applicable to the preview. It reads only the local file buffer.
   webContents `focus` and `blur` do not fire when the user switches between
   windows, so the coordinator listens on the renderer `window` instead.
   Unit tests cover the coordinator in the node environment. The E2E suite
-  (`tests/e2e/terminal-window-focus.spec.ts`) dispatches a `focus` event,
-  because a real `BrowserWindow.blur()`/`focus()` under Playwright did not
-  reliably deliver it.
+  (`tests/e2e/terminal-window-focus.spec.ts`) drives the trigger. Playwright
+  enables focus emulation on every page it attaches, so a real
+  `BrowserWindow.blur()`/`focus()` does not reliably deliver the renderer
+  `focus` event unless the spec turns that emulation off. Real macOS
+  activation delivers the event.
