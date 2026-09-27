@@ -32,6 +32,35 @@ Edit mode (`src/renderer/components/FilesTab.tsx:610`).
 | Adapter | `src/renderer/markdown/mermaid/mermaidRenderer.ts` | Wraps the `mermaid` library behind the `DiagramRenderer` interface. |
 | Contract | `src/renderer/markdown/contract.ts` | Class names, attributes, messages and types that the other files and the E2E suite share. |
 
+### Terminal focus
+
+When a window gains OS focus, the visible shell terminal takes keyboard
+focus, so typing goes to the Claude Code prompt without a click. One
+coordinator per window makes the decision. Each renderer window is its own
+JS realm, so a module-level instance gives one owner per window.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Logic | `src/renderer/terminal-focus.ts` | Classifies the active element, holds the focus rules, and builds the coordinator. DOM-free. |
+| Adapter | `src/renderer/hooks/useWindowTerminalFocus.ts` | Creates the window's one `terminalFocus` coordinator. Owns the `window` `focus` and `blur` listeners and passes the overlay flag. |
+| Presentation | `src/renderer/components/ShellTab.tsx` | Registers its terminal, and reports when it opens, when it is used, and when it unmounts. |
+| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, and forwards `shell:focus-request` and popout open to `requestFocus`. |
+
+Rules:
+
+- On window focus, a terminal takes focus only when no overlay is open and
+  focus is on nothing or on a non-text control. Focus in a text field, the
+  editor, the find box or the chat panel stays where it is.
+- The target is the last-used terminal, then the `primary` terminal, then
+  the only terminal. A target that has not opened yet takes focus when it
+  opens, and the rule is checked again at that moment.
+- A notification click or a popout open requests a specific shell. The
+  request expires after `FOCUS_REQUEST_TTL_MS`. It is honoured when no
+  overlay is open and no text-entry element has focus.
+- The focus call runs synchronously in the window `focus` handler. An
+  activating click on a text field therefore keeps that field focused.
+- In-app shell tab and project switches do not move focus.
+
 ## Data Flow
 
 1. `MarkdownPreview` calls `renderMarkdown(source)`. This is synchronous.
@@ -98,3 +127,10 @@ Not applicable to the preview. It reads only the local file buffer.
   is blocked. The renderer build excludes font files from asset inlining
   (`electron.vite.config.ts:63`). The KaTeX stylesheet is imported in
   `src/renderer/main.tsx:5`.
+- **Terminal focus uses the renderer `window` focus event.** On macOS,
+  webContents `focus` and `blur` do not fire when the user switches between
+  windows, so the coordinator listens on the renderer `window` instead.
+  Unit tests cover the coordinator in the node environment. The E2E suite
+  (`tests/e2e/terminal-window-focus.spec.ts`) dispatches a `focus` event,
+  because a real `BrowserWindow.blur()`/`focus()` under Playwright did not
+  reliably deliver it.
