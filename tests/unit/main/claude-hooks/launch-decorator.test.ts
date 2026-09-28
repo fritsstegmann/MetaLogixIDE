@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createLaunchDecorator } from '@main/claude-hooks/launch-decorator';
+import { createLaunchDecorator, goesThroughCmdShim } from '@main/claude-hooks/launch-decorator';
 import type { ResolvedLaunch } from '@main/domain/launch';
 
 const SETTINGS = '/home/u/.metaide/claude-hooks/settings.json';
@@ -120,3 +120,48 @@ describe('createLaunchDecorator — identity cases', () => {
     expect(sessions.release).not.toHaveBeenCalled();
   });
 });
+
+describe('createLaunchDecorator — Windows cmd.exe /c shim with a spaced settings path (AC22)', () => {
+  const SPACED = 'C:\\Users\\Jane Doe\\.metaide\\claude-hooks\\settings-5000.json';
+  const PLAIN = 'C:\\Users\\jane\\.metaide\\claude-hooks\\settings-5000.json';
+
+  function winSetup(settingsPath: string, platform: NodeJS.Platform, viaCmd: boolean) {
+    const sessions = { issue: vi.fn(() => ({ id: 'id-1', token: 'tok-1' })), release: vi.fn() };
+    const goesThroughCmd = vi.fn(() => viaCmd);
+    const decorate = createLaunchDecorator({ sessions, settingsPath: () => settingsPath, platform, goesThroughCmd });
+    return { decorate, sessions, goesThroughCmd };
+  }
+
+  it('win32 + spaced path + .cmd shim → same object, session released, none issued', () => {
+    const { decorate, sessions, goesThroughCmd } = winSetup(SPACED, 'win32', true);
+    const launch = launchOf(['claude', '--continue']);
+    expect(decorate(1, 0, launch)).toBe(launch);
+    expect(goesThroughCmd).toHaveBeenCalledWith(['claude', '--continue']);
+    expect(sessions.release).toHaveBeenCalledWith({ projectId: 1, shellIndex: 0 });
+    expect(sessions.issue).not.toHaveBeenCalled();
+  });
+
+  it('win32 + spaced path + native claude.exe → still decorated', () => {
+    const { decorate } = winSetup(SPACED, 'win32', false);
+    expect(decorate(1, 0, launchOf(['claude'])).argv).toEqual(['claude', '--settings', SPACED]);
+  });
+
+  it('win32 + .cmd shim + path without whitespace → still decorated', () => {
+    const { decorate } = winSetup(PLAIN, 'win32', true);
+    expect(decorate(1, 0, launchOf(['claude'])).argv).toEqual(['claude', '--settings', PLAIN]);
+  });
+
+  it('POSIX + spaced path → still decorated and never asks about cmd', () => {
+    const { decorate, goesThroughCmd } = winSetup('/Users/Jane Doe/.metaide/claude-hooks/settings-5000.json', 'darwin', true);
+    expect(decorate(1, 0, launchOf(['claude'])).argv).toEqual(['claude', '--settings', '/Users/Jane Doe/.metaide/claude-hooks/settings-5000.json']);
+    expect(goesThroughCmd).not.toHaveBeenCalled();
+  });
+});
+
+describe('goesThroughCmdShim', () => {
+  it.skipIf(process.platform === 'win32')('is false off Windows, where argv spawns as given', () => {
+    expect(goesThroughCmdShim(['claude', '--continue'])).toBe(false);
+    expect(goesThroughCmdShim(['/x/claude.cmd'])).toBe(false);
+  });
+});
+

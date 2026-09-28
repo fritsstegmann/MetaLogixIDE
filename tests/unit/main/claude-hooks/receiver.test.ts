@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { request } from 'node:http';
 import { inspect } from 'node:util';
+import { execFile } from 'node:child_process';
 import { ClaudeHookReceiver, type ReceivedHook } from '@main/claude-hooks/receiver';
 import type { ShellKey } from '@main/claude-hooks/session-registry';
 
@@ -98,6 +99,25 @@ describe('ClaudeHookReceiver — authorised events', () => {
     expect(res).toEqual({ status: 204, body: '' });
     await tick();
     warn.mockRestore();
+  });
+
+  it('sends the 204 before a slow synchronous listener runs (AC23)', async () => {
+    const { port } = await started(() => { const end = Date.now() + 500; while (Date.now() < end) { /* busy */ } });
+    const client = `
+      const http = require('node:http');
+      const t0 = Date.now();
+      const req = http.request({ host: '127.0.0.1', port: ${port}, method: 'POST', path: '/claude-hook', headers: ${JSON.stringify(goodHeaders(port))} }, (res) => {
+        process.stdout.write(JSON.stringify({ status: res.statusCode, ms: Date.now() - t0 }));
+        res.resume();
+        process.exit(0);
+      });
+      req.end(${JSON.stringify(STOP_BODY)});`;
+    const out = await new Promise<string>((resolveP, rejectP) => {
+      execFile(process.execPath, ['-e', client], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }, (err, stdout) => (err ? rejectP(err) : resolveP(stdout)));
+    });
+    const { status, ms } = JSON.parse(out) as { status: number; ms: number };
+    expect(status).toBe(204);
+    expect(ms).toBeLessThan(250);
   });
 
   it('answers 204 without waiting for a listener that never settles (AC23)', async () => {
