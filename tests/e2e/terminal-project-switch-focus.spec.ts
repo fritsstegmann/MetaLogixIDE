@@ -28,6 +28,13 @@
  * opened (its `.xterm-screen` exists, which xterm creates in `open()`, the
  * same synchronous block that notifies the focus coordinator).
  *
+ * AC8's second case needs beta's request issued before gamma is clicked,
+ * and beta's terminal opening while gamma's switch is still in flight. It
+ * holds both deterministically: terminal hosts are kept at zero size so
+ * ShellTab's open gate waits, and gamma's `projects:open` reply is held in
+ * the main process (`holdProjectOpen`); a capturing `focusin` recorder
+ * proves beta's textarea never took focus.
+ *
  * Not covered here, by design (plan §7): AC9 (TTL) and AC13 (single
  * `focus()` call) are unit-level; AC14 is the unmodified existing specs.
  * AC7 uses the sidebar filter and the switcher rather than the ChatTab
@@ -42,6 +49,8 @@ import {
   projectIdByName, aliveProjectNames, shellOutput, waitForShellOutput,
   typeReachesPty, marker, rememberedState, clickRowsInOneTask,
   switcherInput, switcherResult, newShellTab, sendNotificationFocusRequest,
+  holdProjectOpen, hideTerminalHosts, showTerminalHosts, recordFocusins,
+  rememberPrimaryTextarea, focusinsInclude,
   MOCK_CLAUDE_BANNER, PRIMARY,
 } from './helpers/focus';
 
@@ -311,9 +320,50 @@ test.describe('project switch focus', () => {
       expect(await focusedTerminalCount(win)).toBe(1);
       await waitForShellOutput(win, 'gamma', 0, MOCK_CLAUDE_BANNER);
       await typeReachesPty(win, 'gamma', 0, 'hi', 'echo: hi');
-      // The superseded pick never launches beta, so e2e cannot reach "beta
-      // opens before gamma"; that ordering is pinned by the unit suite.
+      // Here beta's pick is superseded before its reply, so beta never
+      // shows; the next test covers a beta that shows and opens first.
       expect(await aliveProjectNames(win), 'the superseded switch launched nothing').not.toContain('beta');
+    } finally {
+      await app.close();
+      cleanup();
+    }
+  });
+
+  test('AC8: beta\'s request issued, then gamma clicked before beta\'s terminal opens — beta never takes focus even though it opens first', async () => {
+    // beta's `projects:open` resolves (its request is issued and it shows),
+    // but its terminal is held at the open gate; gamma is clicked and its
+    // `projects:open` is held in flight; only then does beta's terminal
+    // open. The newer switch must have cancelled beta's request, so beta's
+    // `opened()` focuses nothing.
+    const { app, win, cleanup } = await launch(['alpha', 'beta', 'gamma']);
+    try {
+      await openProject(win, 'alpha');
+      const hold = await holdProjectOpen(app, await projectIdByName(win, 'gamma'));
+      const primaryScreen = win.locator(`${PRIMARY} .xterm-screen`);
+      await hideTerminalHosts(win);
+      await recordFocusins(win);
+
+      await projectRow(win, 'beta').click();
+      await waitForProjectShown(win, 'beta');
+      await expect(win.locator(`${PRIMARY} [data-testid="shell-tab"]`), 'positive control: beta\'s terminal is mounted').toHaveCount(1);
+      await expect(primaryScreen, 'positive control: beta\'s terminal has not opened yet').toHaveCount(0);
+
+      await projectRow(win, 'gamma').click();
+      await hold.waitReceived();
+      await expect(primaryScreen, 'setup: beta still unopened once gamma\'s open is in flight (open gate bails after ~2 s)').toHaveCount(0);
+
+      await showTerminalHosts(win);
+      await expect(primaryScreen, 'positive control: beta\'s terminal opened while gamma\'s switch was in flight').toBeVisible({ timeout: FOCUS_TIMEOUT });
+      expect(await win.title(), 'positive control: still showing beta').toBe('beta — MetaLogix IDE');
+      await rememberPrimaryTextarea(win, 'beta');
+
+      await hold.release();
+
+      await expect.poll(() => primaryTerminalFocusedFor(win, 'gamma'), { timeout: FOCUS_TIMEOUT }).toBe(true);
+      await rememberPrimaryTextarea(win, 'gamma');
+      expect(await focusinsInclude(win, 'gamma'), 'positive control: the focusin recorder saw gamma\'s terminal take focus').toBe(true);
+      expect(await focusinsInclude(win, 'beta'), 'beta\'s terminal never became document.activeElement').toBe(false);
+      await typeReachesPty(win, 'gamma', 0, 'hi', 'echo: hi');
     } finally {
       await app.close();
       cleanup();

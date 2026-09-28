@@ -290,3 +290,92 @@ export async function sendNotificationFocusRequest(
     w.webContents.send('shell:focus-request', p);
   }, payload);
 }
+
+type InvokeHandler = (event: unknown, ...args: unknown[]) => unknown;
+interface OpenHold { received: boolean; release: () => void }
+
+/**
+ * Holds the main process's `projects:open` reply for one project until
+ * `release()`, so a switch to it stays in flight for as long as the test
+ * needs (a slow `projects:open`, the case `pick`'s supersede guard exists
+ * for). Other projects' opens pass straight through. Replaces the
+ * registered handler via Electron's `ipcMain._invokeHandlers` map; the
+ * app is closed after each test, so it is never restored.
+ */
+export async function holdProjectOpen(app: ElectronApplication, projectId: number): Promise<{
+  waitReceived: () => Promise<void>;
+  release: () => Promise<void>;
+}> {
+  await app.evaluate(({ ipcMain }, id: number) => {
+    const handlers = (ipcMain as unknown as { _invokeHandlers?: Map<string, InvokeHandler> })._invokeHandlers;
+    const original = handlers?.get('projects:open');
+    if (!original) throw new Error('holdProjectOpen: no projects:open handler in ipcMain._invokeHandlers (Electron internals changed?)');
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const hold: OpenHold = { received: false, release };
+    (globalThis as unknown as { __e2eOpenHold: OpenHold }).__e2eOpenHold = hold;
+    ipcMain.removeHandler('projects:open');
+    ipcMain.handle('projects:open', async (event, req: { id?: number } | undefined) => {
+      if (req?.id === id) { hold.received = true; await gate; }
+      return original(event, req);
+    });
+  }, projectId);
+  return {
+    waitReceived: () => expect.poll(
+      () => app.evaluate(() => (globalThis as unknown as { __e2eOpenHold: OpenHold }).__e2eOpenHold.received),
+      { timeout: 5000, message: 'the held projects:open call reached the main process' },
+    ).toBe(true),
+    release: () => app.evaluate(() => { (globalThis as unknown as { __e2eOpenHold: OpenHold }).__e2eOpenHold.release(); }),
+  };
+}
+
+/**
+ * Keeps every terminal's host at zero size, so ShellTab's open gate (wait
+ * for a laid-out host, bail after ~2 s) holds `term.open()` back until
+ * `showTerminalHosts`. Stands in for a layout that is not ready yet.
+ */
+export async function hideTerminalHosts(win: Page): Promise<void> {
+  await win.evaluate(() => {
+    const style = document.createElement('style');
+    style.id = 'e2e-hide-terminal-hosts';
+    style.textContent = '[data-testid="shell-tab"] { display: none !important; }';
+    document.head.appendChild(style);
+  });
+}
+
+export async function showTerminalHosts(win: Page): Promise<void> {
+  await win.evaluate(() => { document.getElementById('e2e-hide-terminal-hosts')?.remove(); });
+}
+
+/**
+ * Records every element that gains focus from now on (capturing `focusin`
+ * on the document), so a test can prove an element NEVER became
+ * `document.activeElement`, not just that it is not focused at the end.
+ */
+export async function recordFocusins(win: Page): Promise<void> {
+  await win.evaluate(() => {
+    const w = window as unknown as { __e2eFocusins: EventTarget[] };
+    w.__e2eFocusins = [];
+    document.addEventListener('focusin', (e) => { if (e.target) w.__e2eFocusins.push(e.target); }, true);
+  });
+}
+
+/** Stashes the primary pane's current xterm textarea under `label` for a later `focusinsInclude`. */
+export async function rememberPrimaryTextarea(win: Page, label: string): Promise<void> {
+  await win.evaluate(({ sel, label }: { sel: string; label: string }) => {
+    const el = document.querySelector(`${sel} .xterm-helper-textarea`);
+    if (!el) throw new Error(`no xterm textarea in ${sel} to remember as ${label}`);
+    const w = window as unknown as { __e2eRemembered?: Record<string, Element> };
+    (w.__e2eRemembered ??= {})[label] = el;
+  }, { sel: PRIMARY, label });
+}
+
+/** Whether the element remembered under `label` ever received `focusin` since `recordFocusins`. */
+export async function focusinsInclude(win: Page, label: string): Promise<boolean> {
+  return win.evaluate((label: string) => {
+    const w = window as unknown as { __e2eFocusins: EventTarget[]; __e2eRemembered?: Record<string, Element> };
+    const el = w.__e2eRemembered?.[label];
+    if (!el) throw new Error(`nothing remembered as ${label}`);
+    return w.__e2eFocusins.includes(el);
+  }, label);
+}
