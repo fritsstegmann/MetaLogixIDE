@@ -23,6 +23,13 @@ export interface IpcContract {
   'projects:recents':       { request: { limit?: number };                      response: { projects: Project[] } };
   'projects:create':        { request: { rootId: number; name: string; initGit?: boolean }; response: { project: Project } };
   /**
+   * Given an absolute file path, guarantee there's a project whose root
+   * contains that file — creating a root + project for the file's parent
+   * directory if none exists. Used by the OS file-open flow so a
+   * double-clicked .md / .py always lands in an editor without a prompt.
+   */
+  'projects:ensure-for-file': { request: { path: string }; response: { project: Project; relPath: string } };
+  /**
    * Clones a remote git repo into `<root>/<name>` and registers it as a
    * project. When `name` is empty, defaults to the URL's repo basename
    * (`https://…/foo.git` → `foo`).

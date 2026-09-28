@@ -13,7 +13,7 @@ import { chooseEvictee } from '@main/pty/keep-alive';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
@@ -199,6 +199,40 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const project = s.projects.upsert(rootId, path, folder);
     s.projects.markLastOpened(project.id, new Date());
     return { project };
+  },
+  'projects:ensure-for-file': async (s, { path }) => {
+    // Silently guarantee a project whose root contains `path` — used by the
+    // OS file-open flow so a double-clicked .md/.py always lands in an
+    // editor without a "add to project?" confirm.
+    if (!path || !existsSync(path)) throw new Error(`file not found: ${path}`);
+    const abs = resolve(path);
+    const parent = dirname(abs);
+    const projects = s.projects.list();
+    const withSep = (p: string) => p.endsWith('/') ? p : p + '/';
+    let match = projects
+      .filter((p) => abs === p.path || abs.startsWith(withSep(p.path)))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (!match) {
+      // Reuse an existing root if one already contains the parent dir,
+      // otherwise add the parent as a new root. Either way, upsert the
+      // parent dir itself as a project so the file has a Files-tab home.
+      const roots = s.roots.list();
+      let root = roots.find((r) => parent === r.path || parent.startsWith(withSep(r.path)));
+      if (!root) {
+        root = s.roots.add(parent);
+        s.watcher.watch(parent);
+        for (const disc of discoverProjects(parent, s.settings.get('scan_depth'))) {
+          const p = s.projects.upsert(root.id, disc.path, disc.name);
+          if (disc.metaprojectProjectId) {
+            s.projects.updateConfig(p.id, { linkedMetaprojectProjectId: disc.metaprojectProjectId });
+          }
+        }
+      }
+      match = s.projects.upsert(root.id, parent, basename(parent));
+    }
+    s.projects.markLastOpened(match.id, new Date());
+    const relPath = abs === match.path ? '' : abs.slice(match.path.length + 1);
+    return { project: match, relPath };
   },
   'projects:rename': async (s, { id, newName, killShells = true }) => {
     const project = s.projects.get(id);
@@ -569,22 +603,36 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'metaproject:auto-login': async (s) => {
     if (s.metaproject.isLoggedIn()) return { ok: true, userName: s.metaproject.currentUserName() ?? undefined };
     const username = s.settings.get('metaproject_last_username') || null;
-    if (!username) return { ok: false, reason: 'no-saved-username' };
+    if (!username) {
+      log.info('[metaproject] auto-login skipped: no saved username');
+      return { ok: false, reason: 'no-saved-username' };
+    }
     let password: string | null = null;
     try {
       const keytar = await loadKeytar();
       password = await keytar.getPassword(KEYTAR_SERVICE, username);
     } catch (err) {
+      log.warn('[metaproject] auto-login: keychain read failed', err);
       return { ok: false, reason: `keychain-error: ${err instanceof Error ? err.message : String(err)}` };
     }
-    if (!password) return { ok: false, reason: 'no-saved-password' };
+    if (!password) {
+      // Common on dev builds: the packaged app wrote the item as
+      // `com.metalogix.metaide`, but dev-Electron runs as
+      // `com.github.Electron` so keytar returns null silently. Fall back to
+      // making the user re-enter the password once.
+      log.info(`[metaproject] auto-login skipped: no keychain password for user "${username}" (fresh login required)`);
+      return { ok: false, reason: 'no-saved-password' };
+    }
     const baseUrl = s.settings.get('metaproject_base_url') || 'https://projects.metalogix.solutions';
     try {
       const info = await s.metaproject.login({ baseUrl, username, password });
       s.metaproject.connectSocket();
+      log.info(`[metaproject] auto-login ok as ${info.userName}`);
       return { ok: true, userName: info.userName };
     } catch (err) {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn(`[metaproject] auto-login failed for "${username}": ${reason}`);
+      return { ok: false, reason };
     }
   },
   'metaproject:status': async (s) => ({
@@ -1119,6 +1167,7 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'projects:pin':   ['projects:changed'],
   'projects:hide':  ['projects:changed'],
   'projects:create':['projects:changed'],
+  'projects:ensure-for-file': ['projects:changed'],
   'projects:clone-git':['projects:changed'],
   'projects:rename': ['projects:changed', 'alive-shells:changed'],
   'metaproject:link-local-project': ['projects:changed'],

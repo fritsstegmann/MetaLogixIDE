@@ -72,13 +72,27 @@ function MainApp() {
     let cancelled = false;
     (async () => {
       try {
-        const { hasPassword } = await api.invoke('metaproject:credentials-load', undefined as never);
-        if (cancelled || !hasPassword) return;
-        const res = await api.invoke('metaproject:auto-login', undefined as never);
-        if (!cancelled && res.ok && res.userName) {
-          toast(`Signed in to metaproject as ${res.userName}`, { kind: 'success' });
+        const { username, hasPassword } = await api.invoke('metaproject:credentials-load', undefined as never);
+        if (cancelled) return;
+        if (!username) return;
+        if (!hasPassword) {
+          console.warn('[metaproject] saved username but no keychain password — you were signed out; sign in again to persist');
+          return;
         }
-      } catch { /* fine — user can still sign in via the chat card */ }
+        const res = await api.invoke('metaproject:auto-login', undefined as never);
+        if (cancelled) return;
+        if (res.ok && res.userName) {
+          toast(`Signed in to metaproject as ${res.userName}`, { kind: 'success' });
+        } else if (!res.ok) {
+          console.warn('[metaproject] auto-login failed:', res.reason);
+          toast('Metaproject auto-login failed — sign in again from the Chat tab', {
+            kind: 'error',
+            detail: res.reason ?? 'unknown reason',
+          });
+        }
+      } catch (e) {
+        console.warn('[metaproject] auto-login threw:', e);
+      }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -303,28 +317,18 @@ function MainApp() {
         const match = projects
           .filter((p) => path === p.path || path.startsWith(p.path.endsWith('/') ? p.path : p.path + '/'))
           .sort((a, b) => b.path.length - a.path.length)[0];
-        if (match) {
-          const relPath = path === match.path ? '' : path.slice(match.path.length + 1);
-          const { project } = await api.invoke('projects:open', { id: match.id });
-          lastPickIdRef.current = project.id;
-          setSelected(project);
-          try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
-          setMainTab('files');
-          if (relPath) requestAnimationFrame(() => setOpenInFiles({ relPath, line: null }));
-          return;
-        }
-        // No matching root — offer to add the file's parent directory as
-        // a new root. Uses window.confirm intentionally so the user's
-        // "I just clicked a file" gesture doesn't get lost in a modal.
-        const parent = path.replace(/\/[^/]*$/, '');
-        if (parent && window.confirm(`No metaIDE project contains this file.\n\nAdd its folder as a new root?\n\n${parent}`)) {
-          try {
-            await api.invoke('roots:add', { path: parent });
-            toast('Root added — pick the project from the sidebar', { kind: 'success' });
-          } catch (e) {
-            toast('Could not add root', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-          }
-        }
+        // Silently ensure a project exists for this file — creates a root +
+        // project for the parent dir if none already contains it. User asked
+        // to open a file; they shouldn't have to answer a confirm to do it.
+        const { project, relPath } = match
+          ? { project: match, relPath: path === match.path ? '' : path.slice(match.path.length + 1) }
+          : await api.invoke('projects:ensure-for-file', { path });
+        await api.invoke('projects:open', { id: project.id });
+        lastPickIdRef.current = project.id;
+        setSelected(project);
+        try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
+        setMainTab('files');
+        if (relPath) requestAnimationFrame(() => setOpenInFiles({ relPath, line: null }));
       } catch (e) {
         toast('Could not open file', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
       }
@@ -1270,7 +1274,7 @@ function ShellTabsBar({
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className="flex items-center gap-1 px-2 py-1 border-b border-[--border] bg-[--panel]/40 text-xs shrink-0 overflow-visible">
-      <div className="flex items-center gap-1 flex-1 overflow-x-auto">
+      <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
           // When the same CLI runs twice, disambiguate with a #N suffix.

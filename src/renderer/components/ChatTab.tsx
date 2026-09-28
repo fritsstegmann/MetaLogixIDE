@@ -377,7 +377,7 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
           <span className="opacity-60">·</span>
           <span className="font-mono">{activeChannel ? `#${activeChannel.name}` : 'no channel'}</span>
         </div>
-        <div ref={listRef} className="flex-1 overflow-y-auto py-2 bg-[--chat-surface]">
+        <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto py-2 bg-[--chat-surface]">
           {error && <div className="mx-3 mb-2 px-3 py-1.5 rounded-md text-xs bg-[--danger]/10 text-[--danger] border border-[--danger]/30">{error}</div>}
           {loadingMessages && messages.length === 0 && !error && (
             <div className="flex items-center justify-center gap-2 text-[--text-muted] text-sm p-6">
