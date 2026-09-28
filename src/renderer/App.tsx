@@ -99,7 +99,7 @@ function MainApp() {
     (v): v is 'shell' | 'files' => v === 'shell' || v === 'files',
   );
   const mainTabRef = useRef(mainTab);
-  useEffect(() => { mainTabRef.current = mainTab; }, [mainTab]);
+  mainTabRef.current = mainTab;
   // Unread chat count for the sidebar badge. Increments on every incoming
   // metaproject `channel_message` that arrives while the user isn't looking
   // at the chat pane. Clears the moment they switch to chat. Persists in
@@ -172,7 +172,7 @@ function MainApp() {
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
-  /** Sets the active shell of a named project, independent of the render's selected project (D14). */
+  /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
   const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
     const key = String(projectId);
     setProjectStates((prev) => ({
