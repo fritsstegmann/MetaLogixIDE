@@ -8,7 +8,7 @@ renderer calls the main process through the IPC API that the preload script
 exposes as `window.api` (`src/renderer/api.ts:4`).
 
 This document is incomplete. At this time it describes only the Markdown
-preview pipeline and terminal focus. The product design is in
+preview pipeline, terminal focus and Claude notifications. The product design is in
 `docs/superpowers/specs/2026-07-18-metaide-design.md`.
 
 ## Components
@@ -73,6 +73,50 @@ Rules:
 - In-app shell tab switches and main-tab (Files ↔ Shell) switches do not
   move focus.
 
+### Claude notifications
+
+The app shows an OS notification when Claude Code, running in an app
+shell, needs the user's input or finishes its turn. Claude Code reports
+these events through its own hooks. The app does not read terminal output
+or escape sequences for this.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| IO | `src/main/claude-hooks/receiver.ts` | Loopback HTTP server. Checks the request, authenticates it, answers `204`, then passes a typed event on. |
+| IO | `src/main/claude-hooks/settings-file.ts` | Builds, writes and removes the app-owned Claude Code settings file. |
+| Logic | `src/main/claude-hooks/hook-event.ts` | Parses a hook payload into a `HookEvent`. Classifies it as `needs-input`, `finished` or `ignored`. |
+| Logic | `src/main/claude-hooks/session-registry.ts` | Issues, verifies and releases the per-spawn id and secret. Records which shells are hook-confirmed. |
+| Logic | `src/main/claude-hooks/launch-decorator.ts` | Adds `--settings <file>` and the id and secret to the environment of a Claude launch, just before spawn. |
+| Logic | `src/main/claude-hooks/runtime.ts` | Starts the receiver, then writes the settings file. Stops both on quit. |
+| Contract | `src/main/claude-hooks/protocol.ts` | Hook path, header name and environment variable names. |
+| Logic | `src/main/notifications/claude-notifier.ts` | Decides if an event shows a notification, builds its text, and keeps one notification per shell. Also `withoutHookConfirmed`, the filter for the generic notifier. |
+| Logic | `src/main/notifications/viewed-shells.ts` | Holds the shells the main window shows. Decides if the user is viewing a shell. |
+| Adapter | `src/main/notifications/os-notifications.ts` | Wraps Electron `Notification`. Keeps each instance referenced until it is clicked or closed. |
+| Composition | `src/main/notifications/install.ts` | Connects the receiver, notifier, windows and PTY exit events. Builds the click navigation. |
+| Presentation | `src/renderer/viewed-shells.ts`, `src/renderer/hooks/useReportViewedShells.ts` | Derive the shells on screen and report them on `notifications:viewed-shells`. |
+| Presentation | `src/renderer/components/Settings.tsx` | The two toggles in Settings → General. |
+
+Rules:
+
+- A Claude shell is a shell whose launch argv starts with `claude`,
+  `claude.exe` or `claude.cmd` (`isClaudeArgv`). Other shells spawn
+  unchanged. A launch that already has `--settings` also spawns unchanged.
+- The stored launch argv is never decorated. `PtyManager` applies the
+  decorator to a copy inside `spawn`.
+- Needs input is a `Notification` event with `notification_type`
+  `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog` or
+  `agent_needs_input`. Claude Code's question prompt also arrives as
+  `permission_prompt`. Finished is a `Stop` event. All other events are
+  ignored, but any event marks the shell hook-confirmed.
+- The generic "Command finished" notifier skips hook-confirmed shells.
+  Before a shell is confirmed, the generic notifier is its fallback.
+- The user is viewing a shell when its popout window has focus, or when
+  the main window has focus, shows the shell, and the shell is not popped
+  out. In split view, both panes are shown.
+- A new notification for a shell closes the previous one. A PTY exit
+  releases the shell's session and closes its notification, unless a
+  respawn has already replaced that PTY.
+
 ## Data Flow
 
 1. `MarkdownPreview` calls `renderMarkdown(source)`. This is synchronous.
@@ -95,9 +139,39 @@ A link click in the preview always calls `preventDefault`
 Links inside a diagram do nothing. `http`, `https`, `mailto` and `file`
 links outside a diagram open through the `app:open-external` IPC channel.
 
+### Claude notification event
+
+1. At app start, `runtime.ts` starts the receiver on an ephemeral
+   `127.0.0.1` port. It then writes
+   `~/.metaide/claude-hooks/settings-<port>.json`. The file registers
+   `http` hooks for `Notification`, `Stop` and `UserPromptSubmit`, with a
+   timeout of 1 second.
+2. When a Claude shell spawns, the decorator issues a session id and a
+   secret. It adds `--settings <file>` after `argv[0]`, and
+   `METAIDE_HOOK_SHELL` and `METAIDE_HOOK_TOKEN` to the environment.
+3. Claude Code posts each hook event. It fills the `X-Metaide-Shell` and
+   `Authorization: Bearer` headers from those environment variables.
+4. The receiver checks method, path, `Host`, content type, body size and
+   the id and secret. It answers `204` with no body, and only then passes
+   the event on. Claude Code never gets a decision from the app.
+5. The notifier marks the shell hook-confirmed and classifies the event.
+   It reads the toggle, checks that notifications are supported, and checks
+   if the user is viewing the shell. Then it shows the notification.
+6. A click on a popped-out shell's notification focuses the popout.
+   Otherwise the main window is restored and focused, and
+   `shell:focus-request` is sent only while the shell is still alive.
+
 ## Authorization Model
 
 Not applicable to the preview. It reads only the local file buffer.
+
+The Claude hook receiver accepts requests only on `127.0.0.1`, with a
+`Host` header that matches its port. Each Claude spawn gets its own
+32-byte secret. The receiver compares it with `timingSafeEqual`. The
+secret is in the PTY environment only, never in argv, in the settings file
+or in logs. Processes that Claude starts inherit the secret, so they can
+raise notifications for that shell only. A released session no longer
+authenticates.
 
 ## Infrastructure Dependencies
 
@@ -149,3 +223,26 @@ Not applicable to the preview. It reads only the local file buffer.
   and with emulation off, `blur()` does not resign key while no other window
   or app can take focus. Real macOS app activation delivers the event; this
   was verified by hand, not by the suite.
+- **Claude events come from hooks, not terminal output.** By default,
+  Claude Code sends no bell and no notification escape sequence to an
+  xterm.js terminal. A bell also does not tell which event happened. The
+  hook payload gives the event type and message.
+- **Hooks are `http`, not `command`.** An `http` hook needs no shell,
+  `curl` or `node` on the PATH, so the same file works on Windows. HTTP
+  errors and timeouts do not block Claude Code.
+- **Hooks are injected with `--settings`.** Hook lists from `--settings`
+  merge with the user's and the project's hooks. The app does not write to
+  `~/.claude`, `~/.claude.json` or the project's `.claude/` directory.
+- **One settings file per app instance.** The file name has the receiver
+  port in it. Two instances that share one home directory, for example a
+  packaged app and a development build, do not redirect each other's
+  shells.
+- **`UserPromptSubmit` confirms the shell early.** `SessionStart` does not
+  support `http` hooks. `UserPromptSubmit` fires before each turn, so the
+  shell is confirmed before the generic notifier can fire during the turn.
+- **Notifications stay referenced.** Electron can garbage-collect a
+  `Notification` that only a local variable holds, and its `click` event
+  then does not fire (electron/electron#21610).
+- **Windows needs an AppUserModelID.** `index.ts` calls
+  `app.setAppUserModelId('com.metalogix.metaide')` on Windows. Windows and
+  Linux notifications were checked by code review only.
