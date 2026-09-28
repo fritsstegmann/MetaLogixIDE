@@ -101,6 +101,11 @@ Rules:
 - A Claude shell is a shell whose launch argv starts with `claude`,
   `claude.exe` or `claude.cmd` (`isClaudeArgv`). Other shells spawn
   unchanged. A launch that already has `--settings` also spawns unchanged.
+- On Windows, a launch that runs through `cmd.exe /c` (an npm `.cmd`
+  shim) spawns unchanged when the settings path contains whitespace.
+  node-pty quotes the shim path and the settings path, and `cmd /c` then
+  removes the outer quotes and cannot start Claude. That shell keeps the
+  generic notifier.
 - The stored launch argv is never decorated. `PtyManager` applies the
   decorator to a copy inside `spawn`.
 - Needs input is a `Notification` event with `notification_type`
