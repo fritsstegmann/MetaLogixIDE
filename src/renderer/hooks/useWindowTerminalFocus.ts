@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { classifyActiveElement, createTerminalFocusCoordinator, type ElementLike } from '@renderer/terminal-focus';
 
 function activeElement(): ElementLike | null {
@@ -23,7 +23,8 @@ export const terminalFocus = createTerminalFocusCoordinator({
  * which Chromium delivers afterwards, still wins.
  */
 export function useWindowTerminalFocus(overlayOpen: boolean): void {
-  useEffect(() => {
+  // Layout effect: a request issued after an awaited IPC call must already see a click-closed overlay as closed.
+  useLayoutEffect(() => {
     terminalFocus.setOverlayOpen(overlayOpen);
   }, [overlayOpen]);
 

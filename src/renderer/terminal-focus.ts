@@ -1,7 +1,7 @@
 // Decides whether, and which, shell terminal takes keyboard focus when a
-// window regains OS focus or a notification asks for a shell. DOM-free so
-// it runs in the node test environment; the DOM adapter lives in
-// hooks/useWindowTerminalFocus.ts.
+// window regains OS focus, a notification asks for a shell, or the user
+// switches project. DOM-free so it runs in the node test environment; the DOM
+// adapter lives in hooks/useWindowTerminalFocus.ts.
 
 export type ActiveElementKind = 'none' | 'terminal' | 'text-entry' | 'control';
 
@@ -57,6 +57,7 @@ export interface TerminalFocusCoordinator {
   setOverlayOpen(open: boolean): void;
   onWindowFocus(): void;
   onWindowBlur(): void;
+  /** Focus the terminal with exactly this key (notification, popout, scrollback jump). */
   requestFocus(key: ShellKey): void;
   /** Focus the primary (left-pane) terminal of `projectId` (project switch). */
   requestProjectFocus(projectId: number): void;
@@ -69,14 +70,15 @@ export interface CoordinatorDeps {
   now(): number;
 }
 
-interface PendingRequest { key: ShellKey; at: number }
+interface PendingRequest { matches(h: TerminalHandle): boolean; at: number }
 
 const sameKey = (a: ShellKey, b: ShellKey): boolean =>
   a.projectId === b.projectId && a.shellIndex === b.shellIndex;
 
 /** Per-window focus owner. It tracks registered terminals, the last-used one,
- *  a window-focus target still waiting for `term.open()`, and one notification
- *  request that expires after `FOCUS_REQUEST_TTL_MS`. Every deferred focus
+ *  a window-focus target still waiting for `term.open()`, and one focus request
+ *  (an exact shell, or a project's primary terminal) that a newer request
+ *  replaces and that expires after `FOCUS_REQUEST_TTL_MS`. Every deferred focus
  *  re-checks the rule at the moment it would fire. */
 class Coordinator implements TerminalFocusCoordinator {
   private readonly handles: TerminalHandle[] = [];
@@ -115,14 +117,22 @@ class Coordinator implements TerminalFocusCoordinator {
   }
 
   requestFocus(key: ShellKey): void {
-    this.request = { key, at: this.deps.now() };
-    const target = this.handles.find((h) => h.isOpen() && sameKey(h.key, key));
-    if (target && this.consumeRequest(target)) target.focus();
+    this.requestMatching((h) => sameKey(h.key, key));
   }
 
-  requestProjectFocus(): void {}
+  requestProjectFocus(projectId: number): void {
+    this.requestMatching((h) => h.primary && h.key.projectId === projectId);
+  }
 
-  cancelRequest(): void {}
+  cancelRequest(): void {
+    this.request = null;
+  }
+
+  private requestMatching(matches: (h: TerminalHandle) => boolean): void {
+    this.request = { matches, at: this.deps.now() };
+    const target = this.handles.find((h) => h.isOpen() && matches(h));
+    if (target && this.consumeRequest(target)) target.focus();
+  }
 
   private ruleInput(): { overlayOpen: boolean; active: ActiveElementKind } {
     return { overlayOpen: this.overlayOpen, active: this.deps.activeElementKind() };
@@ -139,7 +149,7 @@ class Coordinator implements TerminalFocusCoordinator {
       this.request = null;
       return false;
     }
-    if (!sameKey(this.request.key, handle.key)) return false;
+    if (!this.request.matches(handle)) return false;
     this.request = null;
     return shouldHonourRequest(this.ruleInput());
   }

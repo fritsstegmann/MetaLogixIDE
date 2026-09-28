@@ -98,6 +98,8 @@ function MainApp() {
     'shell',
     (v): v is 'shell' | 'files' => v === 'shell' || v === 'files',
   );
+  const mainTabRef = useRef(mainTab);
+  useEffect(() => { mainTabRef.current = mainTab; }, [mainTab]);
   // Unread chat count for the sidebar badge. Increments on every incoming
   // metaproject `channel_message` that arrives while the user isn't looking
   // at the chat pane. Clears the moment they switch to chat. Persists in
@@ -170,6 +172,14 @@ function MainApp() {
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
+  /** Sets the active shell of a named project, independent of the render's selected project (D14). */
+  const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
+    const key = String(projectId);
+    setProjectStates((prev) => ({
+      ...prev,
+      [key]: { rightShellIndex: null, splitRatio: 0.5, ...prev[key], activeShellIndex: idx },
+    }));
+  }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
@@ -368,15 +378,13 @@ function MainApp() {
           setSelected(project);
         }
         setMainTab('shell');
-        // Use requestAnimationFrame so we apply the shell index after the
-        // per-project state has picked up the new selection.
-        requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+        requestAnimationFrame(() => setActiveShellIndexFor(projectId, shellIndex));
       } catch (e) {
         toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
       }
     });
     return () => { off(); };
-  }, [setActiveShellIndex, setMainTab]);
+  }, [setActiveShellIndexFor, setMainTab]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -454,9 +462,11 @@ function MainApp() {
   const lastPickIdRef = useRef<number | null>(null);
   async function pick(p: Project) {
     lastPickIdRef.current = p.id;
+    terminalFocus.cancelRequest();
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
       if (lastPickIdRef.current !== p.id) return;    // superseded by a newer click
+      if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
       await api.invoke('shells:launch', { projectId: project.id });
     } catch (e) {
@@ -899,6 +909,7 @@ function MainApp() {
         open={scrollbackOpen}
         onClose={() => setScrollbackOpen(false)}
         onFocus={async (projectId, shellIndex) => {
+          terminalFocus.cancelRequest();
           try {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
@@ -906,7 +917,10 @@ function MainApp() {
               setSelected(project);
             }
             setMainTab('shell');
-            requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+            requestAnimationFrame(() => {
+              setActiveShellIndexFor(projectId, shellIndex);
+              terminalFocus.requestFocus({ projectId, shellIndex });
+            });
           } catch (e) {
             toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
           }
