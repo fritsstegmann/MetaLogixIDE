@@ -34,17 +34,18 @@ Edit mode (`src/renderer/components/FilesTab.tsx:610`).
 
 ### Terminal focus
 
-When a window gains OS focus, the visible shell terminal takes keyboard
-focus, so typing goes to the Claude Code prompt without a click. One
+When a window gains OS focus, or the user switches project, the visible
+shell terminal takes keyboard focus, so typing goes to the Claude Code
+prompt without a click. One
 coordinator per window makes the decision. Each renderer window is its own
 JS realm, so a module-level instance gives one owner per window.
 
 | Layer | File | Responsibility |
 |---|---|---|
 | Logic | `src/renderer/terminal-focus.ts` | Classifies the active element, holds the focus rules, and builds the coordinator. DOM-free. |
-| Adapter | `src/renderer/hooks/useWindowTerminalFocus.ts` | Creates the window's one `terminalFocus` coordinator. Owns the `window` `focus` and `blur` listeners and passes the overlay flag. |
+| Adapter | `src/renderer/hooks/useWindowTerminalFocus.ts` | Creates the window's one `terminalFocus` coordinator. Owns the `window` `focus` and `blur` listeners and passes the overlay flag in a layout effect. This is defensive: it keeps the flag current before any later task, such as an awaited IPC reply, issues a request. React 18 already flushes passive effects at the end of a click or key commit, so the existing tests pass with either effect. |
 | Presentation | `src/renderer/components/ShellTab.tsx` | Registers its terminal, and reports when it opens, when it is used, and when it unmounts. |
-| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, and forwards `shell:focus-request` and popout open to `requestFocus`. |
+| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, forwards `shell:focus-request`, popout open and scrollback-search jumps to `requestFocus`, and project switches (sidebar, switcher, new-project dialog) to `requestProjectFocus`. |
 
 Rules:
 
@@ -54,15 +55,23 @@ Rules:
 - The target is the last-used terminal, then the `primary` terminal, then
   the only terminal. A target that has not opened yet takes focus when it
   opens, and the rule is checked again at that moment.
-- A notification click or a popout open requests a specific shell. The
-  request expires after `FOCUS_REQUEST_TTL_MS`. It is honoured when no
-  overlay is open and no text-entry element has focus.
+- A notification click, a popout open or a jump from scrollback search
+  requests a specific shell. A project switch requests the target
+  project's `primary` (left-pane) terminal, whichever shell it shows. There
+  is one pending request; a newer one replaces it, and starting a new
+  switch or scrollback jump cancels it. A switch that lands on the Files
+  tab requests nothing.
+- A request expires after `FOCUS_REQUEST_TTL_MS`. It is honoured when no
+  overlay is open and no text-entry element has focus, checked when the
+  terminal opens, or at once when it is already open. A window blur drops
+  it.
 - The focus call runs synchronously in the window `focus` handler. On
   Windows and Linux, an activating click on a text field therefore keeps that
   field focused. On macOS the activating click does not reach the page,
   because `acceptFirstMouse` is off. The terminal takes focus, and a second
   click moves focus to the field.
-- In-app shell tab and project switches do not move focus.
+- In-app shell tab switches and main-tab (Files ↔ Shell) switches do not
+  move focus.
 
 ## Data Flow
 
