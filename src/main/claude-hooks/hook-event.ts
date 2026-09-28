@@ -1,8 +1,9 @@
 /**
- * Typed view of a Claude Code hook POST body, its parser and its classifier.
- * Single home of the needs-input `notification_type` set (spec risk
- * "payload drift").
+ * Typed view of a Claude Code hook POST body, its parser, its notification
+ * classifier and its Claude-state transition. Single home of the
+ * needs-input `notification_type` set (spec risk "payload drift").
  */
+import type { ClaudeShellState } from '@shared/claude-state';
 
 /** The subset of a Claude Code hook input the app uses; every other field is dropped at parse time. */
 export interface HookEvent {
@@ -51,4 +52,31 @@ export function classifyHookEvent(event: HookEvent): HookEventKind {
   if (event.hookEventName === 'Stop') return 'finished';
   if (event.hookEventName !== 'Notification' || event.notificationType === null) return 'ignored';
   return NEEDS_INPUT_TYPES.has(event.notificationType) ? 'needs-input' : 'ignored';
+}
+
+const STATE_BY_EVENT: ReadonlyMap<string, ClaudeShellState> = new Map([
+  ['UserPromptSubmit', 'busy'],
+  ['PreToolUse', 'busy'],
+  ['PostToolUse', 'busy'],
+  ['PostToolUseFailure', 'busy'],
+  ['PermissionRequest', 'blocked'],
+  ['Stop', 'idle'],
+  ['StopFailure', 'idle'],
+]);
+
+function notificationTransition(notificationType: string | null): ClaudeShellState | null {
+  if (notificationType === null) return null;
+  if (NEEDS_INPUT_TYPES.has(notificationType)) return 'blocked';
+  return notificationType === 'idle_prompt' ? 'idle' : null;
+}
+
+/**
+ * The Claude state a hook event moves its shell to, or null when the event
+ * leaves the state unchanged. Single home of the spec's hook-event
+ * transition table; independent of `classifyHookEvent`, which drives
+ * notifications only.
+ */
+export function stateTransitionFor(event: HookEvent): ClaudeShellState | null {
+  if (event.hookEventName === 'Notification') return notificationTransition(event.notificationType);
+  return STATE_BY_EVENT.get(event.hookEventName) ?? null;
 }

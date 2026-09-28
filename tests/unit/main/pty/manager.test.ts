@@ -48,6 +48,34 @@ describe('PtyManager', () => {
     await mgr.kill(2, 0);
   });
 
+  it('write emits input with the shell identity and the exact data, after writing it to the PTY', async () => {
+    const mgr = new PtyManager();
+    await mgr.spawn(20, 1, launch());
+    await untilData(mgr, 20, '> ');
+    const inputs: unknown[] = [];
+    mgr.on('input', (ev) => inputs.push(ev));
+    const echoed = untilData(mgr, 20, 'echo: yes');
+    mgr.write(20, 1, 'yes\r');
+    mgr.write(20, 1, '\x1b[A');
+    expect(inputs).toEqual([
+      { projectId: 20, shellIndex: 1, data: 'yes\r' },
+      { projectId: 20, shellIndex: 1, data: '\x1b[A' },
+    ]);
+    await echoed;
+    await mgr.kill(20, 1);
+  });
+
+  it('write to a shell that is not alive emits no input', async () => {
+    const mgr = new PtyManager();
+    await mgr.spawn(21, 0, launch());
+    await mgr.kill(21, 0);
+    const inputs: unknown[] = [];
+    mgr.on('input', (ev) => inputs.push(ev));
+    mgr.write(21, 0, '\r');
+    mgr.write(99, 0, '\r');
+    expect(inputs).toEqual([]);
+  });
+
   it('kill removes the entry from list', async () => {
     const mgr = new PtyManager();
     await mgr.spawn(3, 0, launch());

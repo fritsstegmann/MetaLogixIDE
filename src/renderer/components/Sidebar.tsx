@@ -3,10 +3,13 @@ import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
+import { useOverallClaudeState, useProjectClaudeState } from '@renderer/hooks/useClaudeStates';
 import type { Project, Root } from '@shared/types';
+import type { ClaudeShellState } from '@shared/claude-state';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { StatusDot } from './StatusDot';
 
 interface Props {
   selectedProjectId: number | null;
@@ -20,6 +23,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
   const { aliveIds } = useAliveShellIds();
+  const overallClaudeState = useOverallClaudeState();
   const [filter, setFilter] = useState('');
 
   // Stable order for the "In use" section: each project keeps the seq
@@ -135,7 +139,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
 
       <div className="flex-1 overflow-y-auto py-1">
         {inUse.length > 0 && (
-          <Section title="In use" testId="section-in-use" accent>
+          <Section title="In use" testId="section-in-use" accent dotState={overallClaudeState}>
             {inUse.map((p) => (
               <ProjectRow
                 key={p.id}
@@ -201,8 +205,15 @@ function writeCollapsedSections(set: Set<string>): void {
 }
 
 function Section({
-  title, testId, accent = false, children,
-}: { title: string; testId: string; accent?: boolean; children: React.ReactNode }) {
+  title, testId, accent = false, dotState, children,
+}: {
+  title: string;
+  testId: string;
+  accent?: boolean;
+  /** Worst Claude state across the section's shells (D4); only meaningful when `accent` is set. */
+  dotState?: ClaudeShellState;
+  children: React.ReactNode;
+}) {
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(readCollapsedSections);
   const collapsed = collapsedSet.has(title);
   function toggle() {
@@ -223,7 +234,7 @@ function Section({
         className="w-full px-3 pt-2 pb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-[--text] hover:text-[--text] hover:bg-[--panel]/60"
       >
         <span className="inline-block w-3 transition-transform text-[--text-muted]" style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}>▾</span>
-        {accent && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 live-dot" />}
+        {accent && <StatusDot state={dotState ?? 'idle'} />}
         <span className={accent ? '' : 'text-[--text-muted]'}>{title}</span>
       </button>
       {!collapsed && children}
@@ -247,6 +258,7 @@ function ProjectRow({
   onRename: (p: Project) => void;
   indent?: number;
 }) {
+  const claudeState = useProjectClaudeState(project.id);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   async function unload(e: React.MouseEvent) {
     e.stopPropagation();
@@ -290,12 +302,16 @@ function ProjectRow({
         className="flex-1 min-w-0 flex items-center gap-2 text-left"
         style={{ paddingLeft: indent }}
       >
-        <span
-          aria-hidden
-          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
-            alive ? 'bg-green-500 live-dot' : selected ? 'bg-white/70' : 'bg-transparent border border-[--border]'
-          }`}
-        />
+        {alive ? (
+          <StatusDot state={claudeState} className="shrink-0" />
+        ) : (
+          <span
+            aria-hidden
+            className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+              selected ? 'bg-white/70' : 'bg-transparent border border-[--border]'
+            }`}
+          />
+        )}
         <span className="truncate">{project.name}</span>
       </button>
       {alive && (

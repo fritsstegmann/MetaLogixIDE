@@ -32,6 +32,22 @@ function goodHeaders(port: number, extra: Record<string, string> = {}): Record<s
 
 const STOP_BODY = JSON.stringify({ session_id: 's', hook_event_name: 'Stop', last_assistant_message: 'x' });
 const tick = () => new Promise((r) => setTimeout(r, 20));
+const MIB = 1024 * 1024;
+
+/** Sends headers plus the start of a body that never completes; resolves with the reply status, or 'closed'. */
+function partialSend(port: number, headers: Record<string, string>, start: string): Promise<string> {
+  return new Promise((resolveP) => {
+    const req = request({ host: '127.0.0.1', port, method: 'POST', path: '/claude-hook', headers }, (res) => { res.resume(); resolveP(`status ${res.statusCode}`); req.destroy(); });
+    req.on('error', () => resolveP('closed'));
+    req.write(start);
+  });
+}
+
+/** A valid Stop body padded to exactly `bytes` bytes. */
+function paddedBody(bytes: number): string {
+  const skeleton = JSON.stringify({ hook_event_name: 'Stop', pad: '' });
+  return JSON.stringify({ hook_event_name: 'Stop', pad: 'x'.repeat(bytes - skeleton.length) });
+}
 
 let receiver: ClaudeHookReceiver | null = null;
 
@@ -83,13 +99,30 @@ describe('ClaudeHookReceiver — authorised events', () => {
     expect(res.status).toBe(204);
   });
 
-  it('accepts a body of exactly 64 KiB', async () => {
+  it('accepts a body of exactly 1 MiB and dispatches it (AC23)', async () => {
     const listener = vi.fn();
     const { port } = await started(listener);
-    const skeleton = JSON.stringify({ hook_event_name: 'Stop', pad: '' });
-    const body = JSON.stringify({ hook_event_name: 'Stop', pad: 'x'.repeat(64 * 1024 - skeleton.length) });
-    expect(Buffer.byteLength(body)).toBe(64 * 1024);
+    const body = paddedBody(MIB);
+    expect(Buffer.byteLength(body)).toBe(MIB);
     expect((await send(port, { headers: goodHeaders(port), body })).status).toBe(204);
+    await tick();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a PostToolUse body well over the old 64 KiB cap (AC23)', async () => {
+    const { port } = await started();
+    const body = JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: { content: 'x'.repeat(200 * 1024) } });
+    expect((await send(port, { headers: goodHeaders(port), body })).status).toBe(204);
+  });
+
+  it('answers PermissionRequest with 204 and an empty body, so no decision is ever returned (AC13)', async () => {
+    const listener = vi.fn();
+    const { port } = await started(listener);
+    const body = JSON.stringify({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } });
+    const res = await send(port, { headers: goodHeaders(port), body });
+    expect(res).toEqual({ status: 204, body: '' });
+    await tick();
+    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'PermissionRequest', notificationType: null, message: null } });
   });
 
   it('still answers 204 when the listener throws (AC23)', async () => {
@@ -151,7 +184,6 @@ describe('ClaudeHookReceiver — rejections never reach the listener (AC24)', ()
     ['text/plain', 415, (p) => ({ headers: goodHeaders(p, { 'Content-Type': 'text/plain' }), body: STOP_BODY })],
     ['a form content type', 415, (p) => ({ headers: goodHeaders(p, { 'Content-Type': 'application/x-www-form-urlencoded' }), body: STOP_BODY })],
     ['no content type', 415, (p) => { const h = goodHeaders(p); delete h['Content-Type']; return { headers: h, body: STOP_BODY }; }],
-    ['a 65 KiB body', 413, (p) => ({ headers: goodHeaders(p), body: JSON.stringify({ hook_event_name: 'Stop', pad: 'x'.repeat(65 * 1024) }) })],
     ['invalid JSON', 400, (p) => ({ headers: goodHeaders(p), body: '{"hook_event_name":' })],
     ['JSON of the wrong shape', 400, (p) => ({ headers: goodHeaders(p), body: JSON.stringify({ message: 'no event name' }) })],
     ['a JSON array', 400, (p) => ({ headers: goodHeaders(p), body: '[]' })],
@@ -183,6 +215,45 @@ describe('ClaudeHookReceiver — rejections never reach the listener (AC24)', ()
     expect(listener).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('answers 413 to a declared Content-Length of 1 MiB + 1 byte without waiting for the body (AC23)', async () => {
+    const listener = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { port } = await started(listener, 1500);
+    const headers = { ...goodHeaders(port), 'Content-Length': String(MIB + 1) };
+    expect(await partialSend(port, headers, '{"hook_event_name":"Stop","pad":"')).toBe('status 413');
+    await tick();
+    expect(listener).not.toHaveBeenCalled();
+    warn.mockRestore();
+  }, 5000);
+
+  it('stops a chunked body at 1 MiB + 1 byte and never dispatches it (AC23)', async () => {
+    const listener = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { port } = await started(listener);
+    const outcome = await new Promise<string>((resolveP) => {
+      const req = request({ host: '127.0.0.1', port, method: 'POST', path: '/claude-hook', headers: { ...goodHeaders(port), 'Transfer-Encoding': 'chunked' } }, (res) => { res.resume(); resolveP(`status ${res.statusCode}`); });
+      req.on('error', () => resolveP('closed'));
+      const body = paddedBody(MIB + 1);
+      for (let i = 0; i < body.length; i += 64 * 1024) req.write(body.slice(i, i + 64 * 1024));
+      req.end();
+    });
+    expect(['status 413', 'closed']).toContain(outcome);
+    await tick();
+    expect(listener).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('answers an unauthenticated 2 MiB request 401 without reading its body (AC23)', async () => {
+    const listener = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { port } = await started(listener, 1500);
+    const headers = { ...goodHeaders(port, { Authorization: 'Bearer nope' }), 'Content-Length': String(2 * MIB) };
+    expect(await partialSend(port, headers, '{"hook_event_name":"Stop","pad":"')).toBe('status 401');
+    await tick();
+    expect(listener).not.toHaveBeenCalled();
+    warn.mockRestore();
+  }, 5000);
 
   it('never logs the token or the body', async () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));

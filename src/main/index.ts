@@ -8,6 +8,8 @@ import { buildServices, type Services } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
+import { installClaudeStatus } from './claude-status/install';
+import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 
 // Route console.log/warn/error to a rolling file at
@@ -442,8 +444,9 @@ app.whenReady().then(async () => {
     tileAll: () => tileAllOurWindows(),
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
+  const hooks = createHookFanout(services.hookReceiver);
   installClaudeNotifications({
-    receiver: services.hookReceiver,
+    receiver: hooks,
     sessions: services.hookSessions,
     ptyManager: services.ptyManager,
     viewedShells: services.viewedShells,
@@ -455,6 +458,12 @@ app.whenReady().then(async () => {
       popout: (s) => popoutWindows.get(`${s.projectId}:${s.shellIndex}`) ?? null,
       focused: () => BrowserWindow.getFocusedWindow(),
     },
+    broadcast,
+  });
+  const claudeStatus = installClaudeStatus({
+    receiver: hooks,
+    tracker: services.claudeState,
+    ptyManager: services.ptyManager,
     broadcast,
   });
 
@@ -515,6 +524,7 @@ app.whenReady().then(async () => {
 
   app.on('before-quit', () => {
     clearInterval(donePoll);
+    claudeStatus.stop();
     void services.hookRuntime.stop();
   });
 });

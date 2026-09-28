@@ -25,5 +25,5 @@ export const CLAUDE_STATE_LABEL: Readonly<Record<ClaudeShellState, string>> = {
 /** DOM hooks shared by StatusDot and the E2E suite. */
 export const CLAUDE_DOT = { testId: 'claude-dot', stateAttr: 'data-claude-state' } as const;
 
-/** Test id of a shell tab element; the element also carries `data-shell-index`. */
-export const SHELL_TAB_TEST_ID = 'shell-tab';
+/** Test id of a shell tab button in the tab strip (distinct from ShellTab.tsx's `shell-tab` terminal container); it also carries `data-shell-index`. */
+export const SHELL_TAB_TEST_ID = 'shell-tab-button';

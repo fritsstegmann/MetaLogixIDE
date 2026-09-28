@@ -101,4 +101,32 @@ describe('SessionRegistry', () => {
     reg.issue(A);
     expect(reg.isConfirmed(A)).toBe(false);
   });
+  it('currentId is null for a shell that was never issued a session', () => {
+    expect(new SessionRegistry().currentId(A)).toBeNull();
+  });
+
+  it('currentId returns the issued id, per shell', () => {
+    const reg = new SessionRegistry();
+    const a = reg.issue(A);
+    const b = reg.issue(B);
+    expect(reg.currentId(A)).toBe(a.id);
+    expect(reg.currentId(B)).toBe(b.id);
+  });
+
+  it('currentId is null after release, and other shells keep theirs', () => {
+    const reg = new SessionRegistry();
+    reg.issue(A);
+    const b = reg.issue(B);
+    reg.release(A);
+    expect(reg.currentId(A)).toBeNull();
+    expect(reg.currentId(B)).toBe(b.id);
+  });
+
+  it('currentId follows a re-issue to the new id', () => {
+    const reg = new SessionRegistry();
+    const old = reg.issue(A);
+    const fresh = reg.issue(A);
+    expect(reg.currentId(A)).toBe(fresh.id);
+    expect(reg.currentId(A)).not.toBe(old.id);
+  });
 });

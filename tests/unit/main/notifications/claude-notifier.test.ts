@@ -98,6 +98,26 @@ describe('ClaudeNotifier — ignored events (AC3)', () => {
     notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: null } });
     expect(shown).toHaveLength(0);
   });
+
+  it.each([['PermissionRequest'], ['PreToolUse'], ['PostToolUse'], ['PostToolUseFailure'], ['StopFailure']])(
+    '%s, a status-dot hook, shows nothing (status-dots AC12)',
+    (name) => {
+      const { notifier, shown, deps } = setup();
+      notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: 'Claude needs your permission to use Bash' } });
+      expect(shown).toHaveLength(0);
+      expect(deps.notifications.show).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a status-dot hook does not close or replace an outstanding notification (status-dots AC12)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(notification(API0, 'permission_prompt'));
+    for (const name of ['PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'StopFailure']) {
+      notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: null } });
+    }
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.closed).toBe(false);
+  });
 });
 
 describe('ClaudeNotifier — hook confirmation (AC18)', () => {
