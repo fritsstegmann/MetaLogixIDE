@@ -30,6 +30,7 @@ import { usePoppedShells } from './hooks/usePoppedShells';
 import { useProjectShells } from './hooks/useProjectShells';
 import { useGitStatus } from './hooks/useGitStatus';
 import { terminalFocus, useWindowTerminalFocus } from './hooks/useWindowTerminalFocus';
+import { useReportViewedShells } from './hooks/useReportViewedShells';
 import { Tooltip } from './components/Tooltip';
 import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -215,6 +216,7 @@ function MainApp() {
     || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
     || permissionMode.status === 'unchosen';
   useWindowTerminalFocus(overlayOpen);
+  useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const { status: git } = useGitStatus(selected?.id ?? null);

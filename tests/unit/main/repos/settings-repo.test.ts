@@ -136,4 +136,29 @@ describe('SettingsRepo', () => {
       expect(repo.get('scan_depth')).toBe(DEFAULT_SETTINGS.scan_depth);
     });
   });
+
+  it('AC20 — Claude notification toggles default to on for a fresh install (pinned to literals)', () => {
+    const repo = seed();
+    expect(repo.get('notify_claude_needs_input')).toBe(true);
+    expect(repo.get('notify_claude_finished')).toBe(true);
+  });
+
+  it('AC20 — an upgraded DB without the toggle rows gets them seeded on', () => {
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+    runMigrations(db, migrationsDir);
+    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('keep_alive_cap', JSON.stringify(7));
+    const repo = new SettingsRepo(db);
+    repo.seedDefaults();
+    expect(repo.get('notify_claude_needs_input')).toBe(true);
+    expect(repo.get('notify_claude_finished')).toBe(true);
+    expect(repo.get('keep_alive_cap')).toBe(7);
+  });
+
+  it('AC20 — a toggle the user turned off stays off across re-seeding (restart)', () => {
+    const repo = seed();
+    repo.set('notify_claude_finished', false);
+    repo.seedDefaults();
+    expect(repo.get('notify_claude_finished')).toBe(false);
+    expect(repo.get('notify_claude_needs_input')).toBe(true);
+  });
 });

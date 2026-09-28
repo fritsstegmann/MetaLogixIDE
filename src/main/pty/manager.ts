@@ -50,15 +50,34 @@ const PORT_PATTERNS: RegExp[] = [
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
+/**
+ * Rewrites a launch just before it spawns (the Claude hook injection). Must
+ * return a new object when it changes anything; the caller's launch — the
+ * one persisted to the shells table — is never mutated (AC8).
+ */
+export type SpawnDecorator = (projectId: number, shellIndex: number, launch: ResolvedLaunch) => ResolvedLaunch;
+
+/** Optional collaborators; without a decorator every launch spawns as given. */
+export interface PtyManagerOptions {
+  spawnDecorator?: SpawnDecorator;
+}
+
 export class PtyManager extends EventEmitter {
   private entries = new Map<string, Entry>();
   /** Last size the viewport asked for, per shell — outlives the PTY so a spawn can honour it. */
   private requestedSizes = new Map<string, { cols: number; rows: number }>();
+  private readonly spawnDecorator: SpawnDecorator | undefined;
+
+  constructor(opts: PtyManagerOptions = {}) {
+    super();
+    this.spawnDecorator = opts.spawnDecorator;
+  }
 
   /**
    * Spawn the PTY for (projectId, shellIndex). Size precedence: explicit
    * `cols`/`rows`, then the last size passed to `resize` for this shell,
-   * then 100x30.
+   * then 100x30. The `spawnDecorator`, when set, rewrites the launch just
+   * before spawning; `launch` itself is never modified.
    */
   async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols?: number, rows?: number): Promise<{ pid: number }> {
     const k = key(projectId, shellIndex);
@@ -66,13 +85,14 @@ export class PtyManager extends EventEmitter {
     const requested = this.requestedSizes.get(k);
     cols ??= requested?.cols ?? DEFAULT_COLS;
     rows ??= requested?.rows ?? DEFAULT_ROWS;
-    const [command, ...args] = toSpawnableArgv(launch.argv);
+    const effective = this.spawnDecorator ? this.spawnDecorator(projectId, shellIndex, launch) : launch;
+    const [command, ...args] = toSpawnableArgv(effective.argv);
     if (!command) throw new Error('empty argv');
     const pty = ptySpawn(command, args, {
       name: 'xterm-256color',
       cols, rows,
-      cwd: launch.cwd,
-      env: { ...process.env, ...launch.env } as { [k: string]: string },
+      cwd: effective.cwd,
+      env: { ...process.env, ...effective.env } as { [k: string]: string },
     });
     const entry: Entry = {
       projectId, shellIndex, pty, pid: pty.pid, cols, rows,

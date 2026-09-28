@@ -101,18 +101,24 @@ function GeneralPanel() {
   const [scanDepth, setScanDepth] = useState<number | null>(null);
   const [maxWatched, setMaxWatched] = useState<number | null>(null);
   const [opacity, setOpacity] = useState<number>(100);
+  const [notifyNeedsInput, setNotifyNeedsInput] = useState<boolean>(true);
+  const [notifyFinished, setNotifyFinished] = useState<boolean>(true);
 
   const load = useCallback(async () => {
-    const [c, d, w, o] = await Promise.all([
+    const [c, d, w, o, ni, nf] = await Promise.all([
       api.invoke('settings:get', { key: 'keep_alive_cap' }),
       api.invoke('settings:get', { key: 'scan_depth' }),
       api.invoke('settings:get', { key: 'max_watched_paths' }),
       api.invoke('settings:get', { key: 'window_opacity' }),
+      api.invoke('settings:get', { key: 'notify_claude_needs_input' }),
+      api.invoke('settings:get', { key: 'notify_claude_finished' }),
     ]);
     setCap(c.value as number);
     setScanDepth(d.value as number);
     setMaxWatched(w.value as number);
     setOpacity((o.value as number) ?? 100);
+    setNotifyNeedsInput((ni.value as boolean) ?? true);
+    setNotifyFinished((nf.value as boolean) ?? true);
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -175,6 +181,31 @@ function GeneralPanel() {
             data-testid="window-opacity-slider"
           />
           <span className="w-14 text-right text-sm text-[--text] font-mono">{opacity}%</span>
+        </div>
+      </Field>
+
+      <Field label="Notifications" hint="OS notifications for Claude Code sessions running in app shells.">
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-[--text]">
+            <input
+              type="checkbox"
+              checked={notifyNeedsInput}
+              onChange={(e) => { setNotifyNeedsInput(e.target.checked); void save('notify_claude_needs_input', e.target.checked); }}
+              className="accent-[--accent]"
+              data-testid="notify-needs-input-toggle"
+            />
+            Notify when Claude needs input
+          </label>
+          <label className="flex items-center gap-2 text-sm text-[--text]">
+            <input
+              type="checkbox"
+              checked={notifyFinished}
+              onChange={(e) => { setNotifyFinished(e.target.checked); void save('notify_claude_finished', e.target.checked); }}
+              className="accent-[--accent]"
+              data-testid="notify-finished-toggle"
+            />
+            Notify when Claude finishes
+          </label>
         </div>
       </Field>
     </div>

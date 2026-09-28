@@ -12,6 +12,7 @@ import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
+import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
@@ -497,8 +498,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { mode, changedKeys };
   },
 
-  // Setup stub — Agent 1 replaces it with validation + ViewedShells update.
-  'notifications:viewed-shells': async () => ({ ok: true } as const),
+  // Renderer-supplied view data: validated here; a forged view can at worst suppress the user's own notifications.
+  'notifications:viewed-shells': async (s, req) => {
+    s.viewedShells.setReported(parseViewedShells(req));
+    return { ok: true } as const;
+  },
 
   'windows:popout-shell': async () => {
     throw new Error('windows:popout-shell requires WindowHooks — see registerIpc');
