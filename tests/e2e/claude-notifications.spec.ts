@@ -38,7 +38,7 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readdirSync, rmSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -206,6 +206,27 @@ async function aliveShells(win: Page): Promise<Array<{ projectId: number; shellI
     const { shells } = await api.invoke('shells:alive-list', undefined) as unknown as { shells: Array<{ projectId: number; shellIndex: number; launchArgv: string[] }> };
     return shells;
   });
+}
+
+type ClaudePathSnapshot =
+  | { present: false }
+  | { present: true; kind: 'dir'; entries: string[] }
+  | { present: true; kind: 'file'; size: number; mtimeMs: number };
+
+/**
+ * Snapshots one path under the isolated HOME for the AC7 before/after
+ * comparison. `~/.claude` is a directory (entries); `~/.claude.json` is a
+ * FILE — `readdirSync` on a file throws ENOTDIR, which a bare try/catch
+ * conflates with "absent", making a file-content or file-creation change
+ * invisible. Distinguish by `statSync`, snapshotting a file's size + mtime
+ * (real Claude rewrites it every session — content, not just presence, is
+ * what must stay untouched here) and a directory's entry list.
+ */
+function snapshotClaudePath(path: string): ClaudePathSnapshot {
+  if (!existsSync(path)) return { present: false };
+  const st = statSync(path);
+  if (st.isDirectory()) return { present: true, kind: 'dir', entries: readdirSync(path).sort() };
+  return { present: true, kind: 'file', size: st.size, mtimeMs: st.mtimeMs };
 }
 
 test.describe('Claude Code system notifications', () => {
@@ -452,15 +473,17 @@ test.describe('Claude Code system notifications', () => {
   /* ── Configuration safety ─────────────────────────────────────────────*/
   test('AC7/AC8: no Claude config file is touched; the injected --settings flag never leaks into recorded/edited launch commands', async () => {
     const h = await launch(['proja']);
+    let appClosed = false;
     try {
       // Snapshot every path under ~/.claude* and the project's .claude/
       // before opening anything. Real Claude writes to ~/.claude* every
       // session, so this is compared to mock-claude, which writes nothing
-      // itself, isolating the app's own writes.
-      const claudeHomeGlobs = ['.claude', '.claude.json'];
-      const before = claudeHomeGlobs.map((n) => {
-        try { return { name: n, entries: readdirSync(join(h.isolatedHome, n)).sort() }; } catch { return { name: n, exists: false }; }
-      });
+      // itself, isolating the app's own writes. `~/.claude.json` is a FILE,
+      // not a directory (snapshotClaudePath distinguishes — a bare
+      // readdirSync/catch would silently read both "absent" and "present
+      // but changed" as the same thing here).
+      const claudeHomeNames = ['.claude', '.claude.json'];
+      const before = claudeHomeNames.map((n) => snapshotClaudePath(join(h.isolatedHome, n)));
       const projectClaudeDir = join(h.demoRoot, 'proja', '.claude');
       const beforeProjectDir = (() => { try { return readdirSync(projectClaudeDir).sort(); } catch { return null; } })();
 
@@ -472,9 +495,7 @@ test.describe('Claude Code system notifications', () => {
         await (window as unknown as { api: Api }).api.invoke('shells:kill', { projectId: id, shellIndex: 0 });
       }, projA);
 
-      const after = claudeHomeGlobs.map((n) => {
-        try { return { name: n, entries: readdirSync(join(h.isolatedHome, n)).sort() }; } catch { return { name: n, exists: false }; }
-      });
+      const after = claudeHomeNames.map((n) => snapshotClaudePath(join(h.isolatedHome, n)));
       expect(after, 'AC7 nothing under ~/.claude* changed').toEqual(before);
       const afterProjectDir = (() => { try { return readdirSync(projectClaudeDir).sort(); } catch { return null; } })();
       expect(afterProjectDir, 'AC7 project .claude/ unchanged/absent').toEqual(beforeProjectDir);
@@ -486,6 +507,7 @@ test.describe('Claude Code system notifications', () => {
       for (const f of hookFiles) {
         expect(join(hooksDir, f)).not.toContain('.claude');
       }
+      const hookFilePath = join(hooksDir, hookFiles[0]!);
 
       // AC8: the recorded launchArgv (re-open to relaunch it) never carries
       // --settings, and the Launch commands editors don't show it either.
@@ -507,8 +529,18 @@ test.describe('Claude Code system notifications', () => {
       const firstEditor = settingsModal.getByTestId('launch-editor-first');
       await expect(firstEditor).not.toHaveValue(/--settings/);
       await h.win.getByTestId('settings-done').click();
-    } finally {
+
+      // The settings file is this running instance's own — it must be
+      // removed on quit (ClaudeHookRuntime.stop() via the `before-quit`
+      // handler, src/main/index.ts), not left behind for the next launch to
+      // find stale. The isolated HOME makes this observable: nothing else
+      // writes here.
+      expect(existsSync(hookFilePath), 'settings file present before quit').toBe(true);
       await h.app.close();
+      appClosed = true;
+      expect(existsSync(hookFilePath), 'settings file removed after quit').toBe(false);
+    } finally {
+      if (!appClosed) await h.app.close();
       h.cleanup();
     }
   });
