@@ -413,6 +413,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
+  'claude-state:list': async () => { throw new Error('claude-state:list not implemented'); },
   'shells:alive-list': async (s) => {
     const rows = s.shells.list();
     const projects = new Map(s.projects.list().map(p => [p.id, p]));
