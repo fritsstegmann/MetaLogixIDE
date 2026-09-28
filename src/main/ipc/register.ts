@@ -497,6 +497,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { mode, changedKeys };
   },
 
+  // Setup stub — Agent 1 replaces it with validation + ViewedShells update.
+  'notifications:viewed-shells': async () => ({ ok: true } as const),
+
   'windows:popout-shell': async () => {
     throw new Error('windows:popout-shell requires WindowHooks — see registerIpc');
   },

@@ -17,6 +17,8 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'metaproject_last_username':     '',
   'window_opacity':                100,
   'claude_permission_mode':        null,
+  'notify_claude_needs_input':     true,
+  'notify_claude_finished':        true,
   // Seeded named CLIs the "+ new shell" menu shows out of the box. The bare
   // "Terminal" (login $SHELL) is offered by the menu itself as a separate
   // row — don't duplicate it here. Each entry is spawned via the user's
