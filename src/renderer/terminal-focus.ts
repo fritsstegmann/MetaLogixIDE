@@ -58,6 +58,10 @@ export interface TerminalFocusCoordinator {
   onWindowFocus(): void;
   onWindowBlur(): void;
   requestFocus(key: ShellKey): void;
+  /** Focus the primary (left-pane) terminal of `projectId` (project switch). */
+  requestProjectFocus(projectId: number): void;
+  /** Drop any pending request. Called when a new switch starts, so a superseded one never fires. */
+  cancelRequest(): void;
 }
 
 export interface CoordinatorDeps {
@@ -115,6 +119,10 @@ class Coordinator implements TerminalFocusCoordinator {
     const target = this.handles.find((h) => h.isOpen() && sameKey(h.key, key));
     if (target && this.consumeRequest(target)) target.focus();
   }
+
+  requestProjectFocus(): void {}
+
+  cancelRequest(): void {}
 
   private ruleInput(): { overlayOpen: boolean; active: ActiveElementKind } {
     return { overlayOpen: this.overlayOpen, active: this.deps.activeElementKind() };
