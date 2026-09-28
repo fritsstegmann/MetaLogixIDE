@@ -8,7 +8,8 @@ renderer calls the main process through the IPC API that the preload script
 exposes as `window.api` (`src/renderer/api.ts:4`).
 
 This document is incomplete. At this time it describes only the Markdown
-preview pipeline, terminal focus and Claude notifications. The product design is in
+preview pipeline, terminal focus, Claude notifications and the Claude status
+dots. The product design is in
 `docs/superpowers/specs/2026-07-18-metaide-design.md`.
 
 ## Components
@@ -84,15 +85,16 @@ or escape sequences for this.
 |---|---|---|
 | IO | `src/main/claude-hooks/receiver.ts` | Loopback HTTP server. Checks the request, authenticates it, answers `204`, then passes a typed event on. |
 | IO | `src/main/claude-hooks/settings-file.ts` | Builds, writes and removes the app-owned Claude Code settings file. |
-| Logic | `src/main/claude-hooks/hook-event.ts` | Parses a hook payload into a `HookEvent`. Classifies it as `needs-input`, `finished` or `ignored`. |
+| Logic | `src/main/claude-hooks/hook-event.ts` | Parses a hook payload into a `HookEvent`. Keeps only the event name, notification type, message and the number of background tasks. Classifies an event as `needs-input`, `finished` or `ignored`, and maps it to a state transition (`stateTransitionFor`). |
+| Logic | `src/main/claude-hooks/hook-fanout.ts` | Registers the receiver's one listener and delivers each hook to several listeners. A failure in one listener is logged and does not stop the others. |
 | Logic | `src/main/claude-hooks/session-registry.ts` | Issues, verifies and releases the per-spawn id and secret. Records which shells are hook-confirmed. |
 | Logic | `src/main/claude-hooks/launch-decorator.ts` | Adds `--settings <file>` and the id and secret to the environment of a Claude launch, just before spawn. |
 | Logic | `src/main/claude-hooks/runtime.ts` | Starts the receiver, then writes the settings file. Stops both on quit. |
 | Contract | `src/main/claude-hooks/protocol.ts` | Hook path, header name and environment variable names. |
-| Logic | `src/main/notifications/claude-notifier.ts` | Decides if an event shows a notification, builds its text, and keeps one notification per shell. Also `withoutHookConfirmed`, the filter for the generic notifier. |
+| Logic | `src/main/notifications/claude-notifier.ts` | Decides if an applied hook shows a notification, from the state before and after the tracker applied it. Builds the text and keeps one notification per shell. Also `withoutHookConfirmed`, the filter for the generic notifier. |
 | Logic | `src/main/notifications/viewed-shells.ts` | Holds the shells the main window shows. Decides if the user is viewing a shell. |
 | Adapter | `src/main/notifications/os-notifications.ts` | Wraps Electron `Notification`. Keeps each instance referenced until it is clicked or closed. |
-| Composition | `src/main/notifications/install.ts` | Connects the receiver, notifier, windows and PTY exit events. Builds the click navigation. |
+| Composition | `src/main/notifications/install.ts` | Connects the Claude state tracker's `onHookApplied` stream, the notifier, windows and PTY exit events. Builds the click navigation. |
 | Presentation | `src/renderer/viewed-shells.ts`, `src/renderer/hooks/useReportViewedShells.ts` | Derive the shells on screen and report them on `notifications:viewed-shells`. |
 | Presentation | `src/renderer/components/Settings.tsx` | The two toggles in Settings → General. |
 
@@ -108,11 +110,20 @@ Rules:
   generic notifier.
 - The stored launch argv is never decorated. `PtyManager` applies the
   decorator to a copy inside `spawn`.
+- Notifications follow the Claude state (see "Claude status dots"). The
+  notifier reads each hook after the tracker applied it, with the shell's
+  state before and after.
 - Needs input is a `Notification` event with `notification_type`
   `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog` or
-  `agent_needs_input`. Claude Code's question prompt also arrives as
-  `permission_prompt`. Finished is a `Stop` event. All other events are
-  ignored, but any event marks the shell hook-confirmed.
+  `agent_needs_input` that leaves the shell blocked. Claude Code's question
+  prompt also arrives as `permission_prompt`. A stale needs-input event
+  leaves the shell as it is and shows nothing.
+- Finished is a `Stop` event with no background tasks that moves the shell
+  from busy to idle. A `Stop` with background tasks, a `Stop` on an idle
+  shell, and an idle state from the stale-busy guard, `idle_prompt`,
+  `StopFailure` or a PTY exit show nothing.
+- All other events show nothing, but any confirmed event marks the shell
+  hook-confirmed. The tracker confirms the session.
 - The generic "Command finished" notifier skips hook-confirmed shells.
   Before a shell is confirmed, the generic notifier is its fallback.
 - The user is viewing a shell when its popout window has focus, or when
@@ -121,6 +132,48 @@ Rules:
 - A new notification for a shell closes the previous one. A PTY exit
   releases the shell's session and closes its notification, unless a
   respawn has already replaced that PTY.
+
+### Claude status dots
+
+Each live dot shows the Claude state of its shell: idle (green), busy
+(orange) or blocked (red). The main process derives the state and pushes it
+to every window. Renderers never read terminal text for it.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/claude-state.ts` | `ClaudeShellState`, the state entry, the text label per state and the DOM test hooks. |
+| IO | `src/main/ipc/register.ts` | `claude-state:list` returns every shell that is not idle. |
+| Service | `src/main/claude-status/state-tracker.ts` | The state machine per shell. Confirms each hook session. Emits `onChange` on real transitions and `onHookApplied` for every confirmed hook. |
+| Logic | `src/main/claude-status/answer-input.ts` | `isAnsweringInput`: Enter, a lone Esc, Ctrl-C or a single digit 1-9. |
+| Composition | `src/main/claude-status/install.ts` | Connects the hook fan-out, PTY `input` and `exit` events and a 1 s guard tick to the tracker. Broadcasts `claude-state:changed`. |
+| Adapter | `src/main/pty/manager.ts` | `write()` emits `input` for every write to a shell. |
+| Logic | `src/renderer/claude-state.ts` | Pure snapshot and delta reducers, and the worst state of a shell, a project or all shells. |
+| Presentation | `src/renderer/hooks/useClaudeStates.ts` | One store per window. Fetches the snapshot on first use, applies deltas, and fetches again on `alive-shells:changed`. |
+| Presentation | `src/renderer/components/StatusDot.tsx` | The dot: colour from `data-claude-state`, `title` and `aria-label` from the state label. |
+| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the active Project Switcher row. |
+
+Rules:
+
+- A shell with no current hook session is always idle. The tracker keeps a
+  state only while its session is the shell's current session, so a
+  respawn or a release reads idle.
+- `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `PostToolUseFailure`
+  set busy. `PermissionRequest` and a needs-input `Notification` set
+  blocked.
+- `Stop` with no background tasks and `StopFailure` set idle. `idle_prompt`
+  sets idle unless the shell waits on background work.
+- `Stop` with background tasks sets busy and marks the shell as waiting on
+  background work. Claude Code resumes when that work reports back.
+  `session_crons` does not count.
+- An answering keystroke moves a blocked shell to busy. Terminal reports,
+  such as focus and cursor-position replies, and arrow keys do not.
+- A needs-input `Notification` that arrives after an answering keystroke,
+  with no hook since, is stale and is ignored.
+- A busy shell with no PTY output for 15 s becomes idle, unless it waits on
+  background work. Blocked never expires.
+- Per-shell dots show the shell's state. Project dots show the worst state
+  of the project's live shells. The "In use" header shows the worst state
+  of all live shells. An inactive shell tab is grey when idle.
 
 ## Data Flow
 
@@ -149,20 +202,25 @@ links outside a diagram open through the `app:open-external` IPC channel.
 1. At app start, `runtime.ts` starts the receiver on an ephemeral
    `127.0.0.1` port. It then writes
    `~/.metaide/claude-hooks/settings-<port>.json`. The file registers
-   `http` hooks for `Notification`, `Stop` and `UserPromptSubmit`, with a
-   timeout of 1 second.
+   `http` hooks for `Notification`, `Stop`, `UserPromptSubmit`,
+   `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`
+   and `StopFailure`, with a timeout of 1 second.
 2. When a Claude shell spawns, the decorator issues a session id and a
    secret. It adds `--settings <file>` after `argv[0]`, and
    `METAIDE_HOOK_SHELL` and `METAIDE_HOOK_TOKEN` to the environment.
 3. Claude Code posts each hook event. It fills the `X-Metaide-Shell` and
    `Authorization: Bearer` headers from those environment variables.
-4. The receiver checks method, path, `Host`, content type, body size and
-   the id and secret. It answers `204` with no body, and only then passes
-   the event on. Claude Code never gets a decision from the app.
-5. The notifier marks the shell hook-confirmed and classifies the event.
-   It reads the toggle, checks that notifications are supported, and checks
-   if the user is viewing the shell. Then it shows the notification.
-6. A click on a popped-out shell's notification focuses the popout.
+4. The receiver checks method, path, `Host`, content type, the id and
+   secret, and then the body size (1 MiB at most). It answers `204` with no
+   body, and only then passes the event on through the fan-out. Claude Code
+   never gets a decision from the app.
+5. The tracker confirms the session, marks the shell hook-confirmed and
+   applies the event. It broadcasts `claude-state:changed` when the state
+   changed, and emits the applied hook with its before and after state.
+6. The notifier classifies the applied hook. It reads the toggle, checks
+   that notifications are supported, and checks if the user is viewing the
+   shell. Then it shows the notification.
+7. A click on a popped-out shell's notification focuses the popout.
    Otherwise the main window is restored and focused, and
    `shell:focus-request` is sent only while the shell is still alive.
 
@@ -175,8 +233,14 @@ The Claude hook receiver accepts requests only on `127.0.0.1`, with a
 32-byte secret. The receiver compares it with `timingSafeEqual`. The
 secret is in the PTY environment only, never in argv, in the settings file
 or in logs. Processes that Claude starts inherit the secret, so they can
-raise notifications for that shell only. A released session no longer
-authenticates.
+raise notifications and change the dot colour for that shell only. A
+released session no longer authenticates. Authentication runs before the
+body is read, so an unauthenticated request never has its body buffered.
+
+The `claude-state:list` reply and the `claude-state:changed` event carry
+only `projectId`, `shellIndex` and `state`. No hook message, tool input,
+tool response or background task leaves the parser. The tracker never logs
+PTY input.
 
 ## Infrastructure Dependencies
 
@@ -231,7 +295,20 @@ authenticates.
 - **Claude events come from hooks, not terminal output.** By default,
   Claude Code sends no bell and no notification escape sequence to an
   xterm.js terminal. A bell also does not tell which event happened. The
-  hook payload gives the event type and message.
+  hook payload gives the event type and message. Tools that read the
+  terminal title spinner or the screen text break when Claude Code changes
+  its interface. The status dots use the PTY only for two things: answering
+  keystrokes, because no hook fires when the user answers a prompt, and
+  output silence, because no hook fires when the user interrupts a turn.
+- **A `Stop` with background tasks is not the end of the work.** Claude
+  Code fires `Stop` when the main agent stops responding, also while
+  background shells, subagents or teammates still run. The `background_tasks`
+  list in the payload tells the two cases apart. Only its length is kept.
+- **One state drives the dots and the notifications.** The notifier reads
+  the tracker's applied hooks, not the receiver. A stream of state changes
+  alone is not enough: `PermissionRequest` sets blocked, and the
+  `permission_prompt` notification about 6 s later does not change the
+  state but must still notify.
 - **Hooks are `http`, not `command`.** An `http` hook needs no shell,
   `curl` or `node` on the PATH, so the same file works on Windows. HTTP
   errors and timeouts do not block Claude Code.
