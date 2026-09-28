@@ -89,7 +89,7 @@ describe('ClaudeHookReceiver — authorised events', () => {
     expect(res).toEqual({ status: 204, body: '' });
     await tick();
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'Stop', notificationType: null, message: null, backgroundTaskCount: 0 } });
   });
 
   it('accepts a JSON content type with parameters', async () => {
@@ -122,7 +122,7 @@ describe('ClaudeHookReceiver — authorised events', () => {
     const res = await send(port, { headers: goodHeaders(port), body });
     expect(res).toEqual({ status: 204, body: '' });
     await tick();
-    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'PermissionRequest', notificationType: null, message: null } });
+    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'PermissionRequest', notificationType: null, message: null, backgroundTaskCount: 0 } });
   });
 
   it('still answers 204 when the listener throws (AC23)', async () => {
@@ -254,6 +254,19 @@ describe('ClaudeHookReceiver — rejections never reach the listener (AC24)', ()
     expect(listener).not.toHaveBeenCalled();
     warn.mockRestore();
   }, 5000);
+
+  it('hands the listener only a count of background tasks and logs none of their content (AC28)', async () => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
+    const listener = vi.fn(() => { throw new Error('boom'); });
+    const { port } = await started(listener);
+    const body = JSON.stringify({ hook_event_name: 'Stop', background_tasks: [{ id: 'TASK-ID', type: 'shell', command: 'TASK-CMD', description: 'TASK-DESC' }], session_crons: [{ id: 'CRON-ID' }] });
+    expect((await send(port, { headers: goodHeaders(port), body })).status).toBe(204);
+    await tick();
+    const logged = spies.flatMap((sp) => sp.mock.calls.flatMap((c) => c.map((arg) => inspect(arg, { depth: 10 })))).join('\n');
+    for (const sp of spies) sp.mockRestore();
+    expect(listener).toHaveBeenCalledWith({ sessionId: ID, shell: SHELL, event: { hookEventName: 'Stop', notificationType: null, message: null, backgroundTaskCount: 1 } });
+    expect(logged).not.toMatch(/TASK-|CRON-/);
+  });
 
   it('never logs the token or the body', async () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));

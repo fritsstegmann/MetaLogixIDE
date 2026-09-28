@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ClaudeNotifier, withoutHookConfirmed } from '@main/notifications/claude-notifier';
-import type { ReceivedHook } from '@main/claude-hooks/receiver';
+import type { HookEvent } from '@main/claude-hooks/hook-event';
 import type { ShellKey } from '@main/claude-hooks/session-registry';
+import type { AppliedHook } from '@main/claude-status/state-tracker';
+import type { ClaudeShellState } from '@shared/claude-state';
 
 const API0: ShellKey = { projectId: 1, shellIndex: 0 };
 const WEB2: ShellKey = { projectId: 2, shellIndex: 2 };
@@ -11,8 +13,6 @@ interface Shown { title: string; body: string; onClick: () => void; closed: bool
 function setup(opts: { supported?: boolean; viewing?: (s: ShellKey) => boolean } = {}) {
   const shown: Shown[] = [];
   const toggles = { notify_claude_needs_input: true, notify_claude_finished: true };
-  const confirmed: string[] = [];
-  const live = new Set(['sess-api', 'sess-web']);
   const deps = {
     notifications: {
       isSupported: vi.fn(() => opts.supported ?? true),
@@ -26,17 +26,24 @@ function setup(opts: { supported?: boolean; viewing?: (s: ShellKey) => boolean }
     navigate: vi.fn(),
     settings: { get: vi.fn((k: keyof typeof toggles) => toggles[k]) },
     projectName: (id: number) => ({ 1: 'api', 2: 'web' } as Record<number, string>)[id] ?? null,
-    sessions: { confirm: vi.fn((id: string) => { if (!live.has(id)) return false; confirmed.push(id); return true; }) },
   };
-  return { notifier: new ClaudeNotifier(deps), deps, shown, toggles, confirmed, live };
+  return { notifier: new ClaudeNotifier(deps), deps, shown, toggles };
 }
 
-function notification(shell: ShellKey, type: string | null, message: string | null = 'Claude needs your permission', sessionId = shell === WEB2 ? 'sess-web' : 'sess-api'): ReceivedHook {
-  return { sessionId, shell, event: { hookEventName: 'Notification', notificationType: type, message } };
+/** An applied-hook record as the tracker reports it. */
+function applied(shell: ShellKey, event: Partial<HookEvent> & { hookEventName: string }, from: ClaudeShellState, to: ClaudeShellState): AppliedHook {
+  const sessionId = shell === WEB2 ? 'sess-web' : 'sess-api';
+  return { hook: { sessionId, shell, event: { notificationType: null, message: null, backgroundTaskCount: 0, ...event } }, from, to };
 }
 
-function stop(shell: ShellKey, sessionId = shell === WEB2 ? 'sess-web' : 'sess-api'): ReceivedHook {
-  return { sessionId, shell, event: { hookEventName: 'Stop', notificationType: null, message: null } };
+/** A Notification the tracker applied; by default it left the shell blocked, as a genuine needs-input does. */
+function notification(shell: ShellKey, type: string | null, message: string | null = 'Claude needs your permission', transition: [ClaudeShellState, ClaudeShellState] = ['busy', 'blocked']): AppliedHook {
+  return applied(shell, { hookEventName: 'Notification', notificationType: type, message }, ...transition);
+}
+
+/** A Stop with no background tasks that ended a busy turn (AC12a). */
+function stop(shell: ShellKey): AppliedHook {
+  return applied(shell, { hookEventName: 'Stop' }, 'busy', 'idle');
 }
 
 describe('ClaudeNotifier — content (AC1, AC2, AC9, AC10)', () => {
@@ -49,7 +56,7 @@ describe('ClaudeNotifier — content (AC1, AC2, AC9, AC10)', () => {
 
   it('a finished event shows the fixed body and never response text', () => {
     const { notifier, shown } = setup();
-    notifier.handle({ sessionId: 'sess-web', shell: WEB2, event: { hookEventName: 'Stop', notificationType: null, message: 'the reply' } });
+    notifier.handle(applied(WEB2, { hookEventName: 'Stop', message: 'the reply' }, 'busy', 'idle'));
     expect(shown).toHaveLength(1);
     expect(shown[0]).toMatchObject({ title: 'web — shell 2', body: 'Claude finished and is waiting for you' });
   });
@@ -81,7 +88,7 @@ describe('ClaudeNotifier — content (AC1, AC2, AC9, AC10)', () => {
 
   it('an unknown project falls back to its id in the title', () => {
     const { notifier, shown } = setup();
-    notifier.handle({ ...stop({ projectId: 7, shellIndex: 3 }), sessionId: 'sess-api' });
+    notifier.handle(stop({ projectId: 7, shellIndex: 3 }));
     expect(shown[0]!.title).toBe('#7 — shell 3');
   });
 });
@@ -93,53 +100,90 @@ describe('ClaudeNotifier — ignored events (AC3)', () => {
     expect(shown).toHaveLength(0);
   });
 
-  it.each([['SubagentStop'], ['UserPromptSubmit']])('%s shows nothing', (name) => {
+  it.each([['SubagentStop', 'busy', 'busy'], ['UserPromptSubmit', 'idle', 'busy']] as const)('%s shows nothing', (name, from, to) => {
     const { notifier, shown } = setup();
-    notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: null } });
+    notifier.handle(applied(API0, { hookEventName: name }, from, to));
     expect(shown).toHaveLength(0);
   });
 
-  it.each([['PermissionRequest'], ['PreToolUse'], ['PostToolUse'], ['PostToolUseFailure'], ['StopFailure']])(
-    '%s, a status-dot hook, shows nothing (status-dots AC12)',
-    (name) => {
+  it.each([
+    ['PermissionRequest', 'busy', 'blocked'], ['PreToolUse', 'idle', 'busy'], ['PostToolUse', 'blocked', 'busy'],
+    ['PostToolUseFailure', 'idle', 'busy'], ['StopFailure', 'busy', 'idle'],
+  ] as const)(
+    '%s, a status-dot hook, shows nothing even on its %s → %s transition (AC12d)',
+    (name, from, to) => {
       const { notifier, shown, deps } = setup();
-      notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: 'Claude needs your permission to use Bash' } });
+      notifier.handle(applied(API0, { hookEventName: name, message: 'Claude needs your permission to use Bash' }, from, to));
       expect(shown).toHaveLength(0);
       expect(deps.notifications.show).not.toHaveBeenCalled();
     },
   );
 
-  it('a status-dot hook does not close or replace an outstanding notification (status-dots AC12)', () => {
+  it('a status-dot hook does not close or replace an outstanding notification (AC12d)', () => {
     const { notifier, shown } = setup();
     notifier.handle(notification(API0, 'permission_prompt'));
     for (const name of ['PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'StopFailure']) {
-      notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: name, notificationType: null, message: null } });
+      notifier.handle(applied(API0, { hookEventName: name }, 'busy', name === 'StopFailure' ? 'idle' : 'busy'));
     }
     expect(shown).toHaveLength(1);
     expect(shown[0]!.closed).toBe(false);
   });
 });
 
-describe('ClaudeNotifier — hook confirmation (AC18)', () => {
-  it('any event, even an ignored one, confirms the session', () => {
-    const { notifier, confirmed } = setup();
-    notifier.handle({ sessionId: 'sess-api', shell: API0, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null } });
-    expect(confirmed).toEqual(['sess-api']);
-  });
-
-  it('confirms even when the toggles are off and nothing is shown', () => {
-    const { notifier, confirmed, toggles, shown } = setup();
-    toggles.notify_claude_finished = false;
-    notifier.handle(stop(API0));
-    expect(confirmed).toEqual(['sess-api']);
+describe('ClaudeNotifier — follows state transitions (AC12a–c)', () => {
+  it('a Stop with background tasks (busy → busy, waiting) shows nothing (AC12b)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(applied(API0, { hookEventName: 'Stop', backgroundTaskCount: 2 }, 'busy', 'busy'));
     expect(shown).toHaveLength(0);
   });
 
-  it('an event for a released session (processed after exit) shows nothing (AC26)', () => {
-    const { notifier, shown, live } = setup();
-    live.delete('sess-api');
-    notifier.handle(stop(API0));
+  it('a Stop carrying background tasks never shows finished, whatever the transition', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(applied(API0, { hookEventName: 'Stop', backgroundTaskCount: 1 }, 'busy', 'idle'));
     expect(shown).toHaveLength(0);
+  });
+
+  it('a Stop on an already idle shell shows nothing (AC12b)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(applied(API0, { hookEventName: 'Stop' }, 'idle', 'idle'));
+    expect(shown).toHaveLength(0);
+  });
+
+  it('a Stop from blocked shows nothing (AC12a: only from busy)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(applied(API0, { hookEventName: 'Stop' }, 'blocked', 'idle'));
+    expect(shown).toHaveLength(0);
+  });
+
+  it('the final Stop after waiting on background work (busy → idle) shows finished (AC12a, AC26)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(applied(API0, { hookEventName: 'Stop', backgroundTaskCount: 2 }, 'busy', 'busy'));
+    notifier.handle(applied(API0, { hookEventName: 'Stop' }, 'busy', 'idle'));
+    expect(shown.map((s) => s.body)).toEqual(['Claude finished and is waiting for you']);
+  });
+
+  it('idle_prompt reaching idle shows nothing (AC12b)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(notification(API0, 'idle_prompt', 'Claude is waiting', ['busy', 'idle']));
+    expect(shown).toHaveLength(0);
+  });
+
+  it('a stale needs-input (the shell stays busy) shows nothing (AC12c)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(notification(API0, 'permission_prompt', 'late', ['busy', 'busy']));
+    expect(shown).toHaveLength(0);
+  });
+
+  it('a needs-input on an already blocked shell (PermissionRequest came first) shows (AC12c)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(notification(API0, 'permission_prompt', 'Claude needs your permission to use Bash', ['blocked', 'blocked']));
+    expect(shown.map((s) => s.body)).toEqual(['Claude needs your permission to use Bash']);
+  });
+
+  it('a needs-input from idle that blocks shows (AC12c)', () => {
+    const { notifier, shown } = setup();
+    notifier.handle(notification(API0, 'elicitation_dialog', 'pick one', ['idle', 'blocked']));
+    expect(shown).toHaveLength(1);
   });
 });
 

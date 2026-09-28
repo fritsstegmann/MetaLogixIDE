@@ -109,7 +109,7 @@ describe('buildServices — Claude state tracker', () => {
   it('claudeState authenticates hooks against the hook sessions', () => {
     const services = buildServices(tempOpts());
     const shell = { projectId: 3, shellIndex: 0 };
-    const hook = (sessionId: string) => ({ sessionId, shell, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null } });
+    const hook = (sessionId: string) => ({ sessionId, shell, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null, backgroundTaskCount: 0 } });
     services.claudeState.handle(hook('not-issued'));
     expect(services.claudeState.stateOf(shell)).toBe('idle');
     services.claudeState.handle(hook(services.hookSessions.issue(shell).id));
@@ -121,7 +121,7 @@ describe('buildServices — Claude state tracker', () => {
     const services = buildServices(tempOpts());
     const shell = { projectId: 3, shellIndex: 0 };
     const live = vi.spyOn(services.ptyManager, 'liveShells');
-    services.claudeState.handle({ sessionId: services.hookSessions.issue(shell).id, shell, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null } });
+    services.claudeState.handle({ sessionId: services.hookSessions.issue(shell).id, shell, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null, backgroundTaskCount: 0 } });
     vi.setSystemTime(Date.now() + 20_000);
     live.mockReturnValue([
       { projectId: 3, shellIndex: 1, pid: 2, startedAt: 0, lastDataAt: 0 },

@@ -30,7 +30,7 @@ function setup() {
   const handle = installClaudeStatus({ receiver, tracker, ptyManager: pty, broadcast });
   const session = sessions.issue(K);
   const hook = (hookEventName: string, extra: Record<string, unknown> = {}): ReceivedHook =>
-    ({ sessionId: session.id, shell: { ...K }, event: { hookEventName, notificationType: null, message: null, ...extra } });
+    ({ sessionId: session.id, shell: { ...K }, event: { hookEventName, notificationType: null, message: null, backgroundTaskCount: 0, ...extra } });
   return { clock, sessions, pty, tracker, receiver, broadcast, handle, session, hook };
 }
 
@@ -141,58 +141,70 @@ describe('installClaudeStatus', () => {
   });
 });
 
-describe('Claude status alongside notifications (AC11, fan-out)', () => {
-  it('tracks state with both notification toggles off and the shell in view, while the notifier still confirms the session', () => {
+describe('Claude status alongside notifications, wired as index.ts does (AC11, R2)', () => {
+  function wired(opts: { toggles: boolean; viewing: boolean }) {
     const sessions = new SessionRegistry();
     const pty = fakePty();
     const receiver = fakeReceiver();
-    const fanout = createHookFanout(receiver);
-    const settings = { get: vi.fn(() => false) };
+    const tracker = new ClaudeStateTracker({ sessions, lastOutputAt: () => null, now: () => 0 });
     const viewedShells = new ViewedShells();
-    vi.spyOn(viewedShells, 'isViewing').mockReturnValue(true);
-    const notificationClass = Object.assign(vi.fn(), { isSupported: () => true });
+    vi.spyOn(viewedShells, 'isViewing').mockReturnValue(opts.viewing);
+    const shown: string[] = [];
+    const notificationClass = Object.assign(
+      vi.fn(function (this: { show(): void; close(): void; on(): void }, o: { body: string }) {
+        this.show = () => { shown.push(o.body); };
+        this.close = () => {};
+        this.on = () => {};
+      }),
+      { isSupported: () => true },
+    );
     installClaudeNotifications({
-      receiver: fanout, sessions, ptyManager: pty, viewedShells, settings,
+      hooks: tracker, sessions, ptyManager: pty, viewedShells, settings: { get: () => opts.toggles },
       projects: { get: () => ({ name: 'api' }) },
       notificationClass: notificationClass as never,
       windows: { main: () => null, popout: () => null, focused: () => null },
       broadcast: vi.fn(),
     });
-    const tracker = new ClaudeStateTracker({ sessions, lastOutputAt: () => null, now: () => 0 });
     const broadcast = vi.fn();
-    const handle = installClaudeStatus({ receiver: fanout, tracker, ptyManager: pty, broadcast });
+    const handle = installClaudeStatus({ receiver: createHookFanout(receiver), tracker, ptyManager: pty, broadcast });
     const s = sessions.issue(K);
-    receiver.emit({ sessionId: s.id, shell: K, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null } });
-    receiver.emit({ sessionId: s.id, shell: K, event: { hookEventName: 'Notification', notificationType: 'permission_prompt', message: 'x' } });
-    expect(receiver.onHook).toHaveBeenCalledTimes(1);
-    expect(broadcast.mock.calls).toEqual([
+    const emit = (hookEventName: string, extra: Record<string, unknown> = {}) =>
+      receiver.emit({ sessionId: s.id, shell: K, event: { hookEventName, notificationType: null, message: null, backgroundTaskCount: 0, ...extra } });
+    return { sessions, pty, receiver, broadcast, handle, emit, shown, notificationClass };
+  }
+
+  it('tracks state with both notification toggles off and the shell in view; the tracker still confirms the session', () => {
+    const w = wired({ toggles: false, viewing: true });
+    w.emit('UserPromptSubmit');
+    w.emit('Notification', { notificationType: 'permission_prompt', message: 'x' });
+    expect(w.receiver.onHook).toHaveBeenCalledTimes(1);
+    expect(w.broadcast.mock.calls).toEqual([
       ['claude-state:changed', { projectId: 4, shellIndex: 1, state: 'busy' }],
       ['claude-state:changed', { projectId: 4, shellIndex: 1, state: 'blocked' }],
     ]);
-    expect(sessions.isConfirmed(K)).toBe(true);
-    expect(notificationClass).not.toHaveBeenCalled();
-    handle.stop();
+    expect(w.sessions.isConfirmed(K)).toBe(true);
+    expect(w.notificationClass).not.toHaveBeenCalled();
+    w.handle.stop();
+  });
+
+  it('a receiver hook reaches the notifier through the tracker: needs-input and finished show, a background Stop does not', () => {
+    const w = wired({ toggles: true, viewing: false });
+    w.emit('PermissionRequest');
+    w.emit('Notification', { notificationType: 'permission_prompt', message: 'Claude needs your permission to use Bash' });
+    w.pty.emit('input', { ...K, data: '\r' });
+    w.emit('Stop', { backgroundTaskCount: 1 });
+    w.emit('Stop');
+    expect(w.shown).toEqual(['Claude needs your permission to use Bash', 'Claude finished and is waiting for you']);
+    w.handle.stop();
   });
 
   it('on exit the state is discarded even though the notifier released the session first', () => {
-    const sessions = new SessionRegistry();
-    const pty = fakePty();
-    const receiver = fakeReceiver();
-    const fanout = createHookFanout(receiver);
-    installClaudeNotifications({
-      receiver: fanout, sessions, ptyManager: pty, viewedShells: new ViewedShells(), settings: { get: () => false },
-      projects: { get: () => null }, notificationClass: Object.assign(vi.fn(), { isSupported: () => true }) as never,
-      windows: { main: () => null, popout: () => null, focused: () => null }, broadcast: vi.fn(),
-    });
-    const tracker = new ClaudeStateTracker({ sessions, lastOutputAt: () => null, now: () => 0 });
-    const broadcast = vi.fn();
-    const handle = installClaudeStatus({ receiver: fanout, tracker, ptyManager: pty, broadcast });
-    const s = sessions.issue(K);
-    receiver.emit({ sessionId: s.id, shell: K, event: { hookEventName: 'PermissionRequest', notificationType: null, message: null } });
-    pty.state.alive = false;
-    pty.emit('exit', { ...K, code: 0 });
-    expect(sessions.currentId(K)).toBeNull();
-    expect(broadcast).toHaveBeenLastCalledWith('claude-state:changed', { projectId: 4, shellIndex: 1, state: 'idle' });
-    handle.stop();
+    const w = wired({ toggles: false, viewing: false });
+    w.emit('PermissionRequest');
+    w.pty.state.alive = false;
+    w.pty.emit('exit', { ...K, code: 0 });
+    expect(w.sessions.currentId(K)).toBeNull();
+    expect(w.broadcast).toHaveBeenLastCalledWith('claude-state:changed', { projectId: 4, shellIndex: 1, state: 'idle' });
+    w.handle.stop();
   });
 });

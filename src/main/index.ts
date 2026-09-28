@@ -387,14 +387,15 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
 
 /**
  * Starts the Claude hook receiver and writes its settings file. A failure
- * is logged and otherwise ignored: Claude shells then launch undecorated
- * and keep the generic notifier (AC22), with no dialog.
+ * is logged and otherwise ignored: Claude shells then launch undecorated,
+ * keep the generic notifier (AC22) and show a green status dot, with no
+ * dialog.
  */
 async function startClaudeHooks(services: Services): Promise<void> {
   try {
     await services.hookRuntime.start();
   } catch (err) {
-    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled', err);
+    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled and Claude status dots stay green', err);
   }
 }
 
@@ -444,9 +445,8 @@ app.whenReady().then(async () => {
     tileAll: () => tileAllOurWindows(),
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
-  const hooks = createHookFanout(services.hookReceiver);
   installClaudeNotifications({
-    receiver: hooks,
+    hooks: services.claudeState,
     sessions: services.hookSessions,
     ptyManager: services.ptyManager,
     viewedShells: services.viewedShells,
@@ -461,7 +461,7 @@ app.whenReady().then(async () => {
     broadcast,
   });
   const claudeStatus = installClaudeStatus({
-    receiver: hooks,
+    receiver: createHookFanout(services.hookReceiver),
     tracker: services.claudeState,
     ptyManager: services.ptyManager,
     broadcast,
