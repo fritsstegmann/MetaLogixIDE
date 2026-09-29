@@ -34,6 +34,9 @@ import { useReportViewedShells } from './hooks/useReportViewedShells';
 import { Tooltip } from './components/Tooltip';
 import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { StatusDot } from './components/StatusDot';
+import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
+import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 
 interface PopoutInfo {
   projectId: number;
@@ -88,6 +91,8 @@ function MainApp() {
     return () => { cancelled = true; };
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
+  // -1 never matches a real project id, so this reads idle when nothing is selected.
+  const selectedClaudeState = useProjectClaudeState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
   // useEffect with an empty dep list) always reads the current project.
   const selectedRef = useRef<Project | null>(null);
@@ -753,7 +758,7 @@ function MainApp() {
               {selected && (
                 <>
                   <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--panel-strong] border border-[--border] text-[11px] max-w-[280px]" title={selected.path}>
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 live-dot" />
+                    <StatusDot state={selectedClaudeState} />
                     <span className="truncate font-medium">{selected.name}</span>
                     <button
                       onClick={unloadCurrent}
@@ -936,6 +941,7 @@ function MainApp() {
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
+  const claudeState = useShellClaudeState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
   const [projectName, setProjectName] = useState<string>('');
@@ -966,7 +972,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
             shortened + hidden first when space runs out. */}
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 live-dot shrink-0" aria-hidden />
+        <StatusDot state={claudeState} className="shrink-0" />
         <span className="text-sm font-semibold text-[--text] truncate min-w-0" title={projectName}>
           {projectName || 'MetaLogix IDE'}
         </span>
@@ -1319,11 +1325,13 @@ function ShellTabsBar({
           return (
             <div
               key={s.shellIndex}
+              data-testid={SHELL_TAB_TEST_ID}
+              data-shell-index={s.shellIndex}
               className={`group flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md cursor-pointer whitespace-nowrap
                 ${isActive ? 'bg-[--panel-strong] border border-[--border]' : 'hover:bg-[--panel-strong]/60 border border-transparent'}`}
               onClick={() => onSelect(s.shellIndex)}
             >
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${isActive ? 'bg-green-500 live-dot' : 'bg-[--text-muted]'}`} />
+              <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />
               <span className={`${isActive ? 'text-[--text] font-medium' : 'text-[--text-muted]'}`}>{label}</span>
               {s.shellIndex !== 0 && (
                 <button
@@ -1381,6 +1389,12 @@ function ShellTabsBar({
       </div>
     </div>
   );
+}
+
+/** One tab strip dot. Its own component so the per-shell state hook has a stable call site across a `.map()` whose length varies (D1: grey static when idle and inactive). */
+function ShellTabDot({ projectId, shellIndex, isActive }: { projectId: number; shellIndex: number; isActive: boolean }) {
+  const state = useShellClaudeState(projectId, shellIndex);
+  return <StatusDot state={state} inactiveWhenIdle={!isActive} />;
 }
 
 function ShellSplit({

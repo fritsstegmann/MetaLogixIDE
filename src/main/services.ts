@@ -11,11 +11,12 @@ import { RootWatcher } from './domain/watcher';
 import { MetaprojectClient } from './metaproject/client';
 import { applyClaudePermissionMode } from './domain/claude-permission-mode';
 import { CLAUDE_PERMISSION_MODE_ENV, isClaudePermissionMode } from '@shared/claude-permission-mode';
-import { SessionRegistry } from './claude-hooks/session-registry';
+import { SessionRegistry, type ShellKey } from './claude-hooks/session-registry';
 import { ClaudeHookReceiver } from './claude-hooks/receiver';
 import { ClaudeHookRuntime } from './claude-hooks/runtime';
 import { createLaunchDecorator } from './claude-hooks/launch-decorator';
 import { ViewedShells } from './notifications/viewed-shells';
+import { ClaudeStateTracker } from './claude-status/state-tracker';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -37,6 +38,8 @@ export interface Services {
   hookRuntime: ClaudeHookRuntime;
   /** Shells the main window reports as visible, for notification suppression. */
   viewedShells: ViewedShells;
+  /** Per-shell Claude state (idle / busy / blocked) behind the status dots; fed by `installClaudeStatus`. */
+  claudeState: ClaudeStateTracker;
   homeDir: string;
   migrationsDir: string;
 }
@@ -58,6 +61,12 @@ function applyPermissionModeEnvOverride(settings: SettingsRepo): void {
   }
   if (settings.get('claude_permission_mode') !== null) return;
   applyClaudePermissionMode(settings, raw);
+}
+
+/** Ms epoch of the live shell's last PTY output, or null when it is not alive. */
+function lastOutputAt(ptyManager: PtyManager, shell: ShellKey): number | null {
+  const live = ptyManager.liveShells().find((s) => s.projectId === shell.projectId && s.shellIndex === shell.shellIndex);
+  return live?.lastDataAt ?? null;
 }
 
 /**
@@ -86,9 +95,14 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
   });
   const watcher = new RootWatcher({ cap: settings.get('max_watched_paths') });
   const metaproject = new MetaprojectClient();
+  const claudeState = new ClaudeStateTracker({
+    sessions: hookSessions,
+    lastOutputAt: (shell) => lastOutputAt(ptyManager, shell),
+    now: () => Date.now(),
+  });
   return {
     db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
-    hookSessions, hookReceiver, hookRuntime, viewedShells: new ViewedShells(),
+    hookSessions, hookReceiver, hookRuntime, viewedShells: new ViewedShells(), claudeState,
     homeDir: home, migrationsDir,
   };
 }

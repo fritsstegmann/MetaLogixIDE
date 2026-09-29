@@ -45,9 +45,19 @@ describe('registerIpc', () => {
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
       'settings:get', 'settings:set', 'settings:set-claude-permission-mode',
-      'files:tree', 'app:ping', 'notifications:viewed-shells',
+      'files:tree', 'app:ping', 'notifications:viewed-shells', 'claude-state:list',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
+  });
+
+  it('claude-state:list returns the tracker list as { shells }', async () => {
+    const ipc = fakeIpcMain();
+    const shells = [{ projectId: 1, shellIndex: 0, state: 'busy' }, { projectId: 2, shellIndex: 3, state: 'blocked' }];
+    const list = vi.fn(() => shells);
+    const services = { claudeState: { list } } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    await expect(ipc.handlers.get('claude-state:list')!({}, undefined)).resolves.toEqual({ shells });
+    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it('settings:set rejects key claude_permission_mode without writing', async () => {

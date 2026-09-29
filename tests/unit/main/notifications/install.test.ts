@@ -8,7 +8,8 @@ import { createLaunchDecorator } from '@main/claude-hooks/launch-decorator';
 import { createNavigation, installClaudeNotifications, liveWindowView, type NavWindow } from '@main/notifications/install';
 import { ViewedShells } from '@main/notifications/viewed-shells';
 import { SessionRegistry, type ShellKey } from '@main/claude-hooks/session-registry';
-import type { HookListener } from '@main/claude-hooks/receiver';
+import type { ReceivedHook } from '@main/claude-hooks/receiver';
+import { ClaudeStateTracker } from '@main/claude-status/state-tracker';
 
 const K: ShellKey = { projectId: 4, shellIndex: 1 };
 
@@ -108,14 +109,14 @@ function fakePty() {
   return Object.assign(new EventEmitter(), { state, isAlive: () => state.alive });
 }
 
+/** Installs the notifier on a real state tracker, as index.ts does; `emit` is a hook arriving from the receiver. */
 function installSetup<P extends ExitSource>(ptyManager: P, sessions = new SessionRegistry()) {
   FakeNotification.instances = [];
-  let listener: HookListener = () => {};
-  const receiver = { onHook: (l: HookListener) => { listener = l; } };
+  const tracker = new ClaudeStateTracker({ sessions, lastOutputAt: () => null, now: () => 0 });
   const main = fakeWindow();
   const broadcast = vi.fn();
   installClaudeNotifications({
-    receiver,
+    hooks: tracker,
     sessions,
     ptyManager,
     viewedShells: new ViewedShells(),
@@ -125,14 +126,18 @@ function installSetup<P extends ExitSource>(ptyManager: P, sessions = new Sessio
     windows: { main: () => main, popout: () => null, focused: () => null },
     broadcast,
   });
-  return { emit: (h: Parameters<HookListener>[0]) => listener(h), sessions, ptyManager, broadcast, main };
+  return { emit: (h: ReceivedHook) => tracker.handle(h), sessions, ptyManager, broadcast, main, tracker };
 }
 
+const ev = (hookEventName: string, extra: { notificationType?: string; backgroundTaskCount?: number } = {}) =>
+  ({ hookEventName, notificationType: null, message: null, backgroundTaskCount: 0, ...extra });
+const NEEDS_INPUT = ev('Notification', { notificationType: 'permission_prompt' });
+
 describe('installClaudeNotifications', () => {
-  it('routes receiver events to OS notifications that navigate on click', () => {
+  it('routes applied hooks to OS notifications that navigate on click', () => {
     const { emit, sessions, broadcast, main } = installSetup(fakePty());
     const s = sessions.issue(K);
-    emit({ sessionId: s.id, shell: K, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
     const n = FakeNotification.instances[0]!;
     expect(n.opts.title).toBe('api — shell 1');
     n.emit('click');
@@ -143,14 +148,75 @@ describe('installClaudeNotifications', () => {
   it('confirms the shell so the generic notifier can skip it', () => {
     const { emit, sessions } = installSetup(fakePty());
     const s = sessions.issue(K);
-    emit({ sessionId: s.id, shell: K, event: { hookEventName: 'UserPromptSubmit', notificationType: null, message: null } });
+    emit({ sessionId: s.id, shell: K, event: ev('UserPromptSubmit') });
     expect(sessions.isConfirmed(K)).toBe(true);
+  });
+
+  it('confirms even when the toggles are off and nothing is shown (ported from the notifier)', () => {
+    const sessions = new SessionRegistry();
+    const tracker = new ClaudeStateTracker({ sessions, lastOutputAt: () => null, now: () => 0 });
+    FakeNotification.instances = [];
+    installClaudeNotifications({
+      hooks: tracker, sessions, ptyManager: fakePty(), viewedShells: new ViewedShells(), settings: { get: () => false },
+      projects: { get: () => null }, notificationClass: FakeNotification,
+      windows: { main: () => null, popout: () => null, focused: () => null }, broadcast: vi.fn(),
+    });
+    const s = sessions.issue(K);
+    tracker.handle({ sessionId: s.id, shell: K, event: ev('UserPromptSubmit') });
+    tracker.handle({ sessionId: s.id, shell: K, event: ev('Stop') });
+    expect(sessions.isConfirmed(K)).toBe(true);
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it('a busy turn that ends in a Stop shows "finished" (AC12a)', () => {
+    const { emit, sessions } = installSetup(fakePty());
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: ev('UserPromptSubmit') });
+    emit({ sessionId: s.id, shell: K, event: ev('Stop') });
+    expect(FakeNotification.instances.map((n) => n.opts.body)).toEqual(['Claude finished and is waiting for you']);
+  });
+
+  it('a Stop with background tasks shows nothing; the later final Stop shows "finished" once (AC12a, AC12b)', () => {
+    const { emit, sessions } = installSetup(fakePty());
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: ev('UserPromptSubmit') });
+    emit({ sessionId: s.id, shell: K, event: ev('Stop', { backgroundTaskCount: 2 }) });
+    emit({ sessionId: s.id, shell: K, event: ev('Notification', { notificationType: 'idle_prompt' }) });
+    expect(FakeNotification.instances).toHaveLength(0);
+    emit({ sessionId: s.id, shell: K, event: ev('Stop') });
+    expect(FakeNotification.instances.map((n) => n.opts.body)).toEqual(['Claude finished and is waiting for you']);
+  });
+
+  it('a Stop on an idle shell shows nothing (AC12b)', () => {
+    const { emit, sessions } = installSetup(fakePty());
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: ev('Stop') });
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it('a hook for a released session (processed after exit) shows nothing (ported from the notifier)', () => {
+    const { emit, sessions } = installSetup(fakePty());
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: ev('UserPromptSubmit') });
+    sessions.release(K);
+    emit({ sessionId: s.id, shell: K, event: ev('Stop') });
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it('a late needs-input after the user answered shows nothing (AC12c)', () => {
+    const { emit, sessions, tracker } = installSetup(fakePty());
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: ev('PermissionRequest') });
+    tracker.onInput(K, '\r');
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
+    expect(FakeNotification.instances).toHaveLength(0);
   });
 
   it('on PTY exit releases the session and closes the outstanding notification (AC26)', () => {
     const { emit, sessions, ptyManager } = installSetup(fakePty());
     const s = sessions.issue(K);
-    emit({ sessionId: s.id, shell: K, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
     ptyManager.state.alive = false;
     ptyManager.emit('exit', { projectId: K.projectId, shellIndex: K.shellIndex, code: 0 });
     expect(FakeNotification.instances[0]!.closed).toBe(true);
@@ -160,9 +226,9 @@ describe('installClaudeNotifications', () => {
   it("an old spawn's exit arriving after a respawn leaves the successor's session and notification alone", () => {
     const { emit, sessions, ptyManager } = installSetup(fakePty());
     const old = sessions.issue(K);
-    emit({ sessionId: old.id, shell: K, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    emit({ sessionId: old.id, shell: K, event: NEEDS_INPUT });
     const fresh = sessions.issue(K);
-    emit({ sessionId: fresh.id, shell: K, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    emit({ sessionId: fresh.id, shell: K, event: NEEDS_INPUT });
     ptyManager.state.alive = true;
     ptyManager.emit('exit', { projectId: K.projectId, shellIndex: K.shellIndex, code: 0 });
     expect(sessions.verify(fresh.id, fresh.token)).toEqual(K);
@@ -190,7 +256,7 @@ describe.skipIf(process.platform === 'win32')('installClaudeNotifications — re
     await pty.kill(shell.projectId, shell.shellIndex);
     await pty.spawn(shell.projectId, shell.shellIndex, launch);
     const fresh = issued[1]!;
-    emit({ sessionId: fresh.id, shell, event: { hookEventName: 'Stop', notificationType: null, message: null } });
+    emit({ sessionId: fresh.id, shell, event: NEEDS_INPUT });
     expect(exits).toHaveLength(0);
     const deadline = Date.now() + 3000;
     while (exits.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
