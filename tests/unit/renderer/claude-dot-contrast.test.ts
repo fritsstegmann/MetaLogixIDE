@@ -76,6 +76,7 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 
 const darkBlock = extractBlock(css, /:root,\s*:root\[data-theme="dark"\]\s*\{/);
 const lightBlock = extractBlock(css, /:root\[data-theme="light"\]\s*\{/);
+const systemLightBlock = extractBlock(css, /:root:not\(\[data-theme\]\)\s*\{/);
 
 describe('claude dot contrast (AC21)', () => {
   it('dark theme: busy and blocked clear 3:1 against the panel composited over black', () => {
@@ -94,6 +95,15 @@ describe('claude dot contrast (AC21)', () => {
     const blocked = parseColor(extractVar(lightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
     expect(contrastRatio(busy, bg)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(blocked, bg)).toBeGreaterThanOrEqual(3);
+  });
+
+  it('system-theme light: busy and blocked clear 3:1 against the panel composited over white', () => {
+    const panel = parseColor(extractVar(systemLightBlock, '--panel'));
+    const bg = compositeOver(panel, [255, 255, 255]);
+    const busy = parseColor(extractVar(systemLightBlock, '--claude-busy')).slice(0, 3) as Rgb;
+    const blocked = parseColor(extractVar(systemLightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
+    expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);
   });
 
   it('the accent-row ring (white) clears 3:1 against the active-row accent in both themes', () => {

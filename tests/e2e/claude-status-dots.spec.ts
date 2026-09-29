@@ -223,7 +223,7 @@ test.describe('Claude status dots', () => {
   });
 
   /* ── AC14/D1: inactive tab is grey+static when idle, coloured+pulsing when busy/blocked ── */
-  test('AC14/D1: an inactive shell tab renders the existing grey static dot when idle, and a pulsing orange/red dot when busy/blocked', async () => {
+  test('AC14/D1: an inactive shell tab renders the existing grey static dot when idle, and a pulsing amber/red dot when busy/blocked', async () => {
     const h = await launch(['proja']);
     try {
       await openProject(h.win, 'proja');
@@ -358,7 +358,7 @@ test.describe('Claude status dots', () => {
     }
   });
 
-  /* ── R1: background work stays busy/orange and suppresses "finished" until real Stop ── */
+  /* ── R1: background work stays busy/amber and suppresses "finished" until real Stop ── */
   test('AC24/AC25/AC26: a Stop with background_tasks keeps the dot busy and shows no "finished"; idle_prompt is suppressed while waiting; a later plain Stop clears it and notifies', async () => {
     const h = await launch(['proja']);
     try {
