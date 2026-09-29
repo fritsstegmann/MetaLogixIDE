@@ -108,7 +108,8 @@ export function ProjectSwitcher({ open, onClose, onPick }: { open: boolean; onCl
  * One palette row. A component of its own (rather than inline in the
  * `.map()`) so `useProjectClaudeState` has a stable per-project call site.
  * AC21: the dot gets the white ring on the active row, since the accent
- * fill it sits on doesn't otherwise clear 3:1 for orange or red.
+ * fill it sits on doesn't otherwise clear 3:1 for idle blue, busy green or
+ * blocked orange.
  */
 function ProjectSwitcherRow({
   project, active, alive, onPick, onHover,

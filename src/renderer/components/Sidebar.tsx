@@ -303,7 +303,7 @@ function ProjectRow({
         style={{ paddingLeft: indent }}
       >
         {alive ? (
-          <StatusDot state={claudeState} className="shrink-0" />
+          <StatusDot state={claudeState} ring={selected} className="shrink-0" />
         ) : (
           <span
             aria-hidden

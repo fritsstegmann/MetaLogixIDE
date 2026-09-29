@@ -346,9 +346,10 @@ input::placeholder, textarea::placeholder {
 .status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
 .status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
 
-/* AC21: on the accent-filled active ProjectSwitcher row, no orange/red fill
- * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
- * (white clears 3:1 against both themes' accent). */
+/* AC21: on the accent-filled rows (active ProjectSwitcher row, selected
+ * Sidebar row) idle blue matches the accent and the busy/blocked fills do
+ * not clear 3:1 there, so the dot gets a 1px white ring instead (white
+ * clears 3:1 against both themes' accent). */
 .status-dot-ring {
   box-shadow: 0 0 0 1px #fff;
 }

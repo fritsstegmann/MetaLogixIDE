@@ -76,6 +76,7 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 
 const darkBlock = extractBlock(css, /:root,\s*:root\[data-theme="dark"\]\s*\{/);
 const lightBlock = extractBlock(css, /:root\[data-theme="light"\]\s*\{/);
+const systemLightBlock = extractBlock(css, /:root:not\(\[data-theme\]\)\s*\{/);
 
 describe('claude dot contrast (AC21)', () => {
   it('dark theme: idle, busy and blocked clear 3:1 against the panel composited over black', () => {
@@ -95,6 +96,17 @@ describe('claude dot contrast (AC21)', () => {
     const idle = parseColor(extractVar(lightBlock, '--claude-idle')).slice(0, 3) as Rgb;
     const busy = parseColor(extractVar(lightBlock, '--claude-busy')).slice(0, 3) as Rgb;
     const blocked = parseColor(extractVar(lightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
+    expect(contrastRatio(idle, bg), 'idle').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);
+  });
+
+  it('system-theme light: idle, busy and blocked clear 3:1 against the panel composited over white', () => {
+    const panel = parseColor(extractVar(systemLightBlock, '--panel'));
+    const bg = compositeOver(panel, [255, 255, 255]);
+    const idle = parseColor(extractVar(systemLightBlock, '--claude-idle')).slice(0, 3) as Rgb;
+    const busy = parseColor(extractVar(systemLightBlock, '--claude-busy')).slice(0, 3) as Rgb;
+    const blocked = parseColor(extractVar(systemLightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
     expect(contrastRatio(idle, bg), 'idle').toBeGreaterThanOrEqual(3);
     expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
     expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);

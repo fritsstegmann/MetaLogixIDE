@@ -201,7 +201,7 @@ test.describe('Claude status dots', () => {
 
       // A sibling project with its own alive (idle) shell, opened AFTER
       // proja is already blocked — proves the header and proja's own row
-      // aren't just "always red" once anything is alive, and that switching
+      // aren't just "always blocked" once anything is alive, and that switching
       // the view away doesn't affect proja's own (still-rendered-elsewhere)
       // row state.
       await openProject(h.win, 'projb');
@@ -214,7 +214,7 @@ test.describe('Claude status dots', () => {
       // project (the sidebar row doesn't depend on selection).
       await expectState(projectRowDot(h.win, 'proja'), 'blocked');
       // The "In use" header is the worst across ALL projects (D4): proja's
-      // blocked shell makes it red even though projb is all-idle.
+      // blocked shell makes it blocked even though projb is all-idle.
       await expectState(inUseHeaderDot(h.win), 'blocked');
     } finally {
       await h.app.close();
@@ -223,7 +223,7 @@ test.describe('Claude status dots', () => {
   });
 
   /* ── AC14/D1: inactive tab is grey+static when idle, coloured+pulsing when busy/blocked ── */
-  test('AC14/D1: an inactive shell tab renders the existing grey static dot when idle, and a pulsing orange/red dot when busy/blocked', async () => {
+  test('AC14/D1: an inactive shell tab renders the existing grey static dot when idle, and a pulsing coloured dot when busy/blocked', async () => {
     const h = await launch(['proja']);
     try {
       await openProject(h.win, 'proja');
@@ -301,7 +301,7 @@ test.describe('Claude status dots', () => {
       // row (alive regardless of whether a project is currently "selected" —
       // `selected` is plain React state and does not survive a reload) the
       // moment it's visible, with only a short poll budget: a bug that shows
-      // green-until-the-next-event would still read idle at the end of that
+      // idle-until-the-next-event would still read idle at the end of that
       // budget, since no new hook fires after the reload.
       await h.win.reload();
       await h.win.waitForLoadState('domcontentloaded');
@@ -358,7 +358,33 @@ test.describe('Claude status dots', () => {
     }
   });
 
-  /* ── R1: background work stays busy/orange and suppresses "finished" until real Stop ── */
+  /* ── Selection ring: only the selected, alive sidebar row's dot carries it ── */
+  test('the selected, alive project row\'s dot has the selection ring; an alive but unselected row\'s dot does not', async () => {
+    const h = await launch(['proja', 'projb']);
+    try {
+      await openProject(h.win, 'proja');
+      const projA = await projectId(h.win, 'proja');
+      await waitForShell(h.win, projA, 0, 'mock-claude ready');
+      // Make projb alive, then reselect proja so projb is alive but NOT selected.
+      await openProject(h.win, 'projb');
+      const projB = await projectId(h.win, 'projb');
+      await waitForShell(h.win, projB, 0, 'mock-claude ready');
+      await openProject(h.win, 'proja');
+
+      const selectedDot = projectRowDot(h.win, 'proja');
+      const otherDot = projectRowDot(h.win, 'projb');
+      await expectState(selectedDot, 'idle');
+      await expectState(otherDot, 'idle');
+      await expect(selectedDot).toHaveClass(/status-dot-ring/);
+      // Negative control: alive, not selected -> no ring.
+      await expect(otherDot).not.toHaveClass(/status-dot-ring/);
+    } finally {
+      await h.app.close();
+      h.cleanup();
+    }
+  });
+
+  /* ── R1: background work stays busy and suppresses "finished" until real Stop ── */
   test('AC24/AC25/AC26: a Stop with background_tasks keeps the dot busy and shows no "finished"; idle_prompt is suppressed while waiting; a later plain Stop clears it and notifies', async () => {
     const h = await launch(['proja']);
     try {
@@ -475,7 +501,7 @@ test.describe('Claude status dots', () => {
   });
 
   /* ── AC12c: a stale needs-input Notification (answered before it arrived) shows nothing ── */
-  test('AC12c: a needs-input Notification that arrives after an answering keystroke is stale — no red, no notification', async () => {
+  test('AC12c: a needs-input Notification that arrives after an answering keystroke is stale — no blocked dot, no notification', async () => {
     const h = await launch(['proja']);
     try {
       await installNotificationSpy(h.app);
@@ -502,7 +528,7 @@ test.describe('Claude status dots', () => {
       // the answer, is stale — no state change, no "needs input" notification.
       await sendLine(h.win, projA, 0, '/hook-notify permission_prompt late');
       await h.win.waitForTimeout(1000);
-      expect(await dotState(tab), 'stale needs-input Notification does not turn the dot red').toBe('busy');
+      expect(await dotState(tab), 'stale needs-input Notification does not block the dot').toBe('busy');
       expect(await notifications(h.app), 'stale needs-input Notification shows nothing').toHaveLength(0);
 
       // Positive control, same shell: a fresh PermissionRequest clears

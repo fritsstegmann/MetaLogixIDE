@@ -388,14 +388,14 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
 /**
  * Starts the Claude hook receiver and writes its settings file. A failure
  * is logged and otherwise ignored: Claude shells then launch undecorated,
- * keep the generic notifier (AC22) and show a green status dot, with no
+ * keep the generic notifier (AC22) and show an idle (blue) status dot, with no
  * dialog.
  */
 async function startClaudeHooks(services: Services): Promise<void> {
   try {
     await services.hookRuntime.start();
   } catch (err) {
-    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled and Claude status dots stay green', err);
+    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled and Claude status dots stay idle (blue)', err);
   }
 }
 
