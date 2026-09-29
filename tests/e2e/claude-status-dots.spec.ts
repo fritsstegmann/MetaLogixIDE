@@ -1,5 +1,5 @@
 /**
- * Claude status dots (idle green / busy orange / blocked red).
+ * Claude status dots (idle blue / busy green / blocked orange).
  *
  * Spec: docs/specs/claude-status-dots.md, AC14-AC18, AC20, AC22 (rendering
  * and E2E), plus the amended AC12a-e and new AC24-AC28 (background work and
@@ -10,7 +10,7 @@
  *
  * This suite is NOT adversarial (no pen-testing track): it covers each
  * listed AC's happy path plus the failure paths those ACs themselves name
- * (an arrow key must not clear red; a non-alive project's dot and the
+ * (an arrow key must not clear blocked; a non-alive project's dot and the
  * ChatTab connection dot must be untouched; a background-work Stop and a
  * stale needs-input Notification must not fire "finished"/"needs input").
  *
