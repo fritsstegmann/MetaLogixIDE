@@ -1,9 +1,11 @@
 /**
  * Pure derivations over the renderer's Claude-state snapshot: worst-of
- * across shells, per-shell and per-project lookups, and the two reducers
+ * across shells, per-shell and per-project lookups, the two reducers
  * (`applySnapshot`, `applyDelta`) that turn `claude-state:list` responses
  * and `claude-state:changed` events into a `ReadonlyMap<string, ClaudeShellState>`
- * keyed by `keyFor(projectId, shellIndex)`. No IO lives here — `useClaudeStates`
+ * keyed by `keyFor(projectId, shellIndex)`, and the `*SnapshotGetter` factories
+ * `useClaudeStates` wires into `useSyncExternalStore` so each selector compares
+ * a primitive rather than the whole map. No IO lives here — `useClaudeStates`
  * owns fetching and subscribing.
  */
 import type { ClaudeShellState, ClaudeShellStateEntry } from '@shared/claude-state';
@@ -42,6 +44,38 @@ export function projectStateOf(map: ReadonlyMap<string, ClaudeShellState>, proje
 /** Worst state across every project's shells — the "In use" header dot (AC15, D4). */
 export function overallStateOf(map: ReadonlyMap<string, ClaudeShellState>): ClaudeShellState {
   return worstClaudeState(map.values());
+}
+
+/**
+ * Builds a `useSyncExternalStore` snapshot getter that derives a shell's
+ * state on every call, rather than returning the backing map. Since the
+ * result is a primitive `ClaudeShellState`, React's `Object.is` snapshot
+ * comparison is a value comparison: a delta to an unrelated shell leaves
+ * the returned string unchanged, so only the sites whose own state moved
+ * re-render. `getMap` is injected so this stays pure and testable without
+ * the store's IPC wiring.
+ */
+export function shellSnapshotGetter(
+  getMap: () => ReadonlyMap<string, ClaudeShellState>,
+  projectId: number,
+  shellIndex: number,
+): () => ClaudeShellState {
+  return () => shellStateOf(getMap(), projectId, shellIndex);
+}
+
+/** Same as `shellSnapshotGetter`, for a project's worst state. */
+export function projectSnapshotGetter(
+  getMap: () => ReadonlyMap<string, ClaudeShellState>,
+  projectId: number,
+): () => ClaudeShellState {
+  return () => projectStateOf(getMap(), projectId);
+}
+
+/** Same as `shellSnapshotGetter`, for the worst state across every project. */
+export function overallSnapshotGetter(
+  getMap: () => ReadonlyMap<string, ClaudeShellState>,
+): () => ClaudeShellState {
+  return () => overallStateOf(getMap());
 }
 
 /** Rebuilds the map from a `claude-state:list` snapshot. Idle entries (defensively, since the channel documents non-idle-only) are dropped rather than stored. */

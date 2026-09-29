@@ -7,13 +7,21 @@
  * §4.3). A fetch failure is logged with its cause and the store keeps its
  * last state rather than throwing into a render. The exported selector
  * hooks (`useShellClaudeState`, `useProjectClaudeState`,
- * `useOverallClaudeState`) go through `useSyncExternalStore` and return a
- * primitive `ClaudeShellState`, so a site only re-renders when its own
- * derived value actually changes.
+ * `useOverallClaudeState`) pass `useSyncExternalStore` one of
+ * `claude-state.ts`'s `*SnapshotGetter` factories rather than the raw map,
+ * so React's `Object.is` snapshot check compares the derived primitive
+ * `ClaudeShellState` and a site only re-renders when its own derived value
+ * actually changes.
  */
 import { useSyncExternalStore } from 'react';
 import { api } from '@renderer/api';
-import { applyDelta, applySnapshot, overallStateOf, projectStateOf, shellStateOf } from '@renderer/claude-state';
+import {
+  applyDelta,
+  applySnapshot,
+  overallSnapshotGetter,
+  projectSnapshotGetter,
+  shellSnapshotGetter,
+} from '@renderer/claude-state';
 import type { ClaudeShellState } from '@shared/claude-state';
 
 let map: ReadonlyMap<string, ClaudeShellState> = new Map();
@@ -59,25 +67,21 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function getSnapshot(): ReadonlyMap<string, ClaudeShellState> {
+function getMap(): ReadonlyMap<string, ClaudeShellState> {
   return map;
-}
-
-function useClaudeStateMap(): ReadonlyMap<string, ClaudeShellState> {
-  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /** Claude state of one shell (per-shell dot sites). */
 export function useShellClaudeState(projectId: number, shellIndex: number): ClaudeShellState {
-  return shellStateOf(useClaudeStateMap(), projectId, shellIndex);
+  return useSyncExternalStore(subscribe, shellSnapshotGetter(getMap, projectId, shellIndex));
 }
 
 /** Worst state among a single project's live shells (project-level dot sites). */
 export function useProjectClaudeState(projectId: number): ClaudeShellState {
-  return projectStateOf(useClaudeStateMap(), projectId);
+  return useSyncExternalStore(subscribe, projectSnapshotGetter(getMap, projectId));
 }
 
 /** Worst state across every project's live shells (the "In use" header dot, D4). */
 export function useOverallClaudeState(): ClaudeShellState {
-  return overallStateOf(useClaudeStateMap());
+  return useSyncExternalStore(subscribe, overallSnapshotGetter(getMap));
 }

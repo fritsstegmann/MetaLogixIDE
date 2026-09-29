@@ -7,8 +7,11 @@ import {
   overallStateOf,
   applySnapshot,
   applyDelta,
+  shellSnapshotGetter,
+  projectSnapshotGetter,
+  overallSnapshotGetter,
 } from '@renderer/claude-state';
-import type { ClaudeShellStateEntry } from '@shared/claude-state';
+import type { ClaudeShellState, ClaudeShellStateEntry } from '@shared/claude-state';
 
 describe('worstClaudeState', () => {
   it('is idle for an empty set', () => {
@@ -58,6 +61,13 @@ describe('projectStateOf', () => {
       [keyFor(1, 2), 'blocked' as const],
     ]);
     expect(projectStateOf(map, 1)).toBe('blocked');
+  });
+  it('does not let project 1 match project 11 (the key delimiter must be pinned)', () => {
+    const map = new Map([
+      [keyFor(1, 0), 'idle' as const],
+      [keyFor(11, 0), 'blocked' as const],
+    ]);
+    expect(projectStateOf(map, 1)).toBe('idle');
   });
 });
 
@@ -133,5 +143,66 @@ describe('applyDelta', () => {
     let map = applyDelta(new Map(), { projectId: 1, shellIndex: 0, state: 'blocked' });
     map = applySnapshot([{ projectId: 1, shellIndex: 0, state: 'busy' }]);
     expect(shellStateOf(map, 1, 0)).toBe('busy');
+  });
+});
+
+// M1 fix: useSyncExternalStore must compare a derived primitive, not the
+// backing map, so a delta to an unrelated shell/project doesn't re-render
+// every selector user. These factories are what useClaudeStates.ts wires
+// into useSyncExternalStore as its snapshot getter.
+describe('shellSnapshotGetter', () => {
+  it('returns an Object.is-equal value across a delta to a different shell', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'busy']]);
+    const getSnapshot = shellSnapshotGetter(() => map, 1, 0);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 2, shellIndex: 0, state: 'blocked' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(true);
+  });
+  it('returns a different value when its own shell transitions', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'busy']]);
+    const getSnapshot = shellSnapshotGetter(() => map, 1, 0);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 1, shellIndex: 0, state: 'blocked' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(false);
+  });
+});
+
+describe('projectSnapshotGetter', () => {
+  it('returns an Object.is-equal value across a delta to a different project', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'idle']]);
+    const getSnapshot = projectSnapshotGetter(() => map, 1);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 2, shellIndex: 0, state: 'blocked' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(true);
+  });
+  it('returns a different value when one of its own project\'s shells transitions', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'idle']]);
+    const getSnapshot = projectSnapshotGetter(() => map, 1);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 1, shellIndex: 0, state: 'busy' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(false);
+  });
+});
+
+describe('overallSnapshotGetter', () => {
+  it('returns a different value when any project transitions', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'idle']]);
+    const getSnapshot = overallSnapshotGetter(() => map);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 7, shellIndex: 0, state: 'blocked' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(false);
+  });
+  it('returns an Object.is-equal value across a no-op delta (redundant same-state event)', () => {
+    let map: ReadonlyMap<string, ClaudeShellState> = new Map([[keyFor(1, 0), 'busy']]);
+    const getSnapshot = overallSnapshotGetter(() => map);
+    const before = getSnapshot();
+    map = applyDelta(map, { projectId: 1, shellIndex: 0, state: 'busy' });
+    const after = getSnapshot();
+    expect(Object.is(before, after)).toBe(true);
   });
 });

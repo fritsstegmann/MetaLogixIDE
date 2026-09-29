@@ -523,4 +523,50 @@ test.describe('Claude status dots', () => {
       h.cleanup();
     }
   });
+
+  /* ── AC9 (renderer half): a relaunched shell's dot resets to idle on its own ── */
+  test('AC9: a shell\'s dot resets to idle after it is killed and relaunched into the same slot, with no further hook', async () => {
+    const h = await launch(['proja']);
+    try {
+      await openProject(h.win, 'proja');
+      const projA = await projectId(h.win, 'proja');
+      await waitForShell(h.win, projA, 0, 'mock-claude ready');
+
+      // Drive shell 0 busy, then blocked.
+      await sendLine(h.win, projA, 0, 'hello');
+      await expectState(tabDot(h.win, 0), 'busy');
+      await sendLine(h.win, projA, 0, '/hook-raw PermissionRequest');
+      // Positive control: definitely blocked immediately before the kill —
+      // proves the "idle" read below is a real reset, not a shell that was
+      // never anything else.
+      await expectState(tabDot(h.win, 0), 'blocked');
+
+      // Kill and relaunch into the same slot (`firstLaunchedAt` is already
+      // set, so this resolves to the `subsequent`/--continue variant) —
+      // the same relaunch step claude-notifications.spec.ts's AC6 test uses.
+      // `PtyManager.kill` doesn't await the child's exit, so the OLD
+      // process's exit event arrives after the new spawn and is correctly
+      // ignored by the respawn guard (`claude-status/install.ts`) — the
+      // tracker's lazy session validation (AC9) is what makes the OLD
+      // (blocked) entry stop counting once the new session replaces it in
+      // the registry, without any explicit "idle" transition ever firing.
+      await h.win.evaluate(async (id: number) => {
+        await (window as unknown as { api: Api }).api.invoke('shells:kill', { projectId: id, shellIndex: 0 });
+      }, projA);
+      const relaunchedIdx = await h.win.evaluate(async (id: number) => {
+        const api = (window as unknown as { api: Api }).api;
+        return (await api.invoke('shells:launch', { projectId: id }) as unknown as { shellIndex: number }).shellIndex;
+      }, projA);
+      await waitForShell(h.win, projA, relaunchedIdx, 'mock-claude resumed');
+
+      // No hook is posted to the relaunched shell at all — if the dot goes
+      // idle here, it's the relaunch path itself doing it (the renderer
+      // refetching its snapshot on `alive-shells:changed`, which
+      // `shells:launch` fires), not a fresh `Stop`/exit transition.
+      await expectState(tabDot(h.win, relaunchedIdx), 'idle', { timeout: 2000 });
+    } finally {
+      await h.app.close();
+      h.cleanup();
+    }
+  });
 });

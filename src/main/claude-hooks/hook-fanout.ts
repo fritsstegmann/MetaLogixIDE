@@ -1,6 +1,8 @@
 /**
- * Fans the hook receiver's single listener out to several consumers (the
- * notifier and the Claude-state tracker). Registers exactly one listener on
+ * Fans the hook receiver's single listener out to several consumers. Its one
+ * production consumer is the Claude-state tracker (the notifier reads the
+ * tracker's applied hooks); it stays as the seam that isolates consumers and
+ * lets another one subscribe later. Registers exactly one listener on
  * the receiver, so its single-listener, reply-before-dispatch contract is
  * unchanged, and isolates consumers: a throw or rejection in one is logged
  * with its cause and never stops the others.
