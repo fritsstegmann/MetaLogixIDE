@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PtyManager } from '@main/pty/manager';
+import type { ResolvedLaunch } from '@main/domain/launch';
 import { resolve } from 'node:path';
 
 const MOCK = resolve(__dirname, '../../../../scripts/mock-claude.mjs');
@@ -91,5 +92,45 @@ describe('PtyManager', () => {
     const out = await p;
     await mgr.kill(7, 0);
     expect(out).toContain('SIZE=100x30');
+  });
+});
+
+const PRINT_PROBE = 'process.stdout.write(`PROBE=${process.env.HOOK_PROBE ?? "unset"} ARG=${process.argv[1] ?? "none"}\\n`); setTimeout(() => {}, 500)';
+
+function probeLaunch(env: Record<string, string> = {}) {
+  return { argv: ['node', '-e', PRINT_PROBE], env, cwd: process.cwd(), variant: 'first' as const };
+}
+
+describe('PtyManager — spawnDecorator (AC8)', () => {
+  it('spawns what the decorator returns, called with the shell identity, without touching the caller launch', async () => {
+    const decorator = vi.fn((_p: number, _s: number, l: ResolvedLaunch) => ({ ...l, argv: [...l.argv, 'injected-arg'], env: { ...l.env, HOOK_PROBE: 'injected' } }));
+    const mgr = new PtyManager({ spawnDecorator: decorator });
+    const launch = probeLaunch({ OTHER: '1' });
+    const before = structuredClone(launch);
+    const p = untilData(mgr, 20, '\n');
+    await mgr.spawn(20, 3, launch);
+    const out = await p;
+    await mgr.kill(20, 3);
+    expect(out).toContain('PROBE=injected ARG=injected-arg');
+    expect(decorator).toHaveBeenCalledWith(20, 3, launch);
+    expect(launch).toEqual(before);
+  });
+
+  it('without a decorator the launch env spawns as given', async () => {
+    const mgr = new PtyManager();
+    const p = untilData(mgr, 21, '\n');
+    await mgr.spawn(21, 0, probeLaunch({ HOOK_PROBE: 'plain' }));
+    const out = await p;
+    await mgr.kill(21, 0);
+    expect(out).toContain('PROBE=plain ARG=none');
+  });
+
+  it('does not decorate a duplicate spawn it rejects', async () => {
+    const decorator = vi.fn((_p: number, _s: number, l: ResolvedLaunch) => l);
+    const mgr = new PtyManager({ spawnDecorator: decorator });
+    await mgr.spawn(22, 0, launch());
+    await expect(mgr.spawn(22, 0, launch())).rejects.toThrow();
+    await mgr.kill(22, 0);
+    expect(decorator).toHaveBeenCalledTimes(1);
   });
 });

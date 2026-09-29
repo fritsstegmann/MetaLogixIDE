@@ -4,6 +4,7 @@ import { registerIpc } from '@main/ipc/register';
 import { openDb } from '@main/db/connection';
 import { runMigrations } from '@main/db/migrator';
 import { SettingsRepo } from '@main/repos/settings-repo';
+import { ViewedShells } from '@main/notifications/viewed-shells';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -44,7 +45,7 @@ describe('registerIpc', () => {
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
       'settings:get', 'settings:set', 'settings:set-claude-permission-mode',
-      'files:tree', 'app:ping',
+      'files:tree', 'app:ping', 'notifications:viewed-shells',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
   });
@@ -128,5 +129,39 @@ describe('registerIpc', () => {
     const handler = ipc.handlers.get('settings:set-claude-permission-mode')!;
     await expect(handler({}, { mode: 'plan' })).rejects.toThrow();
     expect(events).toEqual([]);
+  });
+
+  describe('notifications:viewed-shells', () => {
+    const main = {};
+    const mainFocused = { focused: () => main, main: () => main, popout: () => null };
+
+    function setupViewed() {
+      const ipc = fakeIpcMain();
+      const viewedShells = new ViewedShells();
+      const services = { viewedShells } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      return { handler: ipc.handlers.get('notifications:viewed-shells')!, viewedShells };
+    }
+
+    it('a valid payload replaces the reported view', async () => {
+      const { handler, viewedShells } = setupViewed();
+      await expect(handler({}, { shells: [{ projectId: 3, shellIndex: 1 }] })).resolves.toEqual({ ok: true });
+      expect(viewedShells.isViewing({ projectId: 3, shellIndex: 1 }, mainFocused)).toBe(true);
+      await handler({}, { shells: [] });
+      expect(viewedShells.isViewing({ projectId: 3, shellIndex: 1 }, mainFocused)).toBe(false);
+    });
+
+    it.each([
+      ['more than 8 items', { shells: Array.from({ length: 9 }, (_, i) => ({ projectId: 1, shellIndex: i })) }],
+      ['a non-integer id', { shells: [{ projectId: 1.5, shellIndex: 0 }] }],
+      ['a negative shell index', { shells: [{ projectId: 1, shellIndex: -1 }] }],
+      ['projectId 0', { shells: [{ projectId: 0, shellIndex: 0 }] }],
+      ['a non-array', { shells: 'all' }],
+    ])('rejects %s and leaves the view unchanged', async (_label, req) => {
+      const { handler, viewedShells } = setupViewed();
+      await handler({}, { shells: [{ projectId: 3, shellIndex: 1 }] });
+      await expect(handler({}, req)).rejects.toThrow(/viewed shells/);
+      expect(viewedShells.isViewing({ projectId: 3, shellIndex: 1 }, mainFocused)).toBe(true);
+    });
   });
 });

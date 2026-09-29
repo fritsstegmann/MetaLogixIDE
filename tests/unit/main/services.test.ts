@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { chmodSync, writeFileSync } from 'node:fs';
 import { buildServices } from '@main/services';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,5 +54,45 @@ describe('buildServices — METAIDE_CLAUDE_PERMISSION_MODE env hook (AC21)', () 
     // even though a mode was chosen via the env hook.
     expect(services.settings.get('default_launch_cmd.first').argv).toEqual(['my-tool', '--flag']);
     expect(services.settings.get('claude_permission_mode')).toBe('auto');
+  });
+});
+
+describe('buildServices — Claude hook wiring', () => {
+  it('constructs the hook services without opening a socket or writing the settings file', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'svc-home-'));
+    const services = buildServices({ ...tempOpts(), homeDir: home });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(services.hookReceiver.url()).toBeNull();
+    expect(services.hookReceiver.boundAddress()).toBeNull();
+    expect(services.hookRuntime.settingsPath()).toBeNull();
+    expect(services.viewedShells).toBeDefined();
+    expect(services.homeDir).toBe(home);
+  });
+
+  it.skipIf(process.platform === 'win32')('once the runtime is started, a Claude spawn gets --settings and a hook session (AC6)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'svc-home-'));
+    const bin = mkdtempSync(join(tmpdir(), 'svc-bin-'));
+    const shim = join(bin, 'claude');
+    writeFileSync(shim, '#!/bin/sh\necho "ARGV=$* ID=$METAIDE_HOOK_SHELL"\nsleep 1\n');
+    chmodSync(shim, 0o755);
+    const services = buildServices({ ...tempOpts(), homeDir: home });
+    await services.hookRuntime.start();
+    try {
+      let out = '';
+      const seen = new Promise<void>((resolveP) => {
+        services.ptyManager.on('data', ({ data }: { data: string }) => { out += data; if (out.includes('ID=')) resolveP(); });
+      });
+      const launch = { argv: [shim, '--continue'], env: {}, cwd: home, variant: 'subsequent' as const };
+      await services.ptyManager.spawn(1, 0, launch);
+      await seen;
+      await new Promise((r) => setTimeout(r, 100));
+      await services.ptyManager.kill(1, 0);
+      expect(out).toContain(`ARGV=--settings ${services.hookRuntime.settingsPath()} --continue`);
+      expect(services.hookRuntime.settingsPath()!.startsWith(join(home, '.metaide', 'claude-hooks', 'settings-'))).toBe(true);
+      expect(out).toMatch(/ID=[0-9a-f-]{36}/);
+      expect(launch.argv).toEqual([shim, '--continue']);
+    } finally {
+      await services.hookRuntime.stop();
+    }
   });
 });

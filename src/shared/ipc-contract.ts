@@ -114,6 +114,15 @@ export interface IpcContract {
   'settings:set': { request: { key: keyof SettingsMap; value: SettingsMap[keyof SettingsMap] }; response: { ok: true } };
   'settings:set-claude-permission-mode': { request: { mode: ClaudePermissionMode }; response: { mode: ClaudePermissionMode; changedKeys: Array<keyof SettingsMap> } };
 
+  // notifications
+  /**
+   * The main window reports which shells it currently shows (active tab, plus
+   * the right split pane when set; empty when no project or the Files tab is
+   * showing). Main uses it to hold back Claude notifications for a shell the
+   * user is viewing. Popouts are known to main already and are not reported.
+   */
+  'notifications:viewed-shells': { request: { shells: Array<{ projectId: number; shellIndex: number }> }; response: { ok: true } };
+
   // files (read-only)
   'files:tree':      { request: { projectId: number; relPath?: string };                    response: { entries: Array<{ name: string; isDir: boolean; relPath: string }> } };
   'files:read':      { request: { projectId: number; relPath: string; forceText?: boolean }; response: { content: string; kind: 'text' | 'binary'; sizeBytes: number } };
@@ -321,9 +330,10 @@ export interface IpcEvents {
   'metaproject:event':      { event: string; payload: unknown };
   'ports:changed':          { projectId: number; shellIndex: number; ports: number[] };
   /**
-   * Fired when the user clicks an OS "command finished" notification. The
-   * renderer should switch to the named project, focus the shell tab, and
-   * bring the window forward.
+   * Fired when the user clicks an OS notification for a live shell — the
+   * generic "command finished" one or a Claude "needs input" / "finished"
+   * one. The renderer should switch to the named project, focus the shell
+   * tab, and bring the window forward.
    */
   'shell:focus-request':    { projectId: number; shellIndex: number };
   /**

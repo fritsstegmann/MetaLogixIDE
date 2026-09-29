@@ -11,6 +11,11 @@ import { RootWatcher } from './domain/watcher';
 import { MetaprojectClient } from './metaproject/client';
 import { applyClaudePermissionMode } from './domain/claude-permission-mode';
 import { CLAUDE_PERMISSION_MODE_ENV, isClaudePermissionMode } from '@shared/claude-permission-mode';
+import { SessionRegistry } from './claude-hooks/session-registry';
+import { ClaudeHookReceiver } from './claude-hooks/receiver';
+import { ClaudeHookRuntime } from './claude-hooks/runtime';
+import { createLaunchDecorator } from './claude-hooks/launch-decorator';
+import { ViewedShells } from './notifications/viewed-shells';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -24,6 +29,14 @@ export interface Services {
   ptyManager: PtyManager;
   watcher: RootWatcher;
   metaproject: MetaprojectClient;
+  /** Per-spawn Claude hook sessions (auth + hook-confirmed state). */
+  hookSessions: SessionRegistry;
+  /** Loopback receiver for Claude hook POSTs; not listening until `hookRuntime.start()`. */
+  hookReceiver: ClaudeHookReceiver;
+  /** Starts/stops the receiver and owns the settings file injected into Claude spawns. */
+  hookRuntime: ClaudeHookRuntime;
+  /** Shells the main window reports as visible, for notification suppression. */
+  viewedShells: ViewedShells;
   homeDir: string;
   migrationsDir: string;
 }
@@ -47,8 +60,13 @@ function applyPermissionModeEnvOverride(settings: SettingsRepo): void {
   applyClaudePermissionMode(settings, raw);
 }
 
-export function buildServices(opts: { dbPath?: string; migrationsDir?: string } = {}): Services {
-  const home = homedir();
+/**
+ * Composition root for main-process services. Opens and migrates the DB and
+ * constructs every repo and adapter; the Claude hook receiver is built but
+ * not started (no socket is opened here). `homeDir` defaults to the OS home.
+ */
+export function buildServices(opts: { dbPath?: string; migrationsDir?: string; homeDir?: string } = {}): Services {
+  const home = opts.homeDir ?? homedir();
   const dbPath = opts.dbPath ?? join(home, '.metaide', 'metaide.db');
   const migrationsDir = opts.migrationsDir ?? resolve(process.cwd(), 'migrations');
   const db = openDb(dbPath);
@@ -60,8 +78,17 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string } 
   const projects = new ProjectsRepo(db);
   const shells = new ShellsRepo(db);
   const prompts = new PromptsRepo(db);
-  const ptyManager = new PtyManager();
+  const hookSessions = new SessionRegistry();
+  const hookReceiver = new ClaudeHookReceiver(hookSessions);
+  const hookRuntime = new ClaudeHookRuntime({ receiver: hookReceiver, homeDir: home });
+  const ptyManager = new PtyManager({
+    spawnDecorator: createLaunchDecorator({ sessions: hookSessions, settingsPath: () => hookRuntime.settingsPath() }),
+  });
   const watcher = new RootWatcher({ cap: settings.get('max_watched_paths') });
   const metaproject = new MetaprojectClient();
-  return { db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject, homeDir: home, migrationsDir };
+  return {
+    db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
+    hookSessions, hookReceiver, hookRuntime, viewedShells: new ViewedShells(),
+    homeDir: home, migrationsDir,
+  };
 }

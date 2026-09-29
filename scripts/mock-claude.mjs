@@ -6,8 +6,60 @@
 // (updated on SIGWINCH), so tests can check what size the PTY really has.
 // `/flood [kb]` mimics how Claude Code's TUI draws: see flood() below.
 // `/truecolor-top` draws a screen whose first cell is truecolor: see truecolorTop().
+//
+// Claude Code hook emulation (docs/specs/claude-code-notifications.md):
+// when launched with `--settings <path>`, reads the app-owned hook settings
+// file the same way real Claude does and POSTs JSON hook events to its
+// `http` hook's url. Headers are built from the hook's header templates,
+// substituting `$VAR` only for names listed in `allowedEnvVars` (mirrors
+// Claude: it never leaks arbitrary env into a hook header). POSTs are
+// fire-and-forget — a failure is swallowed, never surfaced to the user or
+// the caller, because Claude's own hook delivery must never block a turn.
+import { readFileSync } from 'node:fs';
+
 const args = process.argv.slice(2);
 const isContinue = args.includes('--continue');
+
+// ─── Hook settings (only present when launched with --settings <path>) ────
+// `settingsCount` is how many --settings occurrences this process actually
+// received in its own argv (as opposed to the app's pre-decoration record of
+// what it MEANT to launch, which never contains an injected one — AC8) —
+// the ground truth for "was this spawn decorated, and exactly once".
+const settingsCount = args.filter((a) => a === '--settings' || a.startsWith('--settings=')).length;
+const settingsFlagIdx = args.findIndex((a) => a === '--settings' || a.startsWith('--settings='));
+const settingsPath = settingsFlagIdx === -1 ? null : (args[settingsFlagIdx].startsWith('--settings=')
+  ? args[settingsFlagIdx].slice('--settings='.length)
+  : args[settingsFlagIdx + 1]);
+let hookConfig = null;
+if (settingsPath) {
+  try {
+    const doc = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const hook = doc?.hooks?.Notification?.[0]?.hooks?.[0];
+    if (hook && typeof hook.url === 'string') {
+      hookConfig = { url: hook.url, headers: hook.headers ?? {}, allowedEnvVars: hook.allowedEnvVars ?? [] };
+    }
+  } catch {
+    // No settings file, malformed JSON, or unreadable — hooks stay disabled,
+    // same as when Claude's own hook delivery has nothing to talk to.
+  }
+}
+
+/** Resolves `$VAR` in a header template from process.env, only for allow-listed names. */
+function resolveHeaderTemplate(template, allowedEnvVars) {
+  return template.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (whole, name) => (
+    allowedEnvVars.includes(name) ? (process.env[name] ?? '') : whole
+  ));
+}
+
+/** Fire-and-forget POST of one Claude Code hook event; a no-op without hook config. */
+function postHook(body) {
+  if (!hookConfig) return;
+  const headers = { 'Content-Type': 'application/json' };
+  for (const [key, template] of Object.entries(hookConfig.headers)) {
+    headers[key] = resolveHeaderTemplate(template, hookConfig.allowedEnvVars);
+  }
+  fetch(hookConfig.url, { method: 'POST', headers, body: JSON.stringify(body) }).catch(() => {});
+}
 
 // Text of the /flood footer. Tests match these exactly.
 const INPUT_BOX = '| > INPUT-BOX-MARK';
@@ -82,6 +134,20 @@ function truecolorTop() {
   );
 }
 
+/** `/work <seconds>`: prints a dot every 500ms, to drive the generic "Command finished" heuristic. */
+function work(seconds) {
+  const total = Math.max(1, Math.round(seconds));
+  let elapsed = 0;
+  const timer = setInterval(() => {
+    elapsed += 0.5;
+    process.stdout.write('.');
+    if (elapsed >= total) {
+      clearInterval(timer);
+      process.stdout.write(`\nwork done (${total}s)\n> `);
+    }
+  }, 500);
+}
+
 process.stdout.write(isContinue ? 'mock-claude resumed\n> ' : 'mock-claude ready\n> ');
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -95,9 +161,38 @@ process.stdin.on('data', (chunk) => {
     flood(Number.isFinite(kb) && kb > 0 ? kb : 512);
   } else if (line === '/truecolor-top') {
     truecolorTop();
+  } else if (line === '/work' || line.startsWith('/work ')) {
+    const secs = Number(line.slice(5).trim());
+    work(Number.isFinite(secs) && secs > 0 ? secs : 10);
+  } else if (line === '/hook-env') {
+    const shell = process.env.METAIDE_HOOK_SHELL ?? 'none';
+    const token = process.env.METAIDE_HOOK_TOKEN ?? 'none';
+    process.stdout.write(`HOOK-ENV shell=${shell} token=${token}\n> `);
+  } else if (line === '/hook-argv') {
+    // How many --settings flags this process actually received, and which
+    // path — ground truth for "was this spawn decorated, and exactly once",
+    // as opposed to the app's own (pre-decoration, AC8) launch record.
+    process.stdout.write(`HOOK-ARGV count=${settingsCount} path=${settingsPath ?? 'none'}\n> `);
+  } else if (line === '/hook-stop') {
+    postHook({ hook_event_name: 'Stop' });
+    process.stdout.write('hook: Stop\n> ');
+  } else if (line.startsWith('/hook-notify')) {
+    const rest = line.slice('/hook-notify'.length).trim();
+    const spaceIdx = rest.indexOf(' ');
+    const type = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx);
+    const message = spaceIdx === -1 ? '' : rest.slice(spaceIdx + 1);
+    postHook({ hook_event_name: 'Notification', notification_type: type, message: message || null });
+    process.stdout.write(`hook: Notification ${type}\n> `);
+  } else if (line.startsWith('/hook-raw ')) {
+    // Arbitrary, non-Notification/Stop hook event name (e.g. SubagentStop) —
+    // exercises the "ignored events" path without a notification_type.
+    const eventName = line.slice('/hook-raw '.length).trim();
+    postHook({ hook_event_name: eventName });
+    process.stdout.write(`hook: ${eventName}\n> `);
   } else if (line === 'exit' || line === '/quit') {
     process.exit(0);
   } else {
+    if (line !== '') postHook({ hook_event_name: 'UserPromptSubmit' });
     process.stdout.write(`echo: ${line}\n> `);
   }
 });

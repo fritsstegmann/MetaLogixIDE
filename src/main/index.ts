@@ -4,9 +4,11 @@ import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import log from 'electron-log/main';
-import { buildServices } from './services';
+import { buildServices, type Services } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
+import { installClaudeNotifications } from './notifications/install';
+import { withoutHookConfirmed } from './notifications/claude-notifier';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -381,6 +383,19 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
   win.setOpacity(opacity);
 }
 
+/**
+ * Starts the Claude hook receiver and writes its settings file. A failure
+ * is logged and otherwise ignored: Claude shells then launch undecorated
+ * and keep the generic notifier (AC22), with no dialog.
+ */
+async function startClaudeHooks(services: Services): Promise<void> {
+  try {
+    await services.hookRuntime.start();
+  } catch (err) {
+    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled', err);
+  }
+}
+
 // Renderer signals it's mounted (App.tsx effect) so we can flush any
 // file-open events buffered from a cold launch. Registered outside the
 // ready handler so the receiver is in place before the renderer boots.
@@ -394,7 +409,10 @@ app.whenReady().then(async () => {
   // Cold-launch argv scan (Windows/Linux + packaged mac when invoked with
   // args). Runs after ready so `existsSync` sees the app-relative CWD.
   scanArgvForFiles(process.argv);
+  // Windows toasts are dropped without an AppUserModelID matching build.appId.
+  if (process.platform === 'win32') app.setAppUserModelId('com.metalogix.metaide');
   const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations') });
+  await startClaudeHooks(services);
   // Auto-rescan every registered root at boot so folders added on disk since
   // the last launch (or after a discovery-rule change) surface without the
   // user having to remember Settings → Rescan. Cheap: it's just directory
@@ -424,6 +442,21 @@ app.whenReady().then(async () => {
     tileAll: () => tileAllOurWindows(),
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
+  installClaudeNotifications({
+    receiver: services.hookReceiver,
+    sessions: services.hookSessions,
+    ptyManager: services.ptyManager,
+    viewedShells: services.viewedShells,
+    settings: services.settings,
+    projects: services.projects,
+    notificationClass: Notification,
+    windows: {
+      main: () => mainWindow,
+      popout: (s) => popoutWindows.get(`${s.projectId}:${s.shellIndex}`) ?? null,
+      focused: () => BrowserWindow.getFocusedWindow(),
+    },
+    broadcast,
+  });
 
   // ─── Long-running command "done" notifier ─────────────────────────────
   // Every 500 ms ask the PtyManager which shells just finished a command
@@ -431,7 +464,7 @@ app.whenReady().then(async () => {
   // only when the shell isn't the currently-focused one (otherwise it'd
   // ping every time you finish typing a heavy `pytest`).
   const donePoll = setInterval(() => {
-    const done = services.ptyManager.pollDoneCommands();
+    const done = withoutHookConfirmed(services.ptyManager.pollDoneCommands(), (s) => services.hookSessions.isConfirmed(s));
     if (done.length === 0) return;
     const focused = BrowserWindow.getFocusedWindow();
     const mainFocused = !!focused && !focused.isDestroyed() && focused === mainWindow;
@@ -480,7 +513,10 @@ app.whenReady().then(async () => {
     broadcast('ports:changed', payload);
   });
 
-  app.on('before-quit', () => { clearInterval(donePoll); });
+  app.on('before-quit', () => {
+    clearInterval(donePoll);
+    void services.hookRuntime.stop();
+  });
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
