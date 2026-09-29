@@ -135,8 +135,8 @@ Rules:
 
 ### Claude status dots
 
-Each live dot shows the Claude state of its shell: idle (blue), busy
-(green) or blocked (orange). The main process derives the state and pushes it
+Each live dot shows the Claude state of its shell: idle (green), busy
+(orange) or blocked (red). The main process derives the state and pushes it
 to every window. Renderers never read terminal text for it.
 
 | Layer | File | Responsibility |

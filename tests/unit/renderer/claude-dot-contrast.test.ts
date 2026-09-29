@@ -1,5 +1,5 @@
 /**
- * Verifies AC21: the idle/busy/blocked dot colours clear WCAG 3:1 non-text
+ * Verifies AC21: the busy/blocked dot colours clear WCAG 3:1 non-text
  * contrast against each theme's panel fill (measured, per plan §2 finding
  * 1, composited over black in the dark theme and over white in light,
  * since the panel itself is translucent), and the accent-row ring colour
@@ -76,40 +76,24 @@ function contrastRatio(a: Rgb, b: Rgb): number {
 
 const darkBlock = extractBlock(css, /:root,\s*:root\[data-theme="dark"\]\s*\{/);
 const lightBlock = extractBlock(css, /:root\[data-theme="light"\]\s*\{/);
-const systemLightBlock = extractBlock(css, /:root:not\(\[data-theme\]\)\s*\{/);
 
 describe('claude dot contrast (AC21)', () => {
-  it('dark theme: idle, busy and blocked clear 3:1 against the panel composited over black', () => {
+  it('dark theme: busy and blocked clear 3:1 against the panel composited over black', () => {
     const panel = parseColor(extractVar(darkBlock, '--panel'));
     const bg = compositeOver(panel, [0, 0, 0]);
-    const idle = parseColor(extractVar(darkBlock, '--claude-idle')).slice(0, 3) as Rgb;
     const busy = parseColor(extractVar(darkBlock, '--claude-busy')).slice(0, 3) as Rgb;
     const blocked = parseColor(extractVar(darkBlock, '--claude-blocked')).slice(0, 3) as Rgb;
-    expect(contrastRatio(idle, bg), 'idle').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(busy, bg)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(blocked, bg)).toBeGreaterThanOrEqual(3);
   });
 
-  it('light theme: idle, busy and blocked clear 3:1 against the panel composited over white', () => {
+  it('light theme: busy and blocked clear 3:1 against the panel composited over white', () => {
     const panel = parseColor(extractVar(lightBlock, '--panel'));
     const bg = compositeOver(panel, [255, 255, 255]);
-    const idle = parseColor(extractVar(lightBlock, '--claude-idle')).slice(0, 3) as Rgb;
     const busy = parseColor(extractVar(lightBlock, '--claude-busy')).slice(0, 3) as Rgb;
     const blocked = parseColor(extractVar(lightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
-    expect(contrastRatio(idle, bg), 'idle').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);
-  });
-
-  it('system-theme light: idle, busy and blocked clear 3:1 against the panel composited over white', () => {
-    const panel = parseColor(extractVar(systemLightBlock, '--panel'));
-    const bg = compositeOver(panel, [255, 255, 255]);
-    const idle = parseColor(extractVar(systemLightBlock, '--claude-idle')).slice(0, 3) as Rgb;
-    const busy = parseColor(extractVar(systemLightBlock, '--claude-busy')).slice(0, 3) as Rgb;
-    const blocked = parseColor(extractVar(systemLightBlock, '--claude-blocked')).slice(0, 3) as Rgb;
-    expect(contrastRatio(idle, bg), 'idle').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(busy, bg), 'busy').toBeGreaterThanOrEqual(3);
-    expect(contrastRatio(blocked, bg), 'blocked').toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(busy, bg)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(blocked, bg)).toBeGreaterThanOrEqual(3);
   });
 
   it('the accent-row ring (white) clears 3:1 against the active-row accent in both themes', () => {

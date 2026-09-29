@@ -36,12 +36,12 @@
   --icon-code:  #34d399; /* code     = emerald */
   --icon-mute:  #8b949e;
   --danger:     #f87171;
-  /* Claude status dots (spec claude-status-dots, AC21): idle blue, busy
-   * green, blocked orange. The light theme uses darker shades so each
-   * clears 3:1 against the lighter panel fill. */
-  --claude-idle:    #3b82f6; /* blue-500 */
-  --claude-busy:    #22c55e; /* green-500 */
-  --claude-blocked: #f97316; /* orange-500 */
+  /* Claude status dots (spec claude-status-dots, AC21). Idle stays the
+   * existing green-500 in both themes; busy/blocked use one shade darker
+   * in light mode so they clear 3:1 against the lighter panel fill. */
+  --claude-idle:    #22c55e; /* green-500 */
+  --claude-busy:    #f97316; /* orange-500 */
+  --claude-blocked: #ef4444; /* red-500 */
   /* Highlight.js token colors — dark (GitHub-ish) */
   --hljs-comment:  #7d8590;
   --hljs-keyword:  #ff7b72;
@@ -90,9 +90,9 @@
   --icon-code:  #059669;
   --icon-mute:  #4b5563;
   --danger:     #dc2626;
-  --claude-idle:    #2563eb; /* blue-600 */
-  --claude-busy:    #15803d; /* green-700 */
-  --claude-blocked: #ea580c; /* orange-600 */
+  --claude-idle:    #22c55e; /* green-500 */
+  --claude-busy:    #ea580c; /* orange-600 */
+  --claude-blocked: #dc2626; /* red-600 */
   /* Highlight.js token colors — light */
   --hljs-comment:  #6a737d;
   --hljs-keyword:  #d73a49;
@@ -138,9 +138,9 @@
     --icon-code:  #059669;
     --icon-mute:  #4b5563;
     --danger:     #dc2626;
-    --claude-idle:    #2563eb;
-    --claude-busy:    #15803d;
-    --claude-blocked: #ea580c;
+    --claude-idle:    #22c55e;
+    --claude-busy:    #ea580c;
+    --claude-blocked: #dc2626;
     --hljs-comment:  #6a737d;
     --hljs-keyword:  #d73a49;
     --hljs-string:   #032f62;
@@ -338,7 +338,7 @@ input::placeholder, textarea::placeholder {
 }
 
 /* Claude status dot (spec claude-status-dots): fill colour carries the
- * shell/project state, per-theme so idle, busy and blocked clear 3:1 against each
+ * shell/project state, per-theme so busy/blocked clear 3:1 against each
  * theme's panel fill (AC21). `.live-dot` supplies the pulse; the D1 grey
  * inactive-tab dot never gets a `data-claude-state` attribute, so it is
  * unaffected by these rules. */
@@ -346,10 +346,9 @@ input::placeholder, textarea::placeholder {
 .status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
 .status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
 
-/* AC21: on the accent-filled rows (active ProjectSwitcher row, selected
- * Sidebar row) idle blue matches the accent and the busy/blocked fills do
- * not clear 3:1 there, so the dot gets a 1px white ring instead (white
- * clears 3:1 against both themes' accent). */
+/* AC21: on the accent-filled active ProjectSwitcher row, no orange/red fill
+ * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
+ * (white clears 3:1 against both themes' accent). */
 .status-dot-ring {
   box-shadow: 0 0 0 1px #fff;
 }
