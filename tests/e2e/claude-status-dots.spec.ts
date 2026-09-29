@@ -1,5 +1,5 @@
 /**
- * Claude status dots (idle green / busy orange / blocked red).
+ * Claude status dots (idle green / busy amber / blocked red).
  *
  * Spec: docs/specs/claude-status-dots.md, AC14-AC18, AC20, AC22 (rendering
  * and E2E), plus the amended AC12a-e and new AC24-AC28 (background work and

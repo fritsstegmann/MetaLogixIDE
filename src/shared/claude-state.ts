@@ -1,6 +1,6 @@
 /**
  * Shared contract for the per-shell Claude state shown on the live dots
- * (idle green, busy orange, blocked red). Declarations only: main derives
+ * (idle green, busy amber, blocked red). Declarations only: main derives
  * the state, renderers colour dots from it, and the E2E suite selects on
  * the DOM hooks below.
  */

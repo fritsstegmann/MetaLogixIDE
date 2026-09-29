@@ -37,10 +37,11 @@
   --icon-mute:  #8b949e;
   --danger:     #f87171;
   /* Claude status dots (spec claude-status-dots, AC21). Idle stays the
-   * existing green-500 in both themes; busy/blocked use one shade darker
-   * in light mode so they clear 3:1 against the lighter panel fill. */
+   * existing green-500 in both themes; busy is amber. The light theme uses
+   * darker busy/blocked shades so they clear 3:1 against the lighter panel
+   * fill. */
   --claude-idle:    #22c55e; /* green-500 */
-  --claude-busy:    #f97316; /* orange-500 */
+  --claude-busy:    #fbbf24; /* amber-400 */
   --claude-blocked: #ef4444; /* red-500 */
   /* Highlight.js token colors — dark (GitHub-ish) */
   --hljs-comment:  #7d8590;
@@ -91,7 +92,7 @@
   --icon-mute:  #4b5563;
   --danger:     #dc2626;
   --claude-idle:    #22c55e; /* green-500 */
-  --claude-busy:    #ea580c; /* orange-600 */
+  --claude-busy:    #b45309; /* amber-700 */
   --claude-blocked: #dc2626; /* red-600 */
   /* Highlight.js token colors — light */
   --hljs-comment:  #6a737d;
@@ -139,7 +140,7 @@
     --icon-mute:  #4b5563;
     --danger:     #dc2626;
     --claude-idle:    #22c55e;
-    --claude-busy:    #ea580c;
+    --claude-busy:    #b45309;
     --claude-blocked: #dc2626;
     --hljs-comment:  #6a737d;
     --hljs-keyword:  #d73a49;
@@ -346,7 +347,7 @@ input::placeholder, textarea::placeholder {
 .status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
 .status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
 
-/* AC21: on the accent-filled active ProjectSwitcher row, no orange/red fill
+/* AC21: on the accent-filled active ProjectSwitcher row, no amber/red fill
  * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
  * (white clears 3:1 against both themes' accent). */
 .status-dot-ring {
