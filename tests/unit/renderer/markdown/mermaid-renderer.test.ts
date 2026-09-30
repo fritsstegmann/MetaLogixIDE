@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MERMAID_EMPTY_MESSAGE } from '@renderer/markdown/contract';
-import { createMermaidRenderer, type MermaidApi } from '@renderer/markdown/mermaid/mermaidRenderer';
+import { MERMAID_EMPTY_MESSAGE, type EffectiveTheme } from '@renderer/markdown/contract';
+import {
+  createMermaidRenderer,
+  type MermaidApi,
+  type MermaidDeps,
+} from '@renderer/markdown/mermaid/mermaidRenderer';
+import { mermaidThemeVariables } from '@renderer/markdown/mermaid/mermaidPalette';
+import type { ThemeTokens } from '@renderer/markdown/mermaid/paletteContract';
+import { stylesheetTokens } from './support/styleTokens';
 
 interface FakeElement {
   name: string;
@@ -45,25 +52,47 @@ const container = asElement(fakeElement('container'));
 function fakeMermaid(overrides: Partial<MermaidApi> = {}) {
   const api = {
     initialize: vi.fn<MermaidApi['initialize']>(),
-    parse: vi.fn<MermaidApi['parse']>(async () => ({})),
+    parse: vi.fn<MermaidApi['parse']>(async () => ({ config: {} })),
     render: vi.fn<MermaidApi['render']>(async (id: string) => ({ svg: `<svg id="${id}"></svg>` })),
     ...overrides,
   };
   return api;
 }
 
-function setup(api: MermaidApi = fakeMermaid()) {
+const DARK_TOKENS = stylesheetTokens('dark');
+const LIGHT_TOKENS = stylesheetTokens('light');
+
+function fakePalette(tokens: ThemeTokens, theme: EffectiveTheme): Record<string, unknown> {
+  return { darkMode: theme === 'dark', textColor: tokens.text, primaryColor: tokens.panelStrong };
+}
+
+function setup(api: MermaidApi = fakeMermaid(), deps: Partial<MermaidDeps> = {}) {
   const load = vi.fn(async () => api);
   const removeNode = vi.fn<(id: string) => void>();
-  const renderer = createMermaidRenderer({ load, removeNode });
-  return { api, load, removeNode, renderer };
+  const tokens = { current: DARK_TOKENS };
+  const readTokens = vi.fn(() => tokens.current);
+  const derive = vi.fn(fakePalette);
+  const renderer = createMermaidRenderer({ load, removeNode, readTokens, derive, ...deps });
+  return { api, load, removeNode, readTokens, derive, tokens, renderer };
+}
+
+const lastInitialize = (api: MermaidApi) => vi.mocked(api.initialize).mock.calls.at(-1)?.[0];
+const FOREST = '%%{init: {"theme":"forest"}}%%\ngraph TD; A-->B\n';
+
+function directiveAwareMermaid() {
+  return fakeMermaid({
+    parse: vi.fn(async (text: string) => ({
+      config: text.includes('"forest"') ? { theme: 'forest' } : {},
+    })),
+  });
 }
 
 describe('createMermaidRenderer', () => {
   it('initializes mermaid strictly, with error rendering suppressed and no secure override', async () => {
-    const { api, renderer } = setup();
+    const { api, renderer } = setup(directiveAwareMermaid());
     await renderer.render('graph TD; A-->B', 'dark', container);
-    expect(api.initialize).toHaveBeenCalled();
+    await renderer.render(FOREST, 'dark', container);
+    expect(api.initialize).toHaveBeenCalledTimes(2);
     for (const [config] of vi.mocked(api.initialize).mock.calls) {
       expect(config).toMatchObject({
         securityLevel: 'strict',
@@ -75,14 +104,141 @@ describe('createMermaidRenderer', () => {
   });
 
   it.each([
-    ['dark', 'dark'],
-    ['light', 'default'],
-  ] as const)('maps app theme %s to mermaid theme %s', async (appTheme, mermaidTheme) => {
-    const { api, renderer } = setup();
-    await renderer.render('graph TD; A-->B', appTheme, container);
-    const last = vi.mocked(api.initialize).mock.calls.at(-1)?.[0];
-    expect(last).toMatchObject({ theme: mermaidTheme });
+    ['dark', true],
+    ['light', false],
+  ] as const)(
+    'renders a plain diagram in app theme %s with the base theme and the app palette',
+    async (appTheme, darkMode) => {
+      const { api, derive, renderer } = setup();
+      await renderer.render('graph TD; A-->B', appTheme, container);
+      expect(derive).toHaveBeenLastCalledWith(DARK_TOKENS, appTheme);
+      expect(lastInitialize(api)).toMatchObject({
+        theme: 'base',
+        themeVariables: { darkMode, textColor: DARK_TOKENS.text },
+      });
+    },
+  );
+
+  it.each([
+    ['dark', DARK_TOKENS],
+    ['light', LIGHT_TOKENS],
+  ] as const)('hands mermaid the real palette for %s by default', async (theme, tokens) => {
+    const api = fakeMermaid();
+    const renderer = createMermaidRenderer({
+      load: async () => api,
+      removeNode: vi.fn(),
+      readTokens: () => tokens,
+    });
+    await renderer.render('graph TD; A-->B', theme, container);
+    expect(lastInitialize(api)).toMatchObject({
+      theme: 'base',
+      themeVariables: mermaidThemeVariables(tokens, theme),
+    });
   });
+
+  it.each(['dark', 'light'] as const)(
+    'initializes a directive-themed diagram in %s with no theme and no app palette (AC8)',
+    async (appTheme) => {
+      const { api, renderer } = setup(directiveAwareMermaid());
+      await renderer.render('graph TD; A-->B', appTheme, container);
+      await renderer.render(FOREST, appTheme, container);
+      const config = lastInitialize(api);
+      expect(config).not.toHaveProperty('theme');
+      expect(config).not.toHaveProperty('themeVariables');
+    },
+  );
+
+  it.each([
+    ['a non-string theme', { theme: 42 }],
+    ['an empty theme', { theme: '' }],
+    ['no config keys', {}],
+    ['themeVariables without a theme', { themeVariables: { primaryColor: '#ff00ff' } }],
+    ['an inherited theme', Object.create({ theme: 'forest' }) as Record<string, unknown>],
+  ])('keeps the app palette when the directive config has %s', async (_, config) => {
+    const api = fakeMermaid({ parse: vi.fn(async () => ({ config })) });
+    const { renderer } = setup(api);
+    expect((await renderer.render('graph TD; A-->B', 'dark', container)).ok).toBe(true);
+    expect(lastInitialize(api)).toMatchObject({
+      theme: 'base',
+      themeVariables: { darkMode: true },
+    });
+  });
+
+  it('lets directive themeVariables without a theme re-derive the palette colours they feed (AC9)', async () => {
+    const api = fakeMermaid({
+      parse: vi.fn(async () => ({ config: { themeVariables: { primaryColor: '#ff00ff' } } })),
+    });
+    const { renderer } = setup(api, { derive: mermaidThemeVariables });
+    await renderer.render('graph TD; A-->B', 'dark', container);
+    const config = lastInitialize(api) as {
+      theme: string;
+      themeVariables: Record<string, unknown>;
+    };
+    expect(config.theme).toBe('base');
+    expect(config.themeVariables.primaryColor).toBe('#ff00ff');
+    expect(config.themeVariables).not.toHaveProperty('mainBkg');
+    expect(config.themeVariables.textColor).toBe(DARK_TOKENS.text);
+  });
+
+  it.each([
+    ['no config', {}],
+    ['a false parse result', false],
+  ] as const)('keeps the app palette when parse returns %s', async (_, result) => {
+    const api = fakeMermaid({ parse: vi.fn(async () => result) });
+    const { renderer } = setup(api);
+    expect((await renderer.render('graph TD; A-->B', 'dark', container)).ok).toBe(true);
+    expect(lastInitialize(api)).toMatchObject({ theme: 'base' });
+  });
+
+  it('parses before initializing, so the directive decides the config', async () => {
+    const { api, renderer } = setup(directiveAwareMermaid());
+    await renderer.render(FOREST, 'dark', container);
+    const [parseOrder] = vi.mocked(api.parse).mock.invocationCallOrder;
+    const [initOrder] = vi.mocked(api.initialize).mock.invocationCallOrder;
+    const [renderOrder] = vi.mocked(api.render).mock.invocationCallOrder;
+    expect(parseOrder).toBeLessThan(initOrder ?? 0);
+    expect(initOrder).toBeLessThan(renderOrder ?? 0);
+  });
+
+  it('derives the palette once for repeated renders with unchanged tokens, and again when they change', async () => {
+    const { derive, tokens, renderer } = setup();
+    for (let i = 0; i < 5; i++) await renderer.render(`graph TD; N${i}`, 'dark', container);
+    expect(derive).toHaveBeenCalledTimes(1);
+    tokens.current = { ...DARK_TOKENS, text: '#ffffff' };
+    await renderer.render('graph TD; N9', 'dark', container);
+    expect(derive).toHaveBeenCalledTimes(2);
+    expect(derive).toHaveBeenLastCalledWith(tokens.current, 'dark');
+  });
+
+  it('keeps a palette per theme, so toggling back and forth does not re-derive', async () => {
+    const { derive, renderer } = setup();
+    for (const theme of ['dark', 'light', 'dark', 'light'] as const)
+      await renderer.render(`graph TD; ${theme}`, theme, container);
+    expect(derive).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a plain', 'graph TD; A-->B'],
+    ['a directive-themed', FOREST],
+  ])(
+    'shows %s diagram as an error naming the token when a token is unparseable, without caching it (AC13)',
+    async (_, source) => {
+      const api = directiveAwareMermaid();
+      let tokens: ThemeTokens = { ...DARK_TOKENS, accent: 'garbage' };
+      const renderer = createMermaidRenderer({
+        load: async () => api,
+        removeNode: vi.fn(),
+        readTokens: () => tokens,
+      });
+      const failed = await renderer.render(source, 'dark', container);
+      expect(failed.ok).toBe(false);
+      expect(failed.ok === false && failed.message).toContain('--accent');
+      expect(api.initialize).not.toHaveBeenCalled();
+      expect(api.render).not.toHaveBeenCalled();
+      tokens = DARK_TOKENS;
+      expect((await renderer.render(source, 'dark', container)).ok).toBe(true);
+    },
+  );
 
   it('returns the svg, rendering with a unique mmd id', async () => {
     const { api, renderer } = setup();
@@ -202,7 +358,11 @@ describe('createMermaidRenderer', () => {
     const load = vi.fn(async (): Promise<MermaidApi> => {
       throw new Error('chunk failed');
     });
-    const renderer = createMermaidRenderer({ load, removeNode: vi.fn() });
+    const renderer = createMermaidRenderer({
+      load,
+      removeNode: vi.fn(),
+      readTokens: () => DARK_TOKENS,
+    });
     await expect(renderer.render('graph TD; A-->B', 'dark', container)).resolves.toEqual({
       ok: false,
       message: expect.stringContaining('chunk failed'),
@@ -215,7 +375,11 @@ describe('createMermaidRenderer', () => {
       .fn<() => Promise<MermaidApi>>()
       .mockRejectedValueOnce(new Error('chunk failed'))
       .mockResolvedValue(api);
-    const renderer = createMermaidRenderer({ load, removeNode: vi.fn() });
+    const renderer = createMermaidRenderer({
+      load,
+      removeNode: vi.fn(),
+      readTokens: () => DARK_TOKENS,
+    });
     expect((await renderer.render('graph TD; A-->B', 'dark', container)).ok).toBe(false);
     expect((await renderer.render('graph TD; A-->B', 'dark', container)).ok).toBe(true);
     expect(load).toHaveBeenCalledTimes(2);
@@ -296,7 +460,7 @@ describe('createMermaidRenderer', () => {
           fail = false;
           throw new Error('bad');
         }
-        return {};
+        return { config: {} };
       }),
     });
     const { renderer } = setup(api);
@@ -308,15 +472,24 @@ describe('createMermaidRenderer', () => {
     expect(second.ok).toBe(true);
   });
 
-  it('serves a repeat (source, theme) from cache and misses on a theme change', async () => {
-    const { api, renderer } = setup();
+  it('serves a repeat (source, theme, tokens) from cache and misses on a theme or token change', async () => {
+    const { api, tokens, renderer } = setup();
     const first = await renderer.render('graph TD; A-->B', 'dark', container);
     const again = await renderer.render('graph TD; A-->B', 'dark', container);
     expect(again).toEqual(first);
     expect(api.render).toHaveBeenCalledTimes(1);
     await renderer.render('graph TD; A-->B', 'light', container);
     expect(api.render).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(api.initialize).mock.calls.at(-1)?.[0]).toMatchObject({ theme: 'default' });
+    expect(lastInitialize(api)).toMatchObject({
+      theme: 'base',
+      themeVariables: { darkMode: false },
+    });
+    tokens.current = { ...DARK_TOKENS, accent: '#ff00ff' };
+    await renderer.render('graph TD; A-->B', 'light', container);
+    expect(api.render).toHaveBeenCalledTimes(3);
+    tokens.current = DARK_TOKENS;
+    await renderer.render('graph TD; A-->B', 'dark', container);
+    expect(api.render).toHaveBeenCalledTimes(3);
   });
 
   it('does not cache failures', async () => {
@@ -327,7 +500,7 @@ describe('createMermaidRenderer', () => {
           fail = false;
           throw new Error('transient');
         }
-        return {};
+        return { config: {} };
       }),
     });
     const { renderer } = setup(api);
@@ -336,8 +509,8 @@ describe('createMermaidRenderer', () => {
   });
 
   it('passes init directives through byte-for-byte and never locks theme via secure', async () => {
-    const { api, renderer } = setup();
-    const source = '%%{init: {"theme":"forest"}}%%\ngraph TD; A-->B\n';
+    const { api, renderer } = setup(directiveAwareMermaid());
+    const source = FOREST;
     await renderer.render(source, 'dark', container);
     await renderer.render(source, 'light', container);
     for (const [text] of vi.mocked(api.parse).mock.calls) expect(text).toBe(source);
