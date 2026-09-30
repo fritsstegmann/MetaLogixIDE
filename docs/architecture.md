@@ -195,25 +195,25 @@ authenticates.
 ## Architectural Decisions
 
 - **Mermaid loads lazily.** `mermaidRenderer.ts` reaches `mermaid` only
-  through `import('mermaid')` (`mermaidRenderer.ts:51`). Vite puts it in a
+  through `import('mermaid')` (`mermaidRenderer.ts:52`). Vite puts it in a
   separate chunk. A document without diagrams does not load it.
 - **Mermaid security configuration.** The adapter calls `initialize` with
   `securityLevel: 'strict'`, `suppressErrorRendering: true` and
-  `startOnLoad: false` (`mermaidRenderer.ts:79-82`), in both the palette and
+  `startOnLoad: false` (`mermaidRenderer.ts:91-94`), in both the palette and
   the directive-theme branch. It does not set
   `secure`, so the Mermaid default secure keys apply and an `%%{init}%%`
   directive cannot change `securityLevel`.
 - **Mermaid renders into a scratch element.** `mermaid.render` clears the
   element it receives. The adapter gives it a temporary child of the block
-  and removes that child after the render (`mermaidRenderer.ts:168`). The
+  and removes that child after the render (`mermaidRenderer.ts:180`). The
   child is absolutely positioned and hidden, so it does not change the block
   height while Mermaid lays out the diagram. This
   keeps the block source for the next render.
 - **Diagram results are cached.** The adapter keeps up to 50 SVG results,
   keyed by theme, the theme token values and source
-  (`mermaidRenderer.ts:127`, `:199`). A token change misses the cache. The
+  (`mermaidRenderer.ts:139`, `:211`). A token change misses the cache. The
   derived palette is memoised per theme and token set, up to four entries
-  (`mermaidRenderer.ts:38`).
+  (`mermaidRenderer.ts:39`).
 - **Diagram palette comes from the live tokens.** Every render reads the
   theme tokens listed in `paletteContract.ts` from the computed style of
   `<html>`, so System mode and both explicit themes need no extra logic.
@@ -236,25 +236,32 @@ authenticates.
   The unit suite runs the real `styles.css` token blocks through the palette.
 - **Directive-themed diagrams get no app palette.** Mermaid merges the
   `themeVariables` given to `initialize` into a directive's theme. The adapter
-  therefore calls `mermaid.parse` first (`mermaidRenderer.ts:205`). If the
+  therefore calls `mermaid.parse` first (`mermaidRenderer.ts:217`). If the
   source's own directive or frontmatter sets `theme` to one of Mermaid's theme
-  names (`base`, `dark`, `default`, `forest`, `neutral`), it calls
-  `initialize` with no `theme` and no `themeVariables`
-  (`mermaidRenderer.ts:64-76`); `base` counts, so an author's own `base`
-  palette is left as it is. Any other value, such as `Dark` or a typo, is
-  ignored by Mermaid too, so the diagram keeps the app palette.
-  Otherwise it uses `theme: 'base'` with the app palette. Only the `theme` and `themeVariables` keys of the parsed config
-  are read.
+  names, it calls `initialize` with no `theme` and no `themeVariables`
+  (`mermaidRenderer.ts:64-88`). The names are every value of Mermaid's own
+  `MermaidConfig['theme']` type in 11.17.2: `default`, `base`, `dark`,
+  `forest`, `neutral`, `neo`, `neo-dark`, `redux`, `redux-dark`,
+  `redux-color`, `redux-dark-color` and `null`. The list is checked against
+  that type with `satisfies`, so a Mermaid upgrade that adds or drops a theme
+  fails the build. `base` counts, so an author's own `base` palette is left
+  as it is. Any other value, such as `Dark` or a typo, is ignored by Mermaid
+  too, so the diagram keeps the app palette. Otherwise it uses
+  `theme: 'base'` with the app palette. Only the `theme` and
+  `themeVariables` keys of the parsed config are read.
 - **Directive `themeVariables` without a `theme` re-derive what they feed.**
   Mermaid does not re-derive the theme for such a directive, so an explicit
   palette `mainBkg` would hide an author's `primaryColor`.
   `withAuthorVariables` (`mermaidPalette.ts`) adds the author keys to the
   `initialize` palette and drops every palette colour that Mermaid's `base`
   theme derives from them, so Mermaid derives those from the author's value.
-  All other roles keep the app palette. Only plain keys whose value passes
-  Mermaid's own directive filter and parses as a hex or `rgb()` colour are
-  folded in. Mermaid's colour library throws on anything else under `base`
-  (`none`, a typo such as `#ff00f`), which would fail the whole diagram;
+  All other roles keep the app palette. Only plain keys are folded in, and
+  only when the value passes Mermaid's own directive filter and is written in
+  a form that Mermaid's colour library and the palette both read the same
+  way: unpadded `#rgb`, `#rrggbb` or `#rrggbbaa`, or comma-separated
+  `rgb()`/`rgba()`. Mermaid's colour library throws on other forms under
+  `base` (`none`, a typo such as `#ff00f`, a padded value, four-part space
+  syntax), which would fail the whole diagram;
   such a value is left out, and Mermaid still overlays it from the directive
   at render time without re-deriving, as it did before the palette.
 - **Reference backgrounds.** The preview pane paints no background of its
