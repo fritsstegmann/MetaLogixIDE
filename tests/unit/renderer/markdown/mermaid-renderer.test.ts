@@ -154,6 +154,8 @@ describe('createMermaidRenderer', () => {
     ['no config keys', {}],
     ['themeVariables without a theme', { themeVariables: { primaryColor: '#ff00ff' } }],
     ['an inherited theme', Object.create({ theme: 'forest' }) as Record<string, unknown>],
+    ['a miscased theme name', { theme: 'Dark' }],
+    ['an unknown theme name', { theme: 'fancy' }],
   ])('keeps the app palette when the directive config has %s', async (_, config) => {
     const api = fakeMermaid({ parse: vi.fn(async () => ({ config })) });
     const { renderer } = setup(api);
@@ -162,6 +164,29 @@ describe('createMermaidRenderer', () => {
       theme: 'base',
       themeVariables: { darkMode: true },
     });
+  });
+
+  it.each(['base', 'dark', 'default', 'forest', 'neutral'])(
+    'treats a directive theme %j as the diagram’s own theme (D2)',
+    async (theme) => {
+      const api = fakeMermaid({ parse: vi.fn(async () => ({ config: { theme } })) });
+      const { renderer } = setup(api);
+      await renderer.render('graph TD; A-->B', 'dark', container);
+      expect(lastInitialize(api)).not.toHaveProperty('theme');
+      expect(lastInitialize(api)).not.toHaveProperty('themeVariables');
+    },
+  );
+
+  it('keeps the palette for an author colour Mermaid cannot parse, so the diagram still renders (C1)', async () => {
+    const api = fakeMermaid({
+      parse: vi.fn(async () => ({ config: { themeVariables: { lineColor: 'none' } } })),
+    });
+    const { renderer } = setup(api, { derive: mermaidThemeVariables });
+    expect((await renderer.render('graph TD; A-->B', 'dark', container)).ok).toBe(true);
+    const palette = mermaidThemeVariables(DARK_TOKENS, 'dark');
+    const config = lastInitialize(api) as { themeVariables: Record<string, unknown> };
+    expect(config.themeVariables.lineColor).toBe(palette.lineColor);
+    expect(config.themeVariables.defaultLinkColor).toBe(palette.defaultLinkColor);
   });
 
   it('lets directive themeVariables without a theme re-derive the palette colours they feed (AC9)', async () => {

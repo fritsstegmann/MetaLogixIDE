@@ -60,17 +60,38 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** Whether the source's own directive or frontmatter names a theme; only that key is read. */
+/** Mermaid 11's theme names; any other directive `theme` value is ignored by Mermaid itself. */
+const MERMAID_THEMES: ReadonlySet<unknown> = new Set([
+  'base',
+  'dark',
+  'default',
+  'forest',
+  'neutral',
+]);
+
+/** Whether the source's own directive or frontmatter picks one of Mermaid's themes. */
 function hasOwnTheme(parsed: MermaidParseResult): boolean {
   const config = parsed ? parsed.config : undefined;
-  if (!config || !Object.hasOwn(config, 'theme')) return false;
-  return typeof config.theme === 'string' && config.theme !== '';
+  return !!config && Object.hasOwn(config, 'theme') && MERMAID_THEMES.has(config.theme);
 }
 
 /** The `initialize` config: the app palette on `base`, or no theme at all when `palette` is null. */
 function mermaidConfig(palette: Record<string, unknown> | null): Record<string, unknown> {
   const base = { startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true };
   return palette ? { ...base, theme: 'base', themeVariables: palette } : base;
+}
+
+/**
+ * The `initialize` config for a parsed source: none of ours when it picks a
+ * Mermaid theme, otherwise the palette with its own `themeVariables` folded in.
+ */
+function configFor(
+  parsed: MermaidParseResult,
+  palette: Record<string, unknown>,
+): Record<string, unknown> {
+  if (hasOwnTheme(parsed)) return mermaidConfig(null);
+  const author = parsed ? parsed.config?.themeVariables : undefined;
+  return mermaidConfig(withAuthorVariables(palette, author));
 }
 
 function tokenKey(tokens: ThemeTokens): string {
@@ -84,6 +105,45 @@ function remember<T>(cache: Map<string, T>, key: string, value: T, limit = CACHE
   cache.set(key, value);
   const oldest = cache.keys().next();
   if (cache.size > limit && !oldest.done) cache.delete(oldest.value);
+}
+
+interface AppPalette {
+  key: string;
+  variables: Record<string, unknown>;
+}
+
+/**
+ * Reads the live tokens and returns the palette for `theme`, with a key naming
+ * the theme and token values. Derivations are memoised per key, keeping the
+ * most recent `PALETTE_LIMIT`. Throws whatever `derive` throws.
+ */
+function createPaletteSource(
+  readTokens: MermaidDeps['readTokens'],
+  derive: MermaidDeps['derive'],
+): (theme: EffectiveTheme) => AppPalette {
+  const palettes = new Map<string, Record<string, unknown>>();
+  return (theme) => {
+    const tokens = readTokens();
+    const key = `${theme}\n${tokenKey(tokens)}`;
+    let variables = palettes.get(key);
+    if (!variables) {
+      variables = derive(tokens, theme);
+      remember(palettes, key, variables, PALETTE_LIMIT);
+    }
+    return { key, variables };
+  };
+}
+
+/** Loads mermaid once and shares the promise; a failed load is forgotten so the next call retries. */
+function createLoader(load: MermaidDeps['load']): () => Promise<MermaidApi> {
+  let loaded: Promise<MermaidApi> | null = null;
+  return () => {
+    loaded ??= load().catch((err: unknown) => {
+      loaded = null;
+      throw err;
+    });
+    return loaded;
+  };
 }
 
 /**
@@ -120,36 +180,17 @@ async function renderInScratch(
 export function createMermaidRenderer(deps: Partial<MermaidDeps> = {}): DiagramRenderer {
   const { load, removeNode, readTokens, derive }: MermaidDeps = { ...defaultDeps, ...deps };
   const cache = new Map<string, DiagramResult>();
-  const palettes = new Map<string, Record<string, unknown>>();
-  let loaded: Promise<MermaidApi> | null = null;
+  const palette = createPaletteSource(readTokens, derive);
+  const library = createLoader(load);
   let queue: Promise<unknown> = Promise.resolve();
   let nextId = 0;
-
-  function library(): Promise<MermaidApi> {
-    loaded ??= load().catch((err: unknown) => {
-      loaded = null;
-      throw err;
-    });
-    return loaded;
-  }
-
-  function palette(theme: EffectiveTheme): { key: string; variables: Record<string, unknown> } {
-    const tokens = readTokens();
-    const key = `${theme}\n${tokenKey(tokens)}`;
-    let variables = palettes.get(key);
-    if (!variables) {
-      variables = derive(tokens, theme);
-      remember(palettes, key, variables, PALETTE_LIMIT);
-    }
-    return { key, variables };
-  }
 
   async function renderNow(
     source: string,
     theme: EffectiveTheme,
     container: Element,
   ): Promise<DiagramResult> {
-    let app: ReturnType<typeof palette>;
+    let app: AppPalette;
     try {
       app = palette(theme);
     } catch (err) {
@@ -161,10 +202,7 @@ export function createMermaidRenderer(deps: Partial<MermaidDeps> = {}): DiagramR
     const id = `mmd${nextId++}`;
     try {
       const mermaid = await library();
-      const parsed = await mermaid.parse(source);
-      const author = parsed ? parsed.config?.themeVariables : undefined;
-      const variables = hasOwnTheme(parsed) ? null : withAuthorVariables(app.variables, author);
-      mermaid.initialize(mermaidConfig(variables));
+      mermaid.initialize(configFor(await mermaid.parse(source), app.variables));
       const { svg } = await renderInScratch(mermaid, id, source, container);
       const result: DiagramResult = { ok: true, svg };
       remember(cache, key, result);

@@ -64,14 +64,15 @@ export function composite(top: Rgba, bottom: Rgb): Rgb {
   return { r: mix(top.r, bottom.r), g: mix(top.g, bottom.g), b: mix(top.b, bottom.b) };
 }
 
-function linear(channel: number): number {
+/** One sRGB channel (0 to 255) as linear light (0 to 1), per WCAG 2.1 / IEC 61966-2-1. */
+export function linearChannel(channel: number): number {
   const c = channel / 255;
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
 /** WCAG 2.1 relative luminance, 0 (black) to 1 (white). */
 export function relativeLuminance(c: Rgb): number {
-  return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b);
+  return 0.2126 * linearChannel(c.r) + 0.7152 * linearChannel(c.g) + 0.0722 * linearChannel(c.b);
 }
 
 /** WCAG 2.1 contrast ratio between two opaque colours, 1 to 21. */
@@ -119,6 +120,11 @@ function fromHsl({ h, s, l }: Hsl): Rgb {
     return Math.round((l - (c / 2) * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255);
   };
   return { r: channel(0), g: channel(8), b: channel(4) };
+}
+
+/** HSL lightness, 0 to 1. */
+export function hslLightness(c: Rgb): number {
+  return toHsl(c).l;
 }
 
 /** HSL hue in degrees, `[0, 360)`; 0 for greys. */

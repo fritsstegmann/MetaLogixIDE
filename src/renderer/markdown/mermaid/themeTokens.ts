@@ -10,8 +10,23 @@ import { THEME_TOKEN_NAMES, type ThemeTokens } from './paletteContract';
 export function readThemeTokens(root: Element = document.documentElement): ThemeTokens {
   const view = root.ownerDocument.defaultView ?? window;
   const style = view.getComputedStyle(root);
-  const entries = Object.entries(THEME_TOKEN_NAMES).map(
-    ([field, name]) => [field, style.getPropertyValue(name).trim()] as const,
-  );
-  return Object.fromEntries(entries) as unknown as ThemeTokens;
+  const read = (field: keyof ThemeTokens) =>
+    style.getPropertyValue(THEME_TOKEN_NAMES[field]).trim();
+  return {
+    bg: read('bg'),
+    panel: read('panel'),
+    panelStrong: read('panelStrong'),
+    text: read('text'),
+    textMuted: read('textMuted'),
+    accent: read('accent'),
+    danger: read('danger'),
+    iconMd: read('iconMd'),
+    iconImg: read('iconImg'),
+    iconCode: read('iconCode'),
+    hljsFunction: read('hljsFunction'),
+    hljsVariable: read('hljsVariable'),
+    hljsTag: read('hljsTag'),
+    hljsString: read('hljsString'),
+    hljsNumber: read('hljsNumber'),
+  };
 }

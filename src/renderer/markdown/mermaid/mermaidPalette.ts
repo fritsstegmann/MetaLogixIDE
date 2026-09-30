@@ -109,7 +109,12 @@ function fit(colour: Rgb, against: readonly Rgb[], min: number, role: string): R
   return fitted;
 }
 
-function fitCategory(refs: readonly [Rgb, Rgb], label: Rgb): (c: Rgb) => Rgb | null {
+/**
+ * A `categoricalColours` fit for these reference backgrounds and label colour:
+ * the candidate moved in lightness to 3:1 on both backgrounds, then to 4.5:1
+ * under `label`, or `null` when the second move undoes the first.
+ */
+export function fitCategory(refs: readonly [Rgb, Rgb], label: Rgb): (c: Rgb) => Rgb | null {
   return (candidate) => {
     const onPane = adjustToContrast(candidate, refs, CONTRAST_GRAPHIC);
     const readable = onPane && adjustToContrast(onPane, [label], CONTRAST_TEXT);
@@ -122,16 +127,20 @@ function fitCategory(refs: readonly [Rgb, Rgb], label: Rgb): (c: Rgb) => Rgb | n
 function derive(tokens: ThemeTokens, theme: EffectiveTheme): Base {
   const t = parseTokens(tokens);
   const refs = backgrounds(t.bg, theme);
-  const surface = opaque(t.panelStrong, refs[0]);
+  const near = refs[1];
+  const surface = opaque(t.panelStrong, near);
   const inverse = theme === 'dark' ? refs[0] : refs[1];
   const accent = opaque(t.accent, surface);
   const danger = opaque(t.danger, surface);
-  const seeds = CATEGORY_SEEDS.map((field) => opaque(t[field], surface));
+  const seeds = CATEGORY_SEEDS.map((field) => ({
+    token: THEME_TOKEN_NAMES[field],
+    colour: opaque(t[field], surface),
+  }));
   return {
     text: opaque(t.text, surface),
     refs,
     surface,
-    surfaceAlt: opaque(t.panel, refs[0]),
+    surfaceAlt: opaque(t.panel, near),
     inverse,
     line: fit(opaque(t.textMuted, surface), refs, CONTRAST_GRAPHIC, THEME_TOKEN_NAMES.textMuted),
     accent,
@@ -435,7 +444,10 @@ function authorEntries(author: unknown): Array<[string, string]> {
   if (typeof author !== 'object' || author === null) return [];
   return Object.entries(author).filter(
     (entry): entry is [string, string] =>
-      SAFE_KEY.test(entry[0]) && typeof entry[1] === 'string' && SAFE_VALUE.test(entry[1]),
+      SAFE_KEY.test(entry[0]) &&
+      typeof entry[1] === 'string' &&
+      SAFE_VALUE.test(entry[1]) &&
+      parseColour(entry[1]) !== null,
   );
 }
 
@@ -460,7 +472,9 @@ function derivedFrom(inputs: ReadonlySet<string>): Set<string> {
  * directive, so the author keys go into `initialize` and every palette colour
  * Mermaid would have derived from them is dropped, letting `base` derive it
  * from the author's value; everything else keeps the app palette. Only plain
- * keys with values Mermaid's directive sanitiser allows are taken.
+ * keys whose value passes Mermaid's directive sanitiser and parses as a colour
+ * are folded in: Mermaid's colour library throws on anything else under
+ * `base`, while left out it is still overlaid from the directive, un-derived.
  */
 export function withAuthorVariables(
   palette: Record<string, unknown>,

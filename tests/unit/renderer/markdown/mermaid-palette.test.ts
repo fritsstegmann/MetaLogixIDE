@@ -1,11 +1,19 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { EffectiveTheme } from '@renderer/markdown/contract';
 import {
+  CategoricalColourError,
   categoricalColours,
   deltaE2000 as solverDeltaE,
 } from '@renderer/markdown/mermaid/categoricalColours';
-import { contrastRatio, hslHue, parseColour, toHex } from '@renderer/markdown/mermaid/colour';
 import {
+  composite,
+  contrastRatio,
+  hslHue,
+  parseColour,
+  toHex,
+} from '@renderer/markdown/mermaid/colour';
+import {
+  fitCategory,
   mermaidThemeVariables,
   referenceBackgrounds,
   withAuthorVariables,
@@ -143,9 +151,11 @@ describe('categoricalColours', () => {
     expect(solverDeltaE(rgb('#808080'), rgb('#808080'))).toBe(0);
   });
 
+  const seeds = (...hexes: string[]) =>
+    hexes.map((hex, i) => ({ token: `--seed-${i}` as const, colour: rgb(hex) }));
+
   it('keeps distinct seeds as they are and turns a clashing seed until it stands apart', () => {
-    const seeds = ['#2563eb', '#dc2626', '#2c68ee'].map(rgb);
-    const picks = categoricalColours(seeds, (c) => c);
+    const picks = categoricalColours(seeds('#2563eb', '#dc2626', '#2c68ee'), (c) => c);
     expect(picks.slice(0, 2).map(toHex)).toEqual(['#2563eb', '#dc2626']);
     expect(toHex(picks[2] ?? rgb('#000'))).not.toBe('#2c68ee');
     for (const [i, a] of picks.entries())
@@ -154,16 +164,42 @@ describe('categoricalColours', () => {
   });
 
   it('keeps picks away from reserved colours', () => {
-    const [pick] = categoricalColours([rgb('#dc2626')], (c) => c, [rgb('#dc2626')]);
+    const [pick] = categoricalColours(seeds('#dc2626'), (c) => c, [rgb('#dc2626')]);
     expect(deltaE2000(toHex(pick ?? rgb('#000')), '#dc2626')).toBeGreaterThanOrEqual(
       MIN_CATEGORY_DELTA_E,
     );
   });
 
-  it('passes every candidate through fit and throws when none fits', () => {
-    expect(() => categoricalColours([rgb('#2563eb')], () => null)).toThrow(
-      /No distinct categorical colour for seed 0/,
+  it('names the seed token and the contrast rule when no candidate fits (C2)', () => {
+    let thrown: unknown;
+    try {
+      categoricalColours(seeds('#2563eb'), () => null);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CategoricalColourError);
+    expect((thrown as CategoricalColourError).token).toBe('--seed-0');
+    expect((thrown as Error).message).toMatch(/--seed-0.*contrast/);
+  });
+
+  it('names the seed token and the distinctness rule when every fit clashes (C2)', () => {
+    const fixed = rgb('#2563eb');
+    expect(() => categoricalColours(seeds('#2563eb', '#dc2626'), () => fixed)).toThrow(
+      /--seed-1.*CIEDE2000/,
     );
+  });
+});
+
+describe('fitCategory', () => {
+  it('rejects a candidate whose label fix breaks its contrast on the backgrounds', () => {
+    const grey = rgb('#333333');
+    expect(fitCategory([grey, grey], rgb('#ffffff'))(rgb('#3b82f6'))).toBeNull();
+  });
+
+  it('returns a colour meeting both rules when they are compatible', () => {
+    const fitted = fitCategory([rgb('#000000'), rgb('#000000')], rgb('#000000'))(rgb('#3b82f6'));
+    if (!fitted) throw new Error('expected a fitted colour');
+    expect(contrastRatio(fitted, rgb('#000000'))).toBeGreaterThanOrEqual(CONTRAST_TEXT);
   });
 });
 
@@ -316,6 +352,48 @@ describe.each(THEMES)('mermaidThemeVariables (%s tokens, %s theme)', (block, the
     expect(emitted).not.toContain('#1f2020');
   });
 
+  it('composites the surfaces over the near (material-hi) reference, per plan §2.4 (L1)', () => {
+    const near = rgb(referenceBackgrounds(tokens, theme)[1]);
+    const over = (value: string) => {
+      const c = parseColour(value);
+      if (!c) throw new Error(value);
+      return toHex(composite(c, near));
+    };
+    expect(role(vars, 'mainBkg')).toBe(over(tokens.panelStrong));
+    expect(role(vars, 'secondaryColor')).toBe(over(tokens.panel));
+  });
+
+  it('labels slices and branches with the pole opposite the theme (the far reference)', () => {
+    const pole = referenceBackgrounds(tokens, theme)[theme === 'dark' ? 0 : 1];
+    expect(role(vars, 'pieSectionTextColor')).toBe(pole);
+    expect(role(vars, 'gitBranchLabel0')).toBe(pole);
+  });
+
+  it('draws each categorical colour from its app-hue seed, turned by one solver step (Q3)', () => {
+    const seeds = [
+      'iconMd',
+      'iconImg',
+      'iconCode',
+      'hljsVariable',
+      'hljsFunction',
+      'hljsTag',
+      'hljsString',
+      'hljsNumber',
+    ] as const;
+    const steps = [0, 15, 30, 45, 60, 90, 120, 150, 180];
+    const hueGap = (a: string, b: string) => {
+      const d = Math.abs(hslHue(rgb(a)) - hslHue(rgb(b))) % 360;
+      return Math.min(d, 360 - d);
+    };
+    seeds.forEach((field, i) => {
+      const gap = hueGap(role(vars, `pie${i + 1}`), tokens[field]);
+      const offStep = Math.min(...steps.map((step) => Math.abs(gap - step)));
+      expect(offStep, `pie${i + 1} from ${field} (gap ${gap.toFixed(1)}°)`).toBeLessThanOrEqual(4);
+    });
+    for (const [i, field] of seeds.slice(0, 3).entries())
+      expect(hueGap(role(vars, `pie${i + 1}`), tokens[field]), field).toBeLessThanOrEqual(4);
+  });
+
   it('is deterministic', () => {
     expect(mermaidThemeVariables(tokens, theme)).toEqual(mermaidThemeVariables(tokens, theme));
   });
@@ -345,6 +423,24 @@ describe('mermaidThemeVariables follows the tokens (AC12)', () => {
     }
     expect(Object.values(after)).not.toContain('#0d9488');
     expect(after.textColor).toBe(before.textColor);
+  });
+});
+
+describe('mermaidThemeVariables with an infeasible categorical palette (C2)', () => {
+  it('fails loudly, naming a categorical token', () => {
+    const tokens = { ...stylesheetTokens('light'), iconMd: '#3399ff', hljsNumber: '#3399ff' };
+    let thrown: unknown;
+    try {
+      mermaidThemeVariables(tokens, 'light');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CategoricalColourError);
+    const names = ['iconMd', 'iconImg', 'iconCode', 'hljsFunction', 'hljsVariable', 'hljsTag']
+      .concat(['hljsString', 'hljsNumber'])
+      .map((f) => THEME_TOKEN_NAMES[f as keyof ThemeTokens]);
+    expect(names).toContain((thrown as CategoricalColourError).token);
+    expect((thrown as Error).message).toContain((thrown as CategoricalColourError).token);
   });
 });
 
@@ -414,6 +510,26 @@ describe('withAuthorVariables (AC9: directive themeVariables without a theme)', 
       expect(merged[kept], kept).toBe(app[kept]);
     expect(merged.darkMode).toBe(true);
     expect(merged.xyChart).toEqual(app.xyChart);
+  });
+
+  it.each([
+    ['lineColor', 'none'],
+    ['primaryColor', '#ff00f'],
+    ['noteBkgColor', 'notacolour'],
+    ['primaryColor', 'hsl(300, 100%, 50%)'],
+  ])(
+    'leaves an author %s of %j to Mermaid’s overlay instead of folding it in (C1)',
+    (key, value) => {
+      expect(withAuthorVariables(app, { [key]: value })).toEqual(app);
+    },
+  );
+
+  it('folds in only the author colours that parse, next to one that does not (C1)', () => {
+    const merged = withAuthorVariables(app, { lineColor: 'none', primaryColor: '#ff00ff' });
+    expect(merged.lineColor).toBe(app.lineColor);
+    expect(merged.defaultLinkColor).toBe(app.defaultLinkColor);
+    expect(merged.primaryColor).toBe('#ff00ff');
+    expect(merged).not.toHaveProperty('mainBkg');
   });
 
   it('drops only what an author lineColor feeds', () => {

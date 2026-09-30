@@ -5,7 +5,7 @@
  * round the hue wheel, then shifted in lightness, in widening steps until it
  * stands apart by the CIEDE2000 distance the spec requires.
  */
-import { rotateHue, withLightness } from './colour';
+import { hslLightness, linearChannel, rotateHue, withLightness } from './colour';
 import { MIN_CATEGORY_DELTA_E, type Rgb } from './paletteContract';
 
 /** Head-room over the spec's ΔE bar, so rounding in any consumer cannot drop a pair below it. */
@@ -17,11 +17,7 @@ const RAD = Math.PI / 180;
 type Lab = [number, number, number];
 
 function toLab({ r, g, b }: Rgb): Lab {
-  const lin = (v: number) => {
-    const c = v / 255;
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  const [lr, lg, lb] = [lin(r), lin(g), lin(b)];
+  const [lr, lg, lb] = [linearChannel(r), linearChannel(g), linearChannel(b)];
   const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 / 116) * t + 16 / 116);
   const fx = f((0.4124564 * lr + 0.3575761 * lg + 0.1804375 * lb) / 0.95047);
   const fy = f(0.2126729 * lr + 0.7151522 * lg + 0.072175 * lb);
@@ -80,13 +76,46 @@ function* candidates(seed: Rgb): Generator<Rgb> {
   for (const shift of LIGHTNESS_SHIFTS) {
     for (const turn of ROTATIONS) {
       const turned = rotateHue(seed, turn);
-      yield shift === 0 ? turned : withLightness(turned, lightness(turned) + shift);
+      yield shift === 0 ? turned : withLightness(turned, hslLightness(turned) + shift);
     }
   }
 }
 
-function lightness({ r, g, b }: Rgb): number {
-  return (Math.max(r, g, b) + Math.min(r, g, b)) / 510;
+/** A categorical seed: the theme token it comes from and its opaque colour. */
+export interface CategorySeed {
+  token: `--${string}`;
+  colour: Rgb;
+}
+
+/** No categorical colour can be drawn from `token` under the theme's rules; `reason` names the unmet one. */
+export class CategoricalColourError extends Error {
+  constructor(
+    readonly token: `--${string}`,
+    reason: string,
+  ) {
+    super(`Theme token ${token} gives no usable categorical colour: ${reason}`);
+    this.name = 'CategoricalColourError';
+  }
+}
+
+function pickFor(
+  seed: CategorySeed,
+  fit: (candidate: Rgb) => Rgb | null,
+  taken: readonly Rgb[],
+  minimum: number,
+): Rgb {
+  let anyFit = false;
+  for (const candidate of candidates(seed.colour)) {
+    const fitted = fit(candidate);
+    anyFit ||= fitted !== null;
+    if (fitted && taken.every((p) => deltaE2000(p, fitted) >= minimum)) return fitted;
+  }
+  throw new CategoricalColourError(
+    seed.token,
+    anyFit
+      ? `every hue turn and lightness shift that meets the contrast rules is within CIEDE2000 ${minimum} of an earlier category or a reserved colour`
+      : 'no hue turn or lightness shift of it meets the contrast rules on the diagram backgrounds',
+  );
 }
 
 /**
@@ -94,28 +123,17 @@ function lightness({ r, g, b }: Rgb): number {
  * theme's contrast rules, or returns `null` when it cannot. Each pick is the
  * first candidate (smallest hue turn, then smallest lightness shift) that
  * fits and is at least the spec's ΔE from every earlier pick and from every
- * `reserved` colour (kept for other meanings, such as errors). Throws when a
- * seed has no such candidate.
+ * `reserved` colour (kept for other meanings, such as errors). Throws
+ * `CategoricalColourError`, naming the seed's token and the unmet rule, when
+ * a seed has no such candidate.
  */
 export function categoricalColours(
-  seeds: readonly Rgb[],
+  seeds: readonly CategorySeed[],
   fit: (candidate: Rgb) => Rgb | null,
   reserved: readonly Rgb[] = [],
 ): Rgb[] {
   const minimum = MIN_CATEGORY_DELTA_E + DELTA_E_MARGIN;
   const picks: Rgb[] = [];
-  const taken = () => [...reserved, ...picks];
-  for (const [index, seed] of seeds.entries()) {
-    let pick: Rgb | null = null;
-    for (const candidate of candidates(seed)) {
-      const fitted = fit(candidate);
-      if (fitted && taken().every((p) => deltaE2000(p, fitted) >= minimum)) {
-        pick = fitted;
-        break;
-      }
-    }
-    if (!pick) throw new Error(`No distinct categorical colour for seed ${index}`);
-    picks.push(pick);
-  }
+  for (const seed of seeds) picks.push(pickFor(seed, fit, [...reserved, ...picks], minimum));
   return picks;
 }
