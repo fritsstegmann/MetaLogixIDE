@@ -199,19 +199,19 @@ authenticates.
   separate chunk. A document without diagrams does not load it.
 - **Mermaid security configuration.** The adapter calls `initialize` with
   `securityLevel: 'strict'`, `suppressErrorRendering: true` and
-  `startOnLoad: false` (`mermaidRenderer.ts:70-73`), in both the palette and
+  `startOnLoad: false` (`mermaidRenderer.ts:79-82`), in both the palette and
   the directive-theme branch. It does not set
   `secure`, so the Mermaid default secure keys apply and an `%%{init}%%`
   directive cannot change `securityLevel`.
 - **Mermaid renders into a scratch element.** `mermaid.render` clears the
   element it receives. The adapter gives it a temporary child of the block
-  and removes that child after the render (`mermaidRenderer.ts:108`). The
+  and removes that child after the render (`mermaidRenderer.ts:168`). The
   child is absolutely positioned and hidden, so it does not change the block
   height while Mermaid lays out the diagram. This
   keeps the block source for the next render.
 - **Diagram results are cached.** The adapter keeps up to 50 SVG results,
   keyed by theme, the theme token values and source
-  (`mermaidRenderer.ts:138`, `:158`). A token change misses the cache. The
+  (`mermaidRenderer.ts:127`, `:199`). A token change misses the cache. The
   derived palette is memoised per theme and token set, up to four entries
   (`mermaidRenderer.ts:38`).
 - **Diagram palette comes from the live tokens.** Every render reads the
@@ -219,21 +219,31 @@ authenticates.
   `<html>`, so System mode and both explicit themes need no extra logic.
   `mermaidPalette.ts` derives Mermaid `base`-theme `themeVariables` from them.
   There is no second, hand-copied colour list. Text uses the exact `--text`
-  token. Lines, borders and the accent roles keep their token's hue and are
+  token. Node and box fills are `--panel-strong` and `--panel` composited over
+  the lighter reference background (the plan's near bound). Lines, borders
+  and the accent roles keep their token's hue and are
   moved in lightness until they reach 3:1 against both reference backgrounds.
   Categorical colours start from the icon and highlight.js hues, avoid
   `--danger`, and are at least CIEDE2000 15 apart. Every emitted value is an
   opaque `#rrggbb`, because Mermaid's colour library cannot parse `var()` or
   `color-mix()` and keeps alpha. A token that cannot be parsed fails every
   diagram with an error that names the token; there is no fallback palette.
+  The same holds when the tokens leave no feasible categorical palette: if no
+  hue turn or lightness shift of a seed meets the contrast rules, or none
+  stands far enough from the earlier categories and `--danger`, every
+  diagram fails with a `CategoricalColourError` naming the seed's token and
+  the unmet rule (`categoricalColours.ts`).
   The unit suite runs the real `styles.css` token blocks through the palette.
 - **Directive-themed diagrams get no app palette.** Mermaid merges the
   `themeVariables` given to `initialize` into a directive's theme. The adapter
-  therefore calls `mermaid.parse` first (`mermaidRenderer.ts:164`). If the
-  source's own directive or frontmatter sets a non-empty string `theme`, it
-  calls `initialize` with no `theme` and no `themeVariables`
-  (`mermaidRenderer.ts:63-67`). Otherwise it uses `theme: 'base'` with the app
-  palette. Only the `theme` and `themeVariables` keys of the parsed config
+  therefore calls `mermaid.parse` first (`mermaidRenderer.ts:205`). If the
+  source's own directive or frontmatter sets `theme` to one of Mermaid's theme
+  names (`base`, `dark`, `default`, `forest`, `neutral`), it calls
+  `initialize` with no `theme` and no `themeVariables`
+  (`mermaidRenderer.ts:64-76`); `base` counts, so an author's own `base`
+  palette is left as it is. Any other value, such as `Dark` or a typo, is
+  ignored by Mermaid too, so the diagram keeps the app palette.
+  Otherwise it uses `theme: 'base'` with the app palette. Only the `theme` and `themeVariables` keys of the parsed config
   are read.
 - **Directive `themeVariables` without a `theme` re-derive what they feed.**
   Mermaid does not re-derive the theme for such a directive, so an explicit
@@ -241,8 +251,12 @@ authenticates.
   `withAuthorVariables` (`mermaidPalette.ts`) adds the author keys to the
   `initialize` palette and drops every palette colour that Mermaid's `base`
   theme derives from them, so Mermaid derives those from the author's value.
-  All other roles keep the app palette. Only plain keys, with values that
-  pass Mermaid's own directive filter, are taken.
+  All other roles keep the app palette. Only plain keys whose value passes
+  Mermaid's own directive filter and parses as a hex or `rgb()` colour are
+  folded in. Mermaid's colour library throws on anything else under `base`
+  (`none`, a typo such as `#ff00f`), which would fail the whole diagram;
+  such a value is left out, and Mermaid still overlays it from the directive
+  at render time without re-deriving, as it did before the palette.
 - **Reference backgrounds.** The preview pane paints no background of its
   own: Tailwind 3.4 emits no rule for `bg-[--panel]/40`, because it drops a
   `var()` colour with an opacity modifier. A diagram therefore lands on
