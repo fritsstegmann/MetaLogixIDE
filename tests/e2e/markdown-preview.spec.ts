@@ -1,5 +1,6 @@
 /**
  * Markdown preview — Mermaid diagrams and LaTeX math (spec AC1–AC23, AC10a).
+ * The theme test is AC7 of mermaid-app-palette.md, which supersedes AC6 here.
  *
  * Every fixture is copied from tests/e2e/fixtures/markdown/ (plus a few
  * generated ones) into one temp project, which is opened in the Files tab
@@ -10,7 +11,7 @@
  * Three app instances: a shared one for rendering, security and
  * performance cases; a fresh one for the lazy-chunk check (AC21 needs a
  * renderer that has never loaded mermaid); and one for theme switching
- * (AC6), so theme changes cannot leak into the other groups.
+ * (AC7), so theme changes cannot leak into the other groups.
  */
 
 import {
@@ -850,7 +851,7 @@ test.describe('markdown preview: diagram theme', () => {
   });
   guardConsole(() => ide);
 
-  test('AC6: diagrams follow the app theme live from every control; a directive theme is kept', async () => {
+  test('AC7 (mermaid-app-palette; supersedes markdown-mermaid-math AC6): diagrams follow the app theme live from every control; a directive theme is kept', async () => {
     const win = ide.win;
     const p = await openFixture(win, 'theme.md');
     const plain = p.locator(BLOCK).nth(0);
@@ -870,12 +871,16 @@ test.describe('markdown preview: diagram theme', () => {
     await expect(win.locator('html')).toHaveAttribute('data-theme', 'dark');
     const dark = await expectTheme('dark');
     await expect(forest.locator(`${OUTPUT} svg`)).toContainText('Forest diagram');
+    // The app palette, not Mermaid's built-in dark node fill (#1f2020).
+    expect(dark.plain).not.toBe('rgb(31, 32, 32)');
 
     // Title-bar toggle.
     await win.getByTestId('theme-toggle').click();
     await expect(win.locator('html')).toHaveAttribute('data-theme', 'light');
     const light = await expectTheme('light');
     expect(light.plain).not.toBe(dark.plain);
+    // The app palette, not Mermaid's built-in default node fill (#ececff).
+    expect(light.plain).not.toBe('rgb(236, 236, 255)');
     expect(light.forest).toBe(dark.forest);
     await expect(win.getByTestId('file-preview')).toContainText('theme.md');
 
