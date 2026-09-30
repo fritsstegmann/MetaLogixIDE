@@ -29,7 +29,12 @@ Edit mode (`src/renderer/components/FilesTab.tsx:610`).
 | Logic | `src/renderer/markdown/math/renderMath.ts` | Calls KaTeX. Changes a KaTeX error into an escaped error span. |
 | Logic | `src/renderer/markdown/previewLinks.ts` | Decides if a link click opens externally or does nothing. |
 | Logic | `src/renderer/markdown/mermaid/useMermaidDiagrams.ts` | Finds the placeholders and renders them one at a time. |
-| Adapter | `src/renderer/markdown/mermaid/mermaidRenderer.ts` | Wraps the `mermaid` library behind the `DiagramRenderer` interface. |
+| Adapter | `src/renderer/markdown/mermaid/mermaidRenderer.ts` | Wraps the `mermaid` library behind the `DiagramRenderer` interface. Chooses the app palette or the diagram's own theme. |
+| Adapter | `src/renderer/markdown/mermaid/themeTokens.ts` | Reads the live theme tokens from the computed style of `<html>`. |
+| Logic | `src/renderer/markdown/mermaid/mermaidPalette.ts` | Turns the theme tokens into Mermaid `themeVariables`. Pure; never reads the DOM. |
+| Logic | `src/renderer/markdown/mermaid/categoricalColours.ts` | Picks distinct pie, gitGraph and journey colours from the app's hues. |
+| Logic | `src/renderer/markdown/mermaid/colour.ts` | Colour parsing, compositing, WCAG contrast and lightness adjustment. |
+| Contract | `src/renderer/markdown/mermaid/paletteContract.ts` | Token names, reference materials and contrast thresholds shared by the palette and the E2E suite. |
 | Contract | `src/renderer/markdown/contract.ts` | Class names, attributes, messages and types that the other files and the E2E suite share. |
 
 ### Terminal focus
@@ -190,21 +195,61 @@ authenticates.
 ## Architectural Decisions
 
 - **Mermaid loads lazily.** `mermaidRenderer.ts` reaches `mermaid` only
-  through `import('mermaid')` (`mermaidRenderer.ts:40`). Vite puts it in a
+  through `import('mermaid')` (`mermaidRenderer.ts:51`). Vite puts it in a
   separate chunk. A document without diagrams does not load it.
 - **Mermaid security configuration.** The adapter calls `initialize` with
   `securityLevel: 'strict'`, `suppressErrorRendering: true` and
-  `startOnLoad: false` (`mermaidRenderer.ts:50-57`). It does not set
+  `startOnLoad: false` (`mermaidRenderer.ts:70-73`), in both the palette and
+  the directive-theme branch. It does not set
   `secure`, so the Mermaid default secure keys apply and an `%%{init}%%`
   directive cannot change `securityLevel`.
 - **Mermaid renders into a scratch element.** `mermaid.render` clears the
   element it receives. The adapter gives it a temporary child of the block
-  and removes that child after the render (`mermaidRenderer.ts:73`). The
+  and removes that child after the render (`mermaidRenderer.ts:108`). The
   child is absolutely positioned and hidden, so it does not change the block
   height while Mermaid lays out the diagram. This
   keeps the block source for the next render.
 - **Diagram results are cached.** The adapter keeps up to 50 SVG results,
-  keyed by source and theme (`mermaidRenderer.ts:27`).
+  keyed by theme, the theme token values and source
+  (`mermaidRenderer.ts:138`, `:158`). A token change misses the cache. The
+  derived palette is memoised per theme and token set, up to four entries
+  (`mermaidRenderer.ts:38`).
+- **Diagram palette comes from the live tokens.** Every render reads the
+  theme tokens listed in `paletteContract.ts` from the computed style of
+  `<html>`, so System mode and both explicit themes need no extra logic.
+  `mermaidPalette.ts` derives Mermaid `base`-theme `themeVariables` from them.
+  There is no second, hand-copied colour list. Text uses the exact `--text`
+  token. Lines, borders and the accent roles keep their token's hue and are
+  moved in lightness until they reach 3:1 against both reference backgrounds.
+  Categorical colours start from the icon and highlight.js hues, avoid
+  `--danger`, and are at least CIEDE2000 15 apart. Every emitted value is an
+  opaque `#rrggbb`, because Mermaid's colour library cannot parse `var()` or
+  `color-mix()` and keeps alpha. A token that cannot be parsed fails every
+  diagram with an error that names the token; there is no fallback palette.
+  The unit suite runs the real `styles.css` token blocks through the palette.
+- **Directive-themed diagrams get no app palette.** Mermaid merges the
+  `themeVariables` given to `initialize` into a directive's theme. The adapter
+  therefore calls `mermaid.parse` first (`mermaidRenderer.ts:164`). If the
+  source's own directive or frontmatter sets a non-empty string `theme`, it
+  calls `initialize` with no `theme` and no `themeVariables`
+  (`mermaidRenderer.ts:63-67`). Otherwise it uses `theme: 'base'` with the app
+  palette. Only the `theme` and `themeVariables` keys of the parsed config
+  are read.
+- **Directive `themeVariables` without a `theme` re-derive what they feed.**
+  Mermaid does not re-derive the theme for such a directive, so an explicit
+  palette `mainBkg` would hide an author's `primaryColor`.
+  `withAuthorVariables` (`mermaidPalette.ts`) adds the author keys to the
+  `initialize` palette and drops every palette colour that Mermaid's `base`
+  theme derives from them, so Mermaid derives those from the author's value.
+  All other roles keep the app palette. Only plain keys, with values that
+  pass Mermaid's own directive filter, are taken.
+- **Reference backgrounds.** The preview pane paints no background of its
+  own: Tailwind 3.4 emits no rule for `bg-[--panel]/40`, because it drops a
+  `var()` colour with an opacity modifier. A diagram therefore lands on
+  `--bg`, painted by both `html` and `body`, over the window's vibrancy
+  material. `capturePage` cannot see that material, so the palette checks
+  contrast against `--bg` painted twice over black and over white
+  (`REFERENCE_MATERIALS`, `BG_LAYERS` in `paletteContract.ts`).
 - **KaTeX runs untrusted.** `renderMath.ts:5-10` sets `trust: false`,
   `maxSize: 20` and `maxExpand: 1000`.
 - **Own math plugin.** No maintained plugin supports `markdown-it` 14 and all
