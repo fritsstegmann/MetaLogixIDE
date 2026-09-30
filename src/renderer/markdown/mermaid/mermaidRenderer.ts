@@ -13,6 +13,7 @@ import {
   type DiagramResult,
   type EffectiveTheme,
 } from '../contract';
+import type { MermaidConfig } from 'mermaid';
 import { mermaidThemeVariables, withAuthorVariables } from './mermaidPalette';
 import { THEME_TOKEN_NAMES, type ThemeTokens } from './paletteContract';
 import { readThemeTokens } from './themeTokens';
@@ -60,19 +61,30 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** Mermaid 11's theme names; any other directive `theme` value is ignored by Mermaid itself. */
-const MERMAID_THEMES: ReadonlySet<unknown> = new Set([
-  'base',
-  'dark',
-  'default',
-  'forest',
-  'neutral',
-]);
+/**
+ * Every theme name Mermaid accepts, pinned to its own config type: a Mermaid
+ * upgrade that adds or drops a theme fails the build here.
+ */
+const MERMAID_THEMES = {
+  default: true,
+  base: true,
+  dark: true,
+  forest: true,
+  neutral: true,
+  neo: true,
+  'neo-dark': true,
+  redux: true,
+  'redux-dark': true,
+  'redux-color': true,
+  'redux-dark-color': true,
+  null: true,
+} as const satisfies Record<NonNullable<MermaidConfig['theme']>, true>;
 
 /** Whether the source's own directive or frontmatter picks one of Mermaid's themes. */
 function hasOwnTheme(parsed: MermaidParseResult): boolean {
   const config = parsed ? parsed.config : undefined;
-  return !!config && Object.hasOwn(config, 'theme') && MERMAID_THEMES.has(config.theme);
+  const theme = config && Object.hasOwn(config, 'theme') ? config.theme : undefined;
+  return typeof theme === 'string' && Object.hasOwn(MERMAID_THEMES, theme);
 }
 
 /** The `initialize` config: the app palette on `base`, or no theme at all when `palette` is null. */

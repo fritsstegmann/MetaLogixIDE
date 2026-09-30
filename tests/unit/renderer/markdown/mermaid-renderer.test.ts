@@ -166,16 +166,26 @@ describe('createMermaidRenderer', () => {
     });
   });
 
-  it.each(['base', 'dark', 'default', 'forest', 'neutral'])(
-    'treats a directive theme %j as the diagram’s own theme (D2)',
-    async (theme) => {
-      const api = fakeMermaid({ parse: vi.fn(async () => ({ config: { theme } })) });
-      const { renderer } = setup(api);
-      await renderer.render('graph TD; A-->B', 'dark', container);
-      expect(lastInitialize(api)).not.toHaveProperty('theme');
-      expect(lastInitialize(api)).not.toHaveProperty('themeVariables');
-    },
-  );
+  it.each([
+    'default',
+    'base',
+    'dark',
+    'forest',
+    'neutral',
+    'neo',
+    'neo-dark',
+    'redux',
+    'redux-dark',
+    'redux-color',
+    'redux-dark-color',
+    'null',
+  ])('treats a directive theme %j as the diagram’s own theme (D2)', async (theme) => {
+    const api = fakeMermaid({ parse: vi.fn(async () => ({ config: { theme } })) });
+    const { renderer } = setup(api);
+    await renderer.render('graph TD; A-->B', 'dark', container);
+    expect(lastInitialize(api)).not.toHaveProperty('theme');
+    expect(lastInitialize(api)).not.toHaveProperty('themeVariables');
+  });
 
   it('keeps the palette for an author colour Mermaid cannot parse, so the diagram still renders (C1)', async () => {
     const api = fakeMermaid({

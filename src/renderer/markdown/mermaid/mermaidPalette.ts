@@ -439,6 +439,16 @@ const EDGES = DERIVED_FROM.flatMap(([children, parents]) =>
 /** Mermaid's own directive value filter (sanitizeDirective); anything else never reaches a theme. */
 const SAFE_VALUE = /^[\d "#%(),.;A-Za-z]+$/;
 const SAFE_KEY = /^[A-Za-z][A-Za-z0-9]*$/;
+/**
+ * Colour forms Mermaid's colour library and `parseColour` both read, with the
+ * same meaning: unpadded `#rgb`/`#rrggbb`/`#rrggbbaa` and comma `rgb[a]()`.
+ * khroma rejects padding and four-part space syntax, and reads `#abcd` as two
+ * channels rather than `#rgba`, so those are never folded in.
+ */
+const FOLDABLE = [
+  /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i,
+  /^rgba?\([^,()]+(?:,[^,()]+){2,3}\)$/i,
+];
 
 function authorEntries(author: unknown): Array<[string, string]> {
   if (typeof author !== 'object' || author === null) return [];
@@ -447,6 +457,7 @@ function authorEntries(author: unknown): Array<[string, string]> {
       SAFE_KEY.test(entry[0]) &&
       typeof entry[1] === 'string' &&
       SAFE_VALUE.test(entry[1]) &&
+      FOLDABLE.some((form) => form.test(entry[1])) &&
       parseColour(entry[1]) !== null,
   );
 }

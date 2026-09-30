@@ -517,10 +517,22 @@ describe('withAuthorVariables (AC9: directive themeVariables without a theme)', 
     ['primaryColor', '#ff00f'],
     ['noteBkgColor', 'notacolour'],
     ['primaryColor', 'hsl(300, 100%, 50%)'],
+    ['primaryColor', ' #ff0000 '],
+    ['primaryColor', 'rgba(1 2 3 0.5)'],
+    ['primaryColor', '#abcd'],
   ])(
     'leaves an author %s of %j to Mermaid’s overlay instead of folding it in (C1)',
     (key, value) => {
       expect(withAuthorVariables(app, { [key]: value })).toEqual(app);
+    },
+  );
+
+  it.each(['#f0f', '#ff00ff', '#ff00ff80', 'rgb(255, 0, 255)', 'rgba(255,0,255,0.5)'])(
+    'folds in an author primaryColor of %j, a form Mermaid parses the same way (G2)',
+    (value) => {
+      const merged = withAuthorVariables(app, { primaryColor: value });
+      expect(merged.primaryColor).toBe(value);
+      expect(merged).not.toHaveProperty('mainBkg');
     },
   );
 
