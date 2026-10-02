@@ -170,7 +170,7 @@ function useDialogKeys(container: React.RefObject<HTMLElement>, onCancel: () => 
  * saving. A failed save toasts the main-process reason (key names only,
  * never values) and keeps the dialog open with the edits intact.
  */
-export function ProjectEnvDialog({ projectId, projectName, onClose }: Props) {
+export function ProjectEnvTab({ projectId, projectName, onClose }: Props) {
   const { rows, setRows, load } = useSavedRows(projectId);
   const [saving, setSaving] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<PendingFocus>(null);
@@ -235,19 +235,19 @@ export function ProjectEnvDialog({ projectId, projectName, onClose }: Props) {
         aria-labelledby={TITLE_ID}
         aria-describedby={NOTICES_ID}
         className="modal-panel bg-[--panel-strong] w-[640px] max-w-full max-h-full flex flex-col rounded-xl shadow-2xl border border-[--border] overflow-hidden"
-        data-testid={ENV_TESTIDS.dialog}
+        data-testid={ENV_TESTIDS.panel}
       >
         <div className="px-5 py-4 border-b border-[--border] flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 id={TITLE_ID} className="font-semibold text-[--text]">
-              {ENV_COPY.dialogTitle}
+              {ENV_COPY.panelTitle}
             </h2>
             <p className="text-xs text-[--text-muted] truncate mt-0.5">{projectName}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label={ENV_COPY.close}
+            aria-label={ENV_COPY.discard}
             className="shrink-0 text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded hover:bg-[--panel] focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]"
           >
             <RemoveIcon />
@@ -298,9 +298,9 @@ export function ProjectEnvDialog({ projectId, projectName, onClose }: Props) {
             type="button"
             onClick={onClose}
             className="text-sm px-3 py-1.5 rounded-md hover:bg-[--panel] focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]"
-            data-testid={ENV_TESTIDS.cancel}
+            data-testid={ENV_TESTIDS.discard}
           >
-            {ENV_COPY.cancel}
+            {ENV_COPY.discard}
           </button>
           <button
             type="button"

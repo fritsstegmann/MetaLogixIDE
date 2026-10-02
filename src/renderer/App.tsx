@@ -18,7 +18,7 @@ import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
-import { ProjectEnvDialog } from './components/ProjectEnvDialog';
+import { ProjectEnvTab } from './components/ProjectEnvTab';
 import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
@@ -798,12 +798,12 @@ function MainApp() {
                       <SearchIcon />
                     </button>
                   </Tooltip>
-                  <Tooltip label={ENV_COPY.headerButton}>
+                  <Tooltip label={ENV_COPY.tabLabel}>
                     <button
                       onClick={() => setEnvTarget({ id: selected.id, name: selected.name })}
                       className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
-                      data-testid={ENV_TESTIDS.headerButton}
-                      aria-label={ENV_COPY.headerButton}
+                      data-testid={ENV_TESTIDS.tab}
+                      aria-label={ENV_COPY.tabLabel}
                     >
                       <EnvVarsIcon />
                     </button>
@@ -952,7 +952,7 @@ function MainApp() {
         }}
       />
       {envTarget && (
-        <ProjectEnvDialog
+        <ProjectEnvTab
           key={envTarget.id}
           projectId={envTarget.id}
           projectName={envTarget.name}
