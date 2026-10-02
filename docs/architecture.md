@@ -180,6 +180,53 @@ Rules:
   of the project's live shells. The "In use" header shows the worst state
   of all live shells. An inactive shell tab is grey when idle.
 
+### Project environment variables
+
+Each project can store environment variables. Every shell the app starts
+for the project gets them: the primary launch (first, subsequent and the
+no-session fallback), plain shells, CLI profiles, custom commands and task
+runs. The user edits them in the "Environment variables" dialog, opened
+from the project header or the sidebar context menu.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/project-env.ts` | Name and value rules (`envNameProblem`, `envValueProblem`) and `parseProjectEnv`, used by the editor and the IPC handler. |
+| Logic | `src/main/domain/spawn-env.ts` | `resolveSpawnEnv`: the environment overlay for one spawn, and the lookup for `${env.NAME}` in launch argv. Never reads `process.env`. |
+| Logic | `src/main/domain/launch.ts` | `resolveLaunch` takes the inherited environment and uses `resolveSpawnEnv` for the primary launch. |
+| IO | `src/main/ipc/register.ts` | `projectSpawnEnv` for the plain shell, CLI and task sites. `validatedConfigPatch` checks `projects:update-config` before it writes. That channel emits `projects:changed`. |
+| Logic | `src/renderer/project-env-rows.ts` | The editor's row model: rows from the stored map, per-row problems, `canSave` and rows back to a map. |
+| Presentation | `src/renderer/components/ProjectEnvDialog.tsx` | The dialog. Reads the project fresh through `projects:list` each time it opens, and saves only `{ env }`. |
+| Contract | `src/renderer/project-env-copy.ts` | Every string and test id of the editor. |
+
+Rules:
+
+- Precedence, lowest to highest: the app's inherited environment, the
+  template env (the launch command, CLI profile or custom command env),
+  the project variables, and the Claude hook variables. `PtyManager`
+  layers the inherited environment underneath and the launch decorator
+  layers the hook variables on top.
+- A valid name matches `^[A-Za-z_][A-Za-z0-9_]*$`, has at most 255
+  characters and does not start with `METAIDE_` (any case). A value must
+  not contain a NUL character. An empty value sets the variable to the
+  empty string. Stored entries that break these rules are skipped at spawn.
+- Project values can use `${HOME}`, `${PROJECT_PATH}`, `${PROJECT_NAME}`
+  and `${env.NAME}`. `${env.NAME}` reads the inherited environment with the
+  template env on top, in one pass. A project variable cannot read another
+  project variable. An unset name gives the empty string.
+- `${env.NAME}` in launch argv reads the final environment: inherited,
+  then template env, then project variables. On a name clash, argv sees
+  the project value.
+- Template env values are interpolated as before this feature, against
+  the stored project map and the template env, without the inherited
+  environment.
+- CLI profile and custom command env is passed as it is, without
+  interpolation.
+- Saving replaces the whole map, so a removed row is gone. Shells that
+  already run keep their environment. Changes apply to the next spawn.
+- On Windows, the inherited environment can hold `Path` instead of `PATH`.
+  `${env.PATH}` is case-sensitive and then gives the empty string. This is
+  a known limitation.
+
 ## Data Flow
 
 1. `MarkdownPreview` calls `renderMarkdown(source)`. This is synchronous.
@@ -229,6 +276,22 @@ links outside a diagram open through the `app:open-external` IPC channel.
    Otherwise the main window is restored and focused, and
    `shell:focus-request` is sent only while the shell is still alive.
 
+### Project environment variables at spawn
+
+1. The user saves the dialog. `projects:update-config` runs
+   `parseProjectEnv` on `env`. An invalid map is rejected before any write,
+   with an error that names the key and never the value.
+2. `ProjectsRepo.updateConfig` merges the patch shallowly, so `env`
+   replaces the stored map. The handler emits `projects:changed`.
+3. A spawn site builds its template env and calls `resolveSpawnEnv` with
+   the project, the template env and `process.env`.
+4. `resolveSpawnEnv` interpolates the valid project variables against the
+   inherited environment with the template env on top. It returns the
+   template env with the project variables on top.
+5. `PtyManager.spawn` starts the PTY with `process.env` underneath that
+   overlay. For a Claude shell, the launch decorator adds the hook
+   variables last.
+
 ## Authorization Model
 
 Not applicable to the preview. It reads only the local file buffer.
@@ -246,6 +309,14 @@ The `claude-state:list` reply and the `claude-state:changed` event carry
 only `projectId`, `shellIndex` and `state`. No hook message, tool input,
 tool response or background task leaves the parser. The tracker never logs
 PTY input.
+
+Project variable values are stored in plain text in the project's
+`config_json` in SQLite, and the database backups copy them as they are.
+They reach the renderer with every project in `projects:list`. The editor
+says that values are stored unencrypted. Values are never logged and never
+shown in a notification or toast. One exception: when the user's own launch
+command uses `${env.NAME}` for a project variable in its argv, the resolved
+argv is stored in the shell row, as every resolved launch argv is.
 
 ## Infrastructure Dependencies
 
@@ -394,3 +465,10 @@ PTY input.
 - **Windows needs an AppUserModelID.** `index.ts` calls
   `app.setAppUserModelId('com.metalogix.metaide')` on Windows. Windows and
   Linux notifications were checked by code review only.
+- **One resolver for every spawn site.** Before this feature, only the
+  primary launch applied project env, and its argv lookup used the reverse
+  precedence of its env. `resolveSpawnEnv` computes both for every site, so
+  the precedence cannot drift between sites again.
+- **The editor reads the project fresh.** The App's `projects:changed`
+  listener ignores `config.env`, so the dialog loads the project through
+  `projects:list` each time it opens instead of using cached state.
