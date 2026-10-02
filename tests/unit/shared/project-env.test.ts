@@ -40,9 +40,17 @@ describe('envNameProblem', () => {
     'metaide_hook_token',
     'MetaIde_Hook_Shell',
     'METAIDE_HOOK_TOKEN',
+    '__proto__',
   ])('rejects %j as reserved', (name) => {
     expect(envNameProblem(name)).toBe('reserved');
   });
+
+  it.each(['__PROTO__', '__Proto__', '__proto', 'proto__', '__proto___', 'constructor'])(
+    'accepts %j (only the exact __proto__ is reserved)',
+    (name) => {
+      expect(envNameProblem(name)).toBeNull();
+    },
+  );
 });
 
 describe('envValueProblem', () => {
@@ -153,11 +161,12 @@ describe('parseProjectEnv', () => {
     expect(parseProjectEnv(input)).toEqual({ ok: true, env: { A: '1' } });
   });
 
-  it('an own __proto__ key is kept as data and never sets the prototype', () => {
-    const input = JSON.parse('{"__proto__": "x", "A": "1"}') as unknown;
-    const res = parseProjectEnv(input);
-    expect(res.ok).toBe(true);
-    expect(res.ok && Object.getPrototypeOf(res.env)).toBe(Object.prototype);
-    expect(res.ok && Object.prototype.hasOwnProperty.call(res.env, '__proto__')).toBe(true);
+  it('rejects an own __proto__ key as reserved, naming the key and never the value', () => {
+    const res = parseProjectEnv(JSON.parse('{"__proto__": "S3CRET", "A": "1"}') as unknown);
+    expect(res.ok).toBe(false);
+    const error = res.ok ? '' : res.error;
+    expect(error).toContain('__proto__');
+    expect(error).toContain('reserved');
+    expect(error).not.toContain('S3CRET');
   });
 });

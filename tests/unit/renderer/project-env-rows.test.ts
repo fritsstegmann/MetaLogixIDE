@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   addRow,
   canSave,
+  isDraftDirty,
   removeRow,
   rowProblems,
   rowsFromEnv,
@@ -84,6 +85,10 @@ describe('rowProblems', () => {
     ]);
   });
 
+  it('flags __proto__ as reserved', () => {
+    expect(rowProblems(rows(['__proto__', 'x'], ['__PROTO__', 'y']))).toEqual(['reserved', null]);
+  });
+
   it('flags the reserved METAIDE_ prefix in any case', () => {
     expect(rowProblems(rows(['METAIDE_HOOK_TOKEN', 'x'], ['metaide_x', 'x']))).toEqual([
       'reserved',
@@ -143,5 +148,46 @@ describe('rowsToEnv', () => {
   it('omits rows the user removed', () => {
     const before = rowsFromEnv({ A: '1', B: '2' });
     expect(rowsToEnv(removeRow(before, nth(before, 0).key))).toEqual({ B: '2' });
+  });
+});
+
+describe('isDraftDirty', () => {
+  const stored = { A: '1', B: '2' };
+
+  it('is clean for rows identical to the stored map', () => {
+    expect(isDraftDirty(rowsFromEnv(stored), stored)).toBe(false);
+    expect(isDraftDirty([], {})).toBe(false);
+  });
+
+  it('is clean when only a blank row was added', () => {
+    expect(isDraftDirty(addRow(rowsFromEnv(stored)), stored)).toBe(false);
+  });
+
+  it('is dirty when a value was edited', () => {
+    const r = rowsFromEnv(stored);
+    expect(isDraftDirty(updateRow(r, nth(r, 1).key, { value: '3' }), stored)).toBe(true);
+  });
+
+  it('is dirty when a name was edited', () => {
+    const r = rowsFromEnv(stored);
+    expect(isDraftDirty(updateRow(r, nth(r, 0).key, { name: 'C' }), stored)).toBe(true);
+  });
+
+  it('is dirty when a row was removed', () => {
+    const r = rowsFromEnv(stored);
+    expect(isDraftDirty(removeRow(r, nth(r, 1).key), stored)).toBe(true);
+  });
+
+  it('is dirty when a row was added, even with an invalid name', () => {
+    expect(isDraftDirty(rows(['A', '1'], ['B', '2'], ['MY-VAR', 'x']), stored)).toBe(true);
+    expect(isDraftDirty(rows(['A', '1'], ['B', '2'], ['', 'orphan']), stored)).toBe(true);
+  });
+
+  it('is dirty when rows were reordered', () => {
+    expect(isDraftDirty(rows(['B', '2'], ['A', '1']), stored)).toBe(true);
+  });
+
+  it('is dirty when a duplicate row repeats a stored entry', () => {
+    expect(isDraftDirty(rows(['A', '1'], ['B', '2'], ['B', '2']), stored)).toBe(true);
   });
 });

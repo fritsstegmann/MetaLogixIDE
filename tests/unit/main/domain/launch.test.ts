@@ -198,6 +198,18 @@ describe('resolveLaunch — project env (AC10–AC14)', () => {
     expect(r.env).toEqual({ K: 'proj' });
   });
 
+  it.each([
+    ['without project variables', undefined],
+    ['with project variables', { Y: 'y' }],
+  ])('AC19 / D14 — argv ${env.X} gets the interpolated template value %s', (_label, env) => {
+    const p = project({
+      config: { ...tpl(['run', '${env.X}'], { X: '${HOME}/t' }), ...(env ? { env } : {}) },
+    });
+    const r = resolveLaunch(p, fakeSettings, '/home/u', {});
+    expect(r.argv).toEqual(['run', '/home/u/t']);
+    expect(r.env.X).toBe('/home/u/t');
+  });
+
   it('drops a stored reserved project name from the output env', () => {
     const p = project({
       config: { ...tpl(['claude']), env: { METAIDE_HOOK_TOKEN: 'evil', A: '1' } },

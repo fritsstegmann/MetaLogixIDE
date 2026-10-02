@@ -3,7 +3,8 @@
  * saved env map into editable rows (insertion order kept), edits rows
  * immutably, reports one problem per row using the shared name/value rules
  * plus case-sensitive duplicates, and maps rows back to the env map to save.
- * An all-blank row is never a problem and is dropped on save. No React here.
+ * An all-blank row is never a problem, is dropped on save and never makes a
+ * draft dirty. No React here.
  */
 import {
   envNameProblem,
@@ -72,4 +73,18 @@ export function rowsToEnv(rows: readonly EnvRow[]): Record<string, string> {
   const env: Record<string, string> = {};
   for (const r of rows) if (!isBlank(r)) env[r.name] = r.value;
   return env;
+}
+
+/**
+ * True when the non-blank rows, in order and including invalid ones, differ
+ * from the stored map's entries; all-blank rows are not a change.
+ */
+export function isDraftDirty(
+  rows: readonly EnvRow[],
+  stored: Readonly<Record<string, string>>,
+): boolean {
+  const edited = rows.filter((r) => !isBlank(r));
+  const saved = Object.entries(stored);
+  if (edited.length !== saved.length) return true;
+  return edited.some((r, i) => r.name !== saved[i]?.[0] || r.value !== saved[i]?.[1]);
 }

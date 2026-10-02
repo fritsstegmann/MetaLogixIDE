@@ -113,6 +113,7 @@ describe('resolveSpawnEnv — stored names that fail validation are dropped', ()
   it.each([
     ['reserved', 'METAIDE_HOOK_TOKEN'],
     ['reserved lower-case', 'metaide_x'],
+    ['reserved __proto__', '__proto__'],
     ['invalid', 'MY-VAR'],
     ['leading digit', '1FOO'],
   ])('drops a %s name', (_label, name) => {

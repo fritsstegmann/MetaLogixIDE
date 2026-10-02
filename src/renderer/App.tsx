@@ -20,6 +20,8 @@ import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
 import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
+import { isMainTab, type MainTab } from './main-tab';
+import { useEnvDrafts } from './hooks/useEnvDrafts';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
@@ -115,11 +117,7 @@ function MainApp() {
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [aliveCount, setAliveCount] = useState(0);
-  const [mainTab, setMainTab] = usePersistedState<'shell' | 'files'>(
-    'metaide.mainTab',
-    'shell',
-    (v): v is 'shell' | 'files' => v === 'shell' || v === 'files',
-  );
+  const [mainTab, setMainTab] = usePersistedState<MainTab>('metaide.mainTab', 'shell', isMainTab);
   const mainTabRef = useRef(mainTab);
   mainTabRef.current = mainTab;
   // Unread chat count for the sidebar badge. Increments on every incoming
@@ -228,7 +226,8 @@ function MainApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
-  const [envTarget, setEnvTarget] = useState<{ id: number; name: string } | null>(null);
+  const envDrafts = useEnvDrafts();
+  const envDirty = selected != null && envDrafts.isDirty(selected.id);
   const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
   const permissionMode = useClaudePermissionMode();
@@ -236,7 +235,7 @@ function MainApp() {
   shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
   const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
     || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
-    || permissionMode.status === 'unchosen' || envTarget != null;
+    || permissionMode.status === 'unchosen';
   useWindowTerminalFocus(overlayOpen);
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
@@ -271,6 +270,7 @@ function MainApp() {
     { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
+    { id: 'view.env',        category: 'View',     title: 'Switch to Env tab',                             run: () => setMainTab('env') },
     { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
     { id: 'proj.new',        category: 'Project',  title: 'New project…',                    hint: '⌘⇧N',  run: () => setNewProjectOpen(true) },
     { id: 'shell.unload',    category: 'Shell',    title: 'Unload current session',                        run: async () => { if (selected) { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 }); toast('Session unloaded', { kind: 'success' }); } } },
@@ -493,6 +493,56 @@ function MainApp() {
     }
   }
 
+  function editEnv(p: Project) {
+    // Set synchronously so pick() sees 'env' and queues no terminal focus for a later Env -> Shell switch.
+    mainTabRef.current = 'env';
+    setMainTab('env');
+    void pick(p);
+  }
+
+  function mainBody(project: Project) {
+    switch (mainTab) {
+      case 'shell':
+        return (
+          <ShellSplit
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            leftIndex={activeShellIndex}
+            rightIndex={rightShellIndex}
+            ratio={splitRatio}
+            onRatioChange={setSplitRatio}
+            isPoppedLeft={isPopped(project.id, activeShellIndex)}
+            isPoppedRight={rightShellIndex != null && isPopped(project.id, rightShellIndex)}
+            onCloseSplit={closeSplit}
+            onOpenFile={(relPath, line) => {
+              setMainTab('files');
+              setOpenInFiles({ relPath, line });
+            }}
+          />
+        );
+      case 'files':
+        return (
+          <FilesTab
+            key={project.id}
+            projectId={project.id}
+            openRelPath={openInFiles?.relPath ?? null}
+            openLine={openInFiles?.line ?? null}
+            onOpenRelPathConsumed={() => setOpenInFiles(null)}
+          />
+        );
+      case 'env':
+        return (
+          <ProjectEnvTab
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            drafts={envDrafts}
+          />
+        );
+    }
+  }
+
   async function popoutCurrent() {
     if (!selected) return;
     try {
@@ -682,7 +732,7 @@ function MainApp() {
             selectedProjectId={selected?.id ?? null}
             onSelect={pick}
             onNewProject={() => setNewProjectOpen(true)}
-            onEditEnv={(p) => setEnvTarget({ id: p.id, name: p.name })}
+            onEditEnv={editEnv}
             width={sidebarWidth}
           />
           <ResizeHandle
@@ -762,6 +812,19 @@ function MainApp() {
           <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
+            <TabButton
+              active={mainTab === 'env'}
+              onClick={() => setMainTab('env')}
+              testId={ENV_TESTIDS.tab}
+              ariaLabel={envDirty ? ENV_COPY.tabUnsavedLabel : undefined}
+            >
+              {ENV_COPY.tabLabel}
+              {envDirty && (
+                <span aria-hidden className="ml-1 text-[--accent]" data-testid={ENV_TESTIDS.unsaved}>
+                  {ENV_COPY.tabUnsavedMarker}
+                </span>
+              )}
+            </TabButton>
             <div className="ml-auto flex items-center gap-1.5 pr-2">
               {selected && (
                 <>
@@ -796,16 +859,6 @@ function MainApp() {
                       aria-label="Search across all live shells"
                     >
                       <SearchIcon />
-                    </button>
-                  </Tooltip>
-                  <Tooltip label={ENV_COPY.tabLabel}>
-                    <button
-                      onClick={() => setEnvTarget({ id: selected.id, name: selected.name })}
-                      className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
-                      data-testid={ENV_TESTIDS.tab}
-                      aria-label={ENV_COPY.tabLabel}
-                    >
-                      <EnvVarsIcon />
                     </button>
                   </Tooltip>
                   <Tooltip label="Reveal project folder in Finder">
@@ -858,32 +911,7 @@ function MainApp() {
                 onToggleSplit={() => (rightShellIndex != null ? void closeSplit() : void openSplit())}
               />
             )}
-            {selected ? (
-              mainTab === 'shell'
-                ? <ShellSplit
-                  key={selected.id}
-                  projectId={selected.id}
-                  projectName={selected.name}
-                  leftIndex={activeShellIndex}
-                  rightIndex={rightShellIndex}
-                  ratio={splitRatio}
-                  onRatioChange={setSplitRatio}
-                  isPoppedLeft={isPopped(selected.id, activeShellIndex)}
-                  isPoppedRight={rightShellIndex != null && isPopped(selected.id, rightShellIndex)}
-                  onCloseSplit={closeSplit}
-                  onOpenFile={(relPath, line) => {
-                    setMainTab('files');
-                    setOpenInFiles({ relPath, line });
-                  }}
-                />
-                : <FilesTab
-                    key={selected.id}
-                    projectId={selected.id}
-                    openRelPath={openInFiles?.relPath ?? null}
-                    openLine={openInFiles?.line ?? null}
-                    onOpenRelPathConsumed={() => setOpenInFiles(null)}
-                  />
-            ) : <EmptyState />}
+            {selected ? mainBody(selected) : <EmptyState />}
           </div>
         </main>
       </div>
@@ -951,14 +979,6 @@ function MainApp() {
           }
         }}
       />
-      {envTarget && (
-        <ProjectEnvTab
-          key={envTarget.id}
-          projectId={envTarget.id}
-          projectName={envTarget.name}
-          onClose={() => setEnvTarget(null)}
-        />
-      )}
       {permissionMode.status === 'unchosen' && (
         <PermissionModeDialog onConfirm={permissionMode.choose} error={permissionMode.error} />
       )}
@@ -1045,10 +1065,20 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  testId?: string;
+  ariaLabel?: string;
+  children: React.ReactNode;
+}
+
+function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      data-testid={testId}
+      aria-label={ariaLabel}
       className={`px-3 py-1.5 border-b-2 transition-colors ${
         active
           ? 'border-[--accent] text-[--text]'
@@ -1657,15 +1687,6 @@ function RevealFolderIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
-    </svg>
-  );
-}
-
-function EnvVarsIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1" />
-      <path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />
     </svg>
   );
 }

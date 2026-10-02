@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import type { EnvDrafts } from '@renderer/hooks/useEnvDrafts';
 import { ENV_COPY, ENV_TESTIDS } from '@renderer/project-env-copy';
 import {
   addRow,
@@ -13,12 +14,11 @@ import {
   type EnvRow,
   type EnvRowProblem,
 } from '@renderer/project-env-rows';
-import { nextFocusIndex } from './permission-mode-keys';
 
 interface Props {
   projectId: number;
   projectName: string;
-  onClose: () => void;
+  drafts: EnvDrafts;
 }
 
 interface RowProps {
@@ -29,6 +29,12 @@ interface RowProps {
   onRemove: (key: number) => void;
 }
 
+interface ActionsProps {
+  saveDisabled: boolean;
+  onDiscard: () => void;
+  onSave: () => void;
+}
+
 type LoadState = 'loading' | 'ready' | 'failed';
 type PendingFocus = { kind: 'row'; key: number } | { kind: 'add' } | null;
 
@@ -37,10 +43,9 @@ function focusTarget(row: EnvRow | undefined): PendingFocus {
 }
 
 const TITLE_ID = 'project-env-title';
-const NOTICES_ID = 'project-env-notices';
-const FOCUSABLE = 'input, button:not([disabled])';
 const INPUT_CLASS =
   'w-full min-w-0 font-mono bg-[--panel] text-[--text] border rounded-md px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[--accent]/60';
+const FOCUS_RING = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]';
 
 function errorDetail(e: unknown): string {
   return String(e).replace(/^Error:\s*/, '');
@@ -98,13 +103,13 @@ function EnvRowEditor({ row, index, problem, onChange, onRemove }: RowProps) {
   );
 }
 
-/** Loads the project's saved env as rows fresh from main on mount; `load` reports progress and failure. */
-function useSavedRows(projectId: number): {
-  rows: EnvRow[];
-  setRows: (r: EnvRow[]) => void;
+/** Loads the project's stored env map fresh from main on mount; `load` reports progress and failure. */
+function useStoredEnv(projectId: number): {
+  stored: Record<string, string>;
+  setStored: (env: Record<string, string>) => void;
   load: LoadState;
 } {
-  const [rows, setRows] = useState<EnvRow[]>([]);
+  const [stored, setStored] = useState<Record<string, string>>({});
   const [load, setLoad] = useState<LoadState>('loading');
   useEffect(() => {
     let live = true;
@@ -114,7 +119,7 @@ function useSavedRows(projectId: number): {
         const project = projects.find((p) => p.id === projectId);
         if (!live) return;
         if (!project) throw new Error(`project ${projectId} not found`);
-        setRows(rowsFromEnv(project.config.env));
+        setStored(project.config.env ?? {});
         setLoad('ready');
       })
       .catch((e: unknown) => {
@@ -126,194 +131,165 @@ function useSavedRows(projectId: number): {
       live = false;
     };
   }, [projectId]);
-  return { rows, setRows, load };
+  return { stored, setStored, load };
 }
 
-/**
- * Traps Tab inside `container` and owns every keydown while mounted (capture
- * phase, so app shortcuts never fire under the dialog): Escape calls
- * `onCancel`, Enter typed in an input is swallowed so it neither closes the
- * dialog nor discards edits, everything else keeps its native behaviour.
- */
-function useDialogKeys(container: React.RefObject<HTMLElement>, onCancel: () => void): void {
-  const cancelRef = useRef(onCancel);
-  cancelRef.current = onCancel;
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      e.stopImmediatePropagation();
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelRef.current();
-      } else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
-        e.preventDefault();
-      } else if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        const els = Array.from(container.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
-        const idx = nextFocusIndex(
-          els.indexOf(document.activeElement as HTMLElement),
-          els.length,
-          e.shiftKey,
-        );
-        els[idx]?.focus();
-      }
-    }
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [container]);
-}
-
-/**
- * Modal editor for one project's environment variables. Reads the saved map
- * fresh via `projects:list` on mount, edits rows locally, and persists only
- * on Save through `projects:update-config` with `{ env }` alone, then calls
- * `onClose`. Cancel, the close button and Escape call `onClose` without
- * saving. A failed save toasts the main-process reason (key names only,
- * never values) and keeps the dialog open with the edits intact.
- */
-export function ProjectEnvTab({ projectId, projectName, onClose }: Props) {
-  const { rows, setRows, load } = useSavedRows(projectId);
-  const [saving, setSaving] = useState(false);
-  const [pendingFocus, setPendingFocus] = useState<PendingFocus>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const addRef = useRef<HTMLButtonElement>(null);
-  const focusedOnLoad = useRef(false);
-  useDialogKeys(panelRef, onClose);
-
+/** Moves focus to a row's name input or the Add button after the render that follows `request`. */
+function usePendingFocus(panel: React.RefObject<HTMLElement>, add: React.RefObject<HTMLElement>) {
+  const [pending, request] = useState<PendingFocus>(null);
   useLayoutEffect(() => {
-    if (load !== 'ready' || focusedOnLoad.current) return;
-    focusedOnLoad.current = true;
-    setPendingFocus(focusTarget(rows[0]));
-  }, [load, rows]);
-
-  useLayoutEffect(() => {
-    if (!pendingFocus) return;
-    if (pendingFocus.kind === 'add') addRef.current?.focus();
+    if (!pending) return;
+    if (pending.kind === 'add') add.current?.focus();
     else
-      panelRef.current
-        ?.querySelector<HTMLInputElement>(`input[data-row-key="${pendingFocus.key}"]`)
+      panel.current
+        ?.querySelector<HTMLInputElement>(`input[data-row-key="${pending.key}"]`)
         ?.focus();
-    setPendingFocus(null);
-  }, [pendingFocus]);
+    request(null);
+  }, [pending, panel, add]);
+  return request;
+}
 
+function EnvNotices() {
+  return (
+    <div className="space-y-1 text-xs leading-relaxed text-[--text-muted]">
+      <p>{ENV_COPY.noticeNewShells}</p>
+      <p className="text-[--text]">{ENV_COPY.noticeUnencrypted}</p>
+      <p>{ENV_COPY.noticeLaunchArgs}</p>
+      <p className="font-mono break-words">{ENV_COPY.tokensHint}</p>
+    </div>
+  );
+}
+
+function EnvActions({ saveDisabled, onDiscard, onSave }: ActionsProps) {
+  return (
+    <div className="flex items-center justify-end gap-2 border-t border-[--border] pt-4">
+      <button
+        type="button"
+        onClick={onDiscard}
+        className={`text-sm px-3 py-1.5 rounded-md border border-[--border] hover:bg-[--panel] ${FOCUS_RING}`}
+        data-testid={ENV_TESTIDS.discard}
+      >
+        {ENV_COPY.discard}
+      </button>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={saveDisabled}
+        className={`text-sm px-4 py-1.5 rounded-md font-medium pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING} focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]`}
+        data-testid={ENV_TESTIDS.save}
+      >
+        {ENV_COPY.save}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The project's Env tab: edits its environment variables as name/value rows.
+ * Stored values load fresh via `projects:list` on mount; edits live in the
+ * project's entry in `drafts` (kept across tab and project switches) until
+ * Save, which persists `{ env }` alone through `projects:update-config`, or
+ * Discard, which drops the draft. A failed save toasts the main-process
+ * reason (key names only, never values) and keeps the draft. Enter in an
+ * input does nothing.
+ */
+export function ProjectEnvTab({ projectId, projectName, drafts }: Props) {
+  const { stored, setStored, load } = useStoredEnv(projectId);
+  const storedRows = useMemo(() => rowsFromEnv(stored), [stored]);
+  const panelRef = useRef<HTMLElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const savingRef = useRef(false);
+  const requestFocus = usePendingFocus(panelRef, addRef);
+
+  const rows = drafts.get(projectId)?.rows ?? storedRows;
   const problems = rowProblems(rows);
-  const saveEnabled = load === 'ready' && !saving && canSave(rows);
+  const setRows = (next: EnvRow[]) => drafts.set(projectId, { stored, rows: next });
 
   function onAdd() {
     const next = addRow(rows);
     setRows(next);
-    setPendingFocus(focusTarget(next.at(-1)));
+    requestFocus(focusTarget(next.at(-1)));
   }
 
   function onRemove(key: number) {
     const at = rows.findIndex((r) => r.key === key);
     const next = removeRow(rows, key);
     setRows(next);
-    setPendingFocus(focusTarget(next[Math.min(at, next.length - 1)]));
+    requestFocus(focusTarget(next[Math.min(at, next.length - 1)]));
   }
 
   async function onSave() {
-    if (!saveEnabled) return;
-    setSaving(true);
+    if (savingRef.current) return;
+    savingRef.current = true;
+    const env = rowsToEnv(rows);
     try {
-      await api.invoke('projects:update-config', {
-        id: projectId,
-        config: { env: rowsToEnv(rows) },
-      });
-      onClose();
+      await api.invoke('projects:update-config', { id: projectId, config: { env } });
+      setStored(env);
+      drafts.clear(projectId);
     } catch (e) {
       toast(ENV_COPY.saveFailed, { kind: 'error', detail: errorDetail(e) });
-      setSaving(false);
+    } finally {
+      savingRef.current = false;
     }
   }
 
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault();
+  }
+
   return (
-    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={TITLE_ID}
-        aria-describedby={NOTICES_ID}
-        className="modal-panel bg-[--panel-strong] w-[640px] max-w-full max-h-full flex flex-col rounded-xl shadow-2xl border border-[--border] overflow-hidden"
-        data-testid={ENV_TESTIDS.panel}
-      >
-        <div className="px-5 py-4 border-b border-[--border] flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 id={TITLE_ID} className="font-semibold text-[--text]">
-              {ENV_COPY.panelTitle}
-            </h2>
-            <p className="text-xs text-[--text-muted] truncate mt-0.5">{projectName}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={ENV_COPY.discard}
-            className="shrink-0 text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded hover:bg-[--panel] focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]"
-          >
-            <RemoveIcon />
-          </button>
+    <section
+      ref={panelRef}
+      aria-labelledby={TITLE_ID}
+      onKeyDown={onKeyDown}
+      className="flex-1 min-h-0 overflow-y-auto"
+      data-testid={ENV_TESTIDS.panel}
+    >
+      <div className="max-w-3xl mx-auto p-5 space-y-4">
+        <div className="min-w-0">
+          <h2 id={TITLE_ID} className="font-semibold text-[--text]">
+            {ENV_COPY.panelTitle}
+          </h2>
+          <p className="text-xs text-[--text-muted] truncate mt-0.5">{projectName}</p>
         </div>
-
-        <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
-          <div id={NOTICES_ID} className="space-y-1 text-xs leading-relaxed text-[--text-muted]">
-            <p>{ENV_COPY.noticeNewShells}</p>
-            <p className="text-[--text]">{ENV_COPY.noticeUnencrypted}</p>
-            <p className="font-mono break-words">{ENV_COPY.tokensHint}</p>
-          </div>
-
-          {load === 'ready' && rows.length === 0 && (
-            <p className="text-sm text-[--text-muted]" data-testid={ENV_TESTIDS.empty}>
-              {ENV_COPY.emptyState}
-            </p>
-          )}
-          {rows.length > 0 && (
-            <ul className="space-y-2">
-              {rows.map((row, i) => (
-                <EnvRowEditor
-                  key={row.key}
-                  row={row}
-                  index={i}
-                  problem={problems[i] ?? null}
-                  onChange={(key, patch) => setRows(updateRow(rows, key, patch))}
-                  onRemove={onRemove}
-                />
-              ))}
-            </ul>
-          )}
-          <button
-            ref={addRef}
-            type="button"
-            onClick={onAdd}
-            disabled={load !== 'ready'}
-            className="text-sm px-3 py-1.5 rounded-md border border-[--border] text-[--text] hover:bg-[--panel] disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]"
-            data-testid={ENV_TESTIDS.add}
-          >
-            <span aria-hidden>+ </span>
-            {ENV_COPY.addRow}
-          </button>
-        </div>
-
-        <div className="px-5 py-3 border-t border-[--border] bg-[--panel]/50 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm px-3 py-1.5 rounded-md hover:bg-[--panel] focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]"
-            data-testid={ENV_TESTIDS.discard}
-          >
-            {ENV_COPY.discard}
-          </button>
-          <button
-            type="button"
-            onClick={() => void onSave()}
-            disabled={!saveEnabled}
-            className="text-sm px-4 py-1.5 rounded-md font-medium pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]"
-            data-testid={ENV_TESTIDS.save}
-          >
-            {ENV_COPY.save}
-          </button>
-        </div>
+        <EnvNotices />
+        {load === 'ready' && rows.length === 0 && (
+          <p className="text-sm text-[--text-muted]" data-testid={ENV_TESTIDS.empty}>
+            {ENV_COPY.emptyState}
+          </p>
+        )}
+        {rows.length > 0 && (
+          <ul className="space-y-2">
+            {rows.map((row, i) => (
+              <EnvRowEditor
+                key={row.key}
+                row={row}
+                index={i}
+                problem={problems[i] ?? null}
+                onChange={(key, patch) => setRows(updateRow(rows, key, patch))}
+                onRemove={onRemove}
+              />
+            ))}
+          </ul>
+        )}
+        <button
+          ref={addRef}
+          type="button"
+          onClick={onAdd}
+          disabled={load !== 'ready'}
+          className={`text-sm px-3 py-1.5 rounded-md border border-[--border] text-[--text] hover:bg-[--panel] disabled:opacity-50 ${FOCUS_RING}`}
+          data-testid={ENV_TESTIDS.add}
+        >
+          <span aria-hidden>+ </span>
+          {ENV_COPY.addRow}
+        </button>
+        <EnvActions
+          saveDisabled={load !== 'ready' || !canSave(rows)}
+          onDiscard={() => drafts.clear(projectId)}
+          onSave={() => void onSave()}
+        />
       </div>
-    </div>
+    </section>
   );
 }
 

@@ -248,6 +248,7 @@ describe('projects:update-config — env validation (AC8, AC9)', () => {
     ['a leading-digit name', { env: { '1FOO': 'x' } }],
     ['a reserved name', { env: { METAIDE_HOOK_TOKEN: 'x' } }],
     ['a reserved lower-case name', { env: { metaide_x: 'x' } }],
+    ['an own __proto__ name', JSON.parse('{"env":{"__proto__":"x"}}') as unknown],
     ['a non-string value', { env: { A: 1 } }],
     ['a null value', { env: { A: null } }],
     ['a NUL value', { env: { A: 'x\0y' } }],

@@ -17,6 +17,10 @@ describe('viewedShellsFor', () => {
     expect(viewedShellsFor({ ...base, mainTab: 'files' })).toEqual([]);
   });
 
+  it('returns empty when the Env tab is showing', () => {
+    expect(viewedShellsFor({ ...base, mainTab: 'env', rightShellIndex: 2 })).toEqual([]);
+  });
+
   it('returns the active shell when no split is open', () => {
     expect(viewedShellsFor(base)).toEqual([{ projectId: 1, shellIndex: 0 }]);
   });

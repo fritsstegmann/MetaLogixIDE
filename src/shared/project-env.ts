@@ -7,6 +7,8 @@
 /** Names with this prefix (case-insensitive) are reserved for the app's own variables. */
 export const RESERVED_ENV_PREFIX = 'METAIDE_';
 export const MAX_ENV_NAME_LENGTH = 255;
+/** Exact-case name that plain-object assignment would silently swallow. */
+const PROTO_NAME = '__proto__';
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -17,7 +19,7 @@ export type EnvValueProblem = 'nul';
 export function envNameProblem(name: string): EnvNameProblem | null {
   if (name.length > MAX_ENV_NAME_LENGTH) return 'too-long';
   if (!ENV_NAME.test(name)) return 'invalid';
-  if (name.toUpperCase().startsWith(RESERVED_ENV_PREFIX)) return 'reserved';
+  if (name === PROTO_NAME || name.toUpperCase().startsWith(RESERVED_ENV_PREFIX)) return 'reserved';
   return null;
 }
 
