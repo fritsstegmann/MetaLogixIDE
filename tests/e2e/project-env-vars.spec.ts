@@ -51,7 +51,7 @@ async function snapshot(win: Page, projId: number, shellIndex: number): Promise<
   }, { projectId: projId, shellIndex });
 }
 
-/** The project's persisted `config.env`, read from `projects:list` (what storage holds, not what the dialog shows). */
+/** The project's persisted `config.env`, read from `projects:list` (what storage holds, not what the tab shows). */
 async function storedEnv(win: Page, name: string): Promise<Record<string, string> | undefined> {
   return win.evaluate(async (n: string) => {
     const api = (window as unknown as { api: Api }).api;
@@ -64,34 +64,73 @@ async function storedEnv(win: Page, name: string): Promise<Record<string, string
   }, name);
 }
 
-function dialogOf(win: Page): Locator {
-  return win.getByRole('dialog', { name: ENV_COPY.dialogTitle });
+/** True iff the active element is an xterm helper textarea inside `containerSelector` (pattern from terminal-window-focus.spec.ts). */
+async function terminalActiveIn(win: Page, containerSelector: string): Promise<boolean> {
+  return win.evaluate((sel: string) => {
+    const el = document.activeElement;
+    if (!el || !(el instanceof HTMLElement)) return false;
+    if (!el.classList.contains('xterm-helper-textarea')) return false;
+    return !!el.closest(sel);
+  }, containerSelector);
 }
 
-async function openEditorFromHeader(win: Page): Promise<Locator> {
-  await win.getByTestId(ENV_TESTIDS.headerButton).click();
-  const dialog = dialogOf(win);
-  await expect(dialog).toBeVisible();
-  return dialog;
+/** `data-testid|aria-label` of the focused element, to tell rows apart in tab-order assertions. */
+async function activeId(win: Page): Promise<string> {
+  return win.evaluate(() => {
+    const el = document.activeElement;
+    return `${el?.getAttribute('data-testid') ?? ''}|${el?.getAttribute('aria-label') ?? ''}`;
+  });
+}
+
+/**
+ * Selects a project by its sidebar row without waiting for a terminal: with
+ * the Env tab active no `.xterm` is mounted, which `openProject` requires.
+ */
+async function selectProject(win: Page, name: string): Promise<void> {
+  const row = win.locator('[data-testid="project-row"]').filter({ has: win.getByText(name, { exact: true }) }).first();
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect.poll(() => win.title(), { timeout: 10000 }).toBe(`${name} — MetaLogix IDE`);
+}
+
+function envTab(win: Page): Locator {
+  return win.getByTestId(ENV_TESTIDS.tab);
+}
+
+function panelOf(win: Page): Locator {
+  return win.getByTestId(ENV_TESTIDS.panel);
+}
+
+async function openEnvTab(win: Page): Promise<Locator> {
+  await envTab(win).click();
+  const panel = panelOf(win);
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+async function clickTab(win: Page, label: 'Shell' | 'Files'): Promise<void> {
+  await win.getByRole('button', { name: label, exact: true }).click();
 }
 
 /** Appends a row and fills it; `n` is the 1-based row number the new row gets. */
-async function addRow(dialog: Locator, n: number, name: string, value: string): Promise<void> {
-  await dialog.getByTestId(ENV_TESTIDS.add).click();
-  await dialog.getByLabel(ENV_COPY.nameLabel(n), { exact: true }).fill(name);
-  await dialog.getByLabel(ENV_COPY.valueLabel(n), { exact: true }).fill(value);
+async function addRow(panel: Locator, n: number, name: string, value: string): Promise<void> {
+  await panel.getByTestId(ENV_TESTIDS.add).click();
+  await panel.getByLabel(ENV_COPY.nameLabel(n), { exact: true }).fill(name);
+  await panel.getByLabel(ENV_COPY.valueLabel(n), { exact: true }).fill(value);
 }
 
-async function save(dialog: Locator): Promise<void> {
-  await dialog.getByTestId(ENV_TESTIDS.save).click();
-  await expect(dialog).toBeHidden();
+/** Clicks Save and waits for storage to catch up and the unsaved marker to clear. */
+async function saveAndWait(win: Page, projectName: string, expected: Record<string, string>): Promise<void> {
+  await panelOf(win).getByTestId(ENV_TESTIDS.save).click();
+  await expect.poll(() => storedEnv(win, projectName), { timeout: 10000 }).toEqual(expected);
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toHaveCount(0);
 }
 
-function reason(dialog: Locator, text: string): Locator {
-  return dialog.getByTestId(ENV_TESTIDS.reason).filter({ hasText: text }).first();
+function reason(panel: Locator, text: string): Locator {
+  return panel.getByTestId(ENV_TESTIDS.reason).filter({ hasText: text }).first();
 }
 
-test('editor journey: empty state, notices, save, reopen, plain shell sees interpolated vars (AC1-AC4, AC6, AC10, AC12)', async ({}, testInfo) => {
+test('Env tab journey: empty state, notices, save, tab switch, plain shell sees interpolated vars (AC1, AC2, AC4, AC6, AC10, AC12)', async ({}, testInfo) => {
   testInfo.setTimeout(60_000);
   // A directory that exists only in the *inherited* PATH: if `${env.PATH}`
   // resolved to '' (or the project var replaced PATH wholesale), it vanishes.
@@ -107,33 +146,42 @@ test('editor journey: empty state, notices, save, reopen, plain shell sees inter
   await openProject(win, PROJECT_A);
   const idA = await projectId(win, PROJECT_A);
 
-  // AC1 (header entry), AC2 (empty state), AC6 (notices visible without hover).
-  const dialog = await openEditorFromHeader(win);
-  await expect(dialog.getByTestId(ENV_TESTIDS.empty)).toHaveText(ENV_COPY.emptyState);
-  await expect(dialog.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
-  await expect(dialog.getByText(ENV_COPY.noticeNewShells)).toBeVisible();
-  await expect(dialog.getByText(ENV_COPY.noticeUnencrypted)).toBeVisible();
-  await expect(dialog.getByText(ENV_COPY.tokensHint)).toBeVisible();
+  // AC1: the Env tab sits next to Shell and Files, with no header button or modal.
+  await expect(win.getByRole('button', { name: 'Shell', exact: true })).toBeVisible();
+  await expect(win.getByRole('button', { name: 'Files', exact: true })).toBeVisible();
+  await expect(envTab(win)).toHaveText(ENV_COPY.tabLabel);
+  await expect(win.getByRole('dialog')).toHaveCount(0);
 
-  await addRow(dialog, 1, VAR_URL, 'http://localhost:4000');
-  await addRow(dialog, 2, 'PATH', '${PROJECT_PATH}/bin:${env.PATH}');
-  await addRow(dialog, 3, 'E2E_GREETING', 'hi-${PROJECT_NAME}');
-  // Positive control for the empty state: it goes away once a row exists.
-  await expect(dialog.getByTestId(ENV_TESTIDS.empty)).toHaveCount(0);
-  await expect(dialog.getByTestId(ENV_TESTIDS.save)).toBeEnabled();
-  await save(dialog);
+  // AC2 (empty state), AC6 (all three notices + tokens, visible without hover).
+  const panel = await openEnvTab(win);
+  await expect(panel.getByText(ENV_COPY.panelTitle, { exact: true })).toBeVisible();
+  await expect(panel.getByTestId(ENV_TESTIDS.empty)).toHaveText(ENV_COPY.emptyState);
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
+  await expect(panel.getByText(ENV_COPY.noticeNewShells)).toBeVisible();
+  await expect(panel.getByText(ENV_COPY.noticeUnencrypted)).toBeVisible();
+  await expect(panel.getByText(ENV_COPY.noticeLaunchArgs)).toBeVisible();
+  await expect(panel.getByText(ENV_COPY.tokensHint)).toBeVisible();
 
-  // AC4: storage holds exactly the rows saved, in saved order, token text raw.
-  const stored = await storedEnv(win, PROJECT_A);
-  expect(Object.keys(stored ?? {})).toEqual([VAR_URL, 'PATH', 'E2E_GREETING']);
-  expect(stored).toEqual({
+  await addRow(panel, 1, VAR_URL, 'http://localhost:4000');
+  await addRow(panel, 2, 'PATH', '${PROJECT_PATH}/bin:${env.PATH}');
+  await addRow(panel, 3, 'E2E_GREETING', 'hi-${PROJECT_NAME}');
+  // Positive control: empty state gone, draft marker shown, Save enabled; then Save clears the marker.
+  await expect(panel.getByTestId(ENV_TESTIDS.empty)).toHaveCount(0);
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  await expect(panel.getByTestId(ENV_TESTIDS.save)).toBeEnabled();
+  await saveAndWait(win, PROJECT_A, {
     [VAR_URL]: 'http://localhost:4000',
     PATH: '${PROJECT_PATH}/bin:${env.PATH}',
     E2E_GREETING: 'hi-${PROJECT_NAME}',
   });
 
-  // AC2/AC4: reopening shows the saved rows in order.
-  const reopened = await openEditorFromHeader(win);
+  // AC4: storage holds exactly the rows saved, in saved order, token text raw.
+  expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([VAR_URL, 'PATH', 'E2E_GREETING']);
+
+  // Switch to Files and back: rows shown in saved order.
+  await clickTab(win, 'Files');
+  await expect(panelOf(win)).toHaveCount(0);
+  const reopened = await openEnvTab(win);
   await expect(reopened.getByTestId(ENV_TESTIDS.empty)).toHaveCount(0);
   const names = reopened.getByTestId(ENV_TESTIDS.name);
   const values = reopened.getByTestId(ENV_TESTIDS.value);
@@ -143,8 +191,6 @@ test('editor journey: empty state, notices, save, reopen, plain shell sees inter
   await expect(names.nth(2)).toHaveValue('E2E_GREETING');
   await expect(values.nth(0)).toHaveValue('http://localhost:4000');
   await expect(values.nth(1)).toHaveValue('${PROJECT_PATH}/bin:${env.PATH}');
-  await reopened.getByTestId(ENV_TESTIDS.cancel).click();
-  await expect(reopened).toBeHidden();
 
   // AC10 (plain shell site), AC12: values interpolated at spawn.
   const idx = await launchPlain(win, idA);
@@ -163,60 +209,93 @@ test('editor journey: empty state, notices, save, reopen, plain shell sees inter
   expect(Number(m![1])).toBeLessThan(Number(m![2]));
 });
 
-test('validation: invalid / reserved / duplicate names disable Save with a reason; Escape, Cancel and Close discard (AC3, AC5)', async ({}, testInfo) => {
+test('validation and discard: invalid / reserved / __proto__ / duplicate names disable Save with a reason; Discard reverts (AC3, AC5)', async ({}, testInfo) => {
   testInfo.setTimeout(60_000);
   h = await launch([PROJECT_A, PROJECT_B]);
   const { win } = h;
   await openProject(win, PROJECT_A);
+  const panel = await openEnvTab(win);
+  const saveBtn = panel.getByTestId(ENV_TESTIDS.save);
 
-  const dialog = await openEditorFromHeader(win);
-  const saveBtn = dialog.getByTestId(ENV_TESTIDS.save);
-  await addRow(dialog, 1, 'MY-VAR', 'x');
-  await expect(reason(dialog, ENV_COPY.reason.invalid)).toBeVisible();
+  // A stored baseline for Discard to revert to.
+  await addRow(panel, 1, 'KEEP', '1');
+  await saveAndWait(win, PROJECT_A, { KEEP: '1' });
+
+  await addRow(panel, 2, 'MY-VAR', 'x');
+  await expect(reason(panel, ENV_COPY.reason.invalid)).toBeVisible();
   await expect(saveBtn).toBeDisabled();
 
-  const name1 = dialog.getByLabel(ENV_COPY.nameLabel(1), { exact: true });
-  await name1.fill('1FOO');
-  await expect(reason(dialog, ENV_COPY.reason.invalid)).toBeVisible();
+  const name2 = panel.getByLabel(ENV_COPY.nameLabel(2), { exact: true });
+  await name2.fill('METAIDE_HOOK_TOKEN');
+  await expect(reason(panel, ENV_COPY.reason.reserved)).toBeVisible();
   await expect(saveBtn).toBeDisabled();
 
-  await name1.fill('METAIDE_HOOK_TOKEN');
-  await expect(reason(dialog, ENV_COPY.reason.reserved)).toBeVisible();
+  await name2.fill('__proto__');
+  await expect(reason(panel, ENV_COPY.reason.reserved)).toBeVisible();
   await expect(saveBtn).toBeDisabled();
 
-  // Duplicate (case-sensitive): two GOOD rows.
-  await name1.fill('GOOD');
-  await expect(dialog.getByTestId(ENV_TESTIDS.reason)).toHaveCount(0);
+  // Duplicate (case-sensitive): row 2 repeats KEEP.
+  await name2.fill('KEEP');
+  await expect(reason(panel, ENV_COPY.reason.duplicate)).toBeVisible();
+  await expect(saveBtn).toBeDisabled();
+
+  // Positive control: a valid distinct name clears every reason and re-enables Save,
+  // so the disabled state above came from the rows, not a stuck button.
+  await name2.fill('KEEP2');
+  await expect(panel.getByTestId(ENV_TESTIDS.reason)).toHaveCount(0);
   await expect(saveBtn).toBeEnabled();
-  await addRow(dialog, 2, 'GOOD', 'y');
-  await expect(reason(dialog, ENV_COPY.reason.duplicate)).toBeVisible();
-  await expect(saveBtn).toBeDisabled();
 
-  // Positive control: fixing the name clears the reasons and re-enables Save,
-  // so the disabled state above was caused by the rows, not a stuck button.
-  await dialog.getByLabel(ENV_COPY.nameLabel(2), { exact: true }).fill('GOOD2');
-  await expect(dialog.getByTestId(ENV_TESTIDS.reason)).toHaveCount(0);
-  await expect(saveBtn).toBeEnabled();
+  // Discard reverts to the stored rows; marker disappears; nothing persisted.
+  await name2.fill('MY-VAR');
+  await expect(reason(panel, ENV_COPY.reason.invalid)).toBeVisible();
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  await panel.getByTestId(ENV_TESTIDS.discard).click();
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(1);
+  await expect(panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true })).toHaveValue('KEEP');
+  await expect(panel.getByLabel(ENV_COPY.valueLabel(1), { exact: true })).toHaveValue('1');
+  await expect(panel.getByTestId(ENV_TESTIDS.reason)).toHaveCount(0);
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toHaveCount(0);
+  expect(await storedEnv(win, PROJECT_A)).toEqual({ KEEP: '1' });
+});
 
-  // AC3: unsaved valid edits are discarded by Escape, Cancel and Close alike.
-  await win.keyboard.press('Escape');
-  await expect(dialog).toBeHidden();
-  expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
+test('drafts survive tab and project switches and are marked as unsaved (AC3, D12)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A, PROJECT_B]);
+  const { win } = h;
+  await openProject(win, PROJECT_A);
+  const panel = await openEnvTab(win);
+  await addRow(panel, 1, VAR_URL, 'stored');
+  await saveAndWait(win, PROJECT_A, { [VAR_URL]: 'stored' });
+  // Control: with no draft the tab has the plain name.
+  await expect(envTab(win)).not.toHaveAttribute('aria-label', ENV_COPY.tabUnsavedLabel);
 
-  for (const dismiss of ['cancel', 'close'] as const) {
-    const d = await openEditorFromHeader(win);
-    // Positive control per pass: the previous pass's rows did not come back.
-    await expect(d.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
-    await addRow(d, 1, 'DISCARD_ME', 'v');
-    await expect(d.getByTestId(ENV_TESTIDS.name)).toHaveCount(1);
-    if (dismiss === 'cancel') await d.getByTestId(ENV_TESTIDS.cancel).click();
-    else await d.getByRole('button', { name: ENV_COPY.close, exact: true }).click();
-    await expect(d).toBeHidden();
-    expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
-  }
-  const final = await openEditorFromHeader(win);
-  await expect(final.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
-  await expect(final.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
+  // Edit without saving: marker visible and the accessible name announces it.
+  const value1 = panel.getByLabel(ENV_COPY.valueLabel(1), { exact: true });
+  await value1.fill('draft');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  await expect(envTab(win)).toHaveAttribute('aria-label', ENV_COPY.tabUnsavedLabel);
+  await expect(win.getByRole('button', { name: ENV_COPY.tabUnsavedLabel, exact: true })).toBeVisible();
+
+  // Files and back: the draft is still there.
+  await clickTab(win, 'Files');
+  await expect(panelOf(win)).toHaveCount(0);
+  const back = await openEnvTab(win);
+  await expect(back.getByLabel(ENV_COPY.valueLabel(1), { exact: true })).toHaveValue('draft');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+
+  // Project B shows B's own empty state and no marker (A's marker is not leaked).
+  await selectProject(win, PROJECT_B);
+  const panelB = await openEnvTab(win);
+  await expect(panelB.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
+  await expect(panelB.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toHaveCount(0);
+
+  // Back to A: the draft is intact and marked; storage still holds the old value.
+  await selectProject(win, PROJECT_A);
+  const panelA = await openEnvTab(win);
+  await expect(panelA.getByLabel(ENV_COPY.valueLabel(1), { exact: true })).toHaveValue('draft');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  expect(await storedEnv(win, PROJECT_A)).toEqual({ [VAR_URL]: 'stored' });
 });
 
 test('running shells keep old values; new shells get new; other projects stay empty (AC15, AC16)', async ({}, testInfo) => {
@@ -227,19 +306,17 @@ test('running shells keep old values; new shells get new; other projects stay em
   const idA = await projectId(win, PROJECT_A);
   const idB = await projectId(win, PROJECT_B);
 
-  const dialog = await openEditorFromHeader(win);
-  await addRow(dialog, 1, VAR_URL, 'old-value');
-  await save(dialog);
+  const panel = await openEnvTab(win);
+  await addRow(panel, 1, VAR_URL, 'old-value');
+  await saveAndWait(win, PROJECT_A, { [VAR_URL]: 'old-value' });
 
   const shellOld = await launchPlain(win, idA);
   await sendLine(win, idA, shellOld, `printf 'ENV1[%s]\\n' "$${VAR_URL}"`);
   await expect.poll(() => snapshot(win, idA, shellOld), { timeout: 15000 }).toContain('ENV1[old-value]');
 
   // Change the value while shellOld is still running.
-  const edit = await openEditorFromHeader(win);
-  await edit.getByLabel(ENV_COPY.valueLabel(1), { exact: true }).fill('new-value');
-  await save(edit);
-  expect((await storedEnv(win, PROJECT_A))?.[VAR_URL]).toBe('new-value');
+  await panel.getByLabel(ENV_COPY.valueLabel(1), { exact: true }).fill('new-value');
+  await saveAndWait(win, PROJECT_A, { [VAR_URL]: 'new-value' });
 
   // AC15: the running shell still has the old value. The ENV2 marker printing
   // is the positive control for the absence of the new value.
@@ -261,12 +338,12 @@ test('running shells keep old values; new shells get new; other projects stay em
   expect(outB).not.toContain('new-value');
 });
 
-test('sidebar context menu opens the editor for that project (AC1)', async ({}, testInfo) => {
+test('sidebar item selects the project and shows its Env tab; Env to Shell does not focus the terminal (AC1, AC18)', async ({}, testInfo) => {
   testInfo.setTimeout(60_000);
   h = await launch([PROJECT_A, PROJECT_B]);
   const { win } = h;
-  // A is selected; the menu is opened on B to prove the dialog targets the
-  // right-clicked project, not the selected one.
+  // A is selected on the Shell tab; the menu is opened on B to prove the item
+  // selects the right-clicked project and switches to its Env tab.
   await openProject(win, PROJECT_A);
 
   const rowB = win.locator('[data-testid="project-row"]').filter({ has: win.getByText(PROJECT_B, { exact: true }) }).first();
@@ -275,18 +352,105 @@ test('sidebar context menu opens the editor for that project (AC1)', async ({}, 
   // sidebar `<aside>`, whose backdrop-filter makes it the containing block and
   // a stacking context, so any part of the menu that spills past the sidebar's
   // right edge is painted under <main> and cannot be clicked (pre-existing,
-  // affects every sidebar context-menu item; see report).
+  // affects every sidebar context-menu item).
   await rowB.click({ button: 'right', position: { x: 8, y: 8 } });
   await win.getByRole('menuitem', { name: ENV_COPY.contextMenuItem, exact: true }).click();
 
-  const dialog = dialogOf(win);
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText(PROJECT_B);
-  await expect(dialog).not.toContainText(PROJECT_A);
+  await expect.poll(() => win.title(), { timeout: 10000 }).toBe(`${PROJECT_B} — MetaLogix IDE`);
+  const panel = panelOf(win);
+  await expect(panel).toBeVisible();
+  // Control: the panel is B's (empty) and the terminal is unmounted on the Env tab.
+  await expect(panel.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
+  await expect(win.locator('[data-testid="shell-tab"]')).toHaveCount(0);
 
-  await addRow(dialog, 1, 'E2E_FROM_MENU', '1');
-  await save(dialog);
-  // Saved onto B; A (positive control: B has it) is untouched.
-  expect(await storedEnv(win, PROJECT_B)).toEqual({ E2E_FROM_MENU: '1' });
+  await addRow(panel, 1, 'E2E_FROM_MENU', '1');
+  await saveAndWait(win, PROJECT_B, { E2E_FROM_MENU: '1' });
+  // Saved onto B; A (control: B has it) is untouched.
+  expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
+
+  // AC18: in-app Env -> Shell does not auto-focus the terminal, like Files -> Shell.
+  await clickTab(win, 'Shell');
+  await expect(win.locator('[data-testid="shell-tab"] .xterm-screen'), 'positive control: the shell tab is rendered').toBeVisible({ timeout: 10000 });
+  await expect(terminalActiveIn(win, '[data-testid="shell-tab"]'), 'Env to Shell does not auto-focus the terminal').resolves.toBe(false);
+});
+
+test('keyboard: Env tab reachable from Files, tab order through rows, Enter neither saves nor discards, inputs labelled (AC7)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A, PROJECT_B]);
+  const { win } = h;
+  await openProject(win, PROJECT_A);
+  await clickTab(win, 'Files');
+  await win.getByRole('button', { name: 'Files', exact: true }).focus();
+  await win.keyboard.press('Tab');
+  expect(await activeId(win), 'Tab from Files lands on the Env tab button').toBe(`${ENV_TESTIDS.tab}|`);
+  await win.keyboard.press('Enter');
+  const panel = panelOf(win);
+  await expect(panel).toBeVisible();
+
+  await addRow(panel, 1, 'A_ONE', '1');
+  await addRow(panel, 2, 'B_TWO', '2');
+
+  // Every input has a non-empty accessible label (control: there are 4 inputs).
+  const labels = await panel.locator('input').evaluateAll((els) =>
+    els.map((el) => (el.getAttribute('aria-label') ?? '').trim() || ((el as HTMLInputElement).labels?.[0]?.textContent ?? '').trim()));
+  expect(labels).toHaveLength(4);
+  expect(labels.every((l) => l.length > 0)).toBe(true);
+
+  // Tab order from row 1's name: name, value, remove per row, then Add, Discard, Save.
+  await panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true }).focus();
+  const seen: string[] = [await activeId(win)];
+  for (let i = 0; i < 8; i++) {
+    await win.keyboard.press('Tab');
+    seen.push(await activeId(win));
+  }
+  expect(seen).toEqual([
+    `${ENV_TESTIDS.name}|${ENV_COPY.nameLabel(1)}`,
+    `${ENV_TESTIDS.value}|${ENV_COPY.valueLabel(1)}`,
+    `${ENV_TESTIDS.remove}|${ENV_COPY.removeLabel(1)}`,
+    `${ENV_TESTIDS.name}|${ENV_COPY.nameLabel(2)}`,
+    `${ENV_TESTIDS.value}|${ENV_COPY.valueLabel(2)}`,
+    `${ENV_TESTIDS.remove}|${ENV_COPY.removeLabel(2)}`,
+    `${ENV_TESTIDS.add}|`,
+    `${ENV_TESTIDS.discard}|`,
+    `${ENV_TESTIDS.save}|`,
+  ]);
+
+  // Enter in a name input and in a value input: rows unchanged, still a draft, nothing stored.
+  await panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true }).press('Enter');
+  await panel.getByLabel(ENV_COPY.valueLabel(2), { exact: true }).press('Enter');
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(2);
+  await expect(panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true })).toHaveValue('A_ONE');
+  await expect(panel.getByLabel(ENV_COPY.valueLabel(2), { exact: true })).toHaveValue('2');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved), 'neither saved nor discarded').toBeVisible();
+  await expect(panel.getByTestId(ENV_TESTIDS.save)).toBeEnabled();
+  expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
+});
+
+test('save failure keeps the draft and never shows the value in a toast (AC3, AC17)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A, PROJECT_B]);
+  const { app, win } = h;
+  await openProject(win, PROJECT_A);
+  const panel = await openEnvTab(win);
+  await addRow(panel, 1, 'E2E_SECRET', 'S3CRET-E2E');
+
+  // Force main's handler to fail. Not restored: this test owns its app instance.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('projects:update-config');
+    ipcMain.handle('projects:update-config', () => { throw new Error('forced failure for KEYNAME'); });
+  });
+  await panel.getByTestId(ENV_TESTIDS.save).click();
+
+  // Positive control: the failure toast did appear.
+  const failToast = win.getByTestId('toast').filter({ hasText: ENV_COPY.saveFailed });
+  await expect(failToast.first()).toBeVisible({ timeout: 10000 });
+  const toastTexts = await win.getByTestId('toast').allTextContents();
+  expect(toastTexts.length).toBeGreaterThan(0);
+  for (const t of toastTexts) expect(t).not.toContain('S3CRET-E2E');
+
+  // The draft and the unsaved marker are kept; nothing was stored.
+  await expect(panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true })).toHaveValue('E2E_SECRET');
+  await expect(panel.getByLabel(ENV_COPY.valueLabel(1), { exact: true })).toHaveValue('S3CRET-E2E');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
   expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
 });
