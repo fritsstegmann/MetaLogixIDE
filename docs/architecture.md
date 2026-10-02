@@ -185,8 +185,9 @@ Rules:
 Each project can store environment variables. Every shell the app starts
 for the project gets them: the primary launch (first, subsequent and the
 no-session fallback), plain shells, CLI profiles, custom commands and task
-runs. The user edits them in the "Environment variables" dialog, opened
-from the project header or the sidebar context menu.
+runs. The user edits them in the project's Env tab, next to Shell and
+Files. The sidebar context menu item "Environment variables…" selects the
+project and opens that tab.
 
 | Layer | File | Responsibility |
 |---|---|---|
@@ -195,7 +196,10 @@ from the project header or the sidebar context menu.
 | Logic | `src/main/domain/launch.ts` | `resolveLaunch` takes the inherited environment and uses `resolveSpawnEnv` for the primary launch. |
 | IO | `src/main/ipc/register.ts` | `projectSpawnEnv` for the plain shell, CLI and task sites. `validatedConfigPatch` checks `projects:update-config` before it writes. That channel emits `projects:changed`. |
 | Logic | `src/renderer/project-env-rows.ts` | The editor's row model: rows from the stored map, per-row problems, `canSave` and rows back to a map. |
-| Presentation | `src/renderer/components/ProjectEnvDialog.tsx` | The dialog. Reads the project fresh through `projects:list` each time it opens, and saves only `{ env }`. |
+| Logic | `src/renderer/project-env-rows.ts` → `isDraftDirty` | Decides if a draft differs from the stored map: the ordered non-blank rows against the ordered stored entries. |
+| Presentation | `src/renderer/hooks/useEnvDrafts.ts` | Holds unsaved drafts per project, in memory only. A draft lasts until Save, Discard or app close. |
+| Presentation | `src/renderer/components/ProjectEnvTab.tsx` | The Env tab body. Reads the project fresh through `projects:list` when it mounts, edits the draft, and saves only `{ env }`. Save stays disabled until the stored values have loaded. |
+| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `env`) and `isMainTab`, the validator for the persisted tab. |
 | Contract | `src/renderer/project-env-copy.ts` | Every string and test id of the editor. |
 
 Rules:
@@ -206,7 +210,8 @@ Rules:
   layers the inherited environment underneath and the launch decorator
   layers the hook variables on top.
 - A valid name matches `^[A-Za-z_][A-Za-z0-9_]*$`, has at most 255
-  characters and does not start with `METAIDE_` (any case). A value must
+  characters, does not start with `METAIDE_` (any case) and is not
+  `__proto__`, which a plain object would drop on save. A value must
   not contain a NUL character. An empty value sets the variable to the
   empty string. Stored entries that break these rules are skipped at spawn.
 - Project values can use `${HOME}`, `${PROJECT_PATH}`, `${PROJECT_NAME}`
@@ -215,7 +220,8 @@ Rules:
   project variable. An unset name gives the empty string.
 - `${env.NAME}` in launch argv reads the final environment: inherited,
   then template env, then project variables. On a name clash, argv sees
-  the project value.
+  the project value. Template env values reach argv after interpolation,
+  so `X=${HOME}/t` gives argv the expanded path, not the literal token.
 - Template env values are interpolated as before this feature, against
   the stored project map and the template env, without the inherited
   environment.
@@ -223,6 +229,13 @@ Rules:
   interpolation.
 - Saving replaces the whole map, so a removed row is gone. Shells that
   already run keep their environment. Changes apply to the next spawn.
+- Unsaved edits stay as a draft for each project when the user switches
+  tab or project. The Env tab label shows `•` while a draft differs from
+  the stored values. Discard drops the draft.
+- The Env tab does not count as viewing a shell for notifications.
+  Switching from Env back to Shell does not focus the terminal, the same
+  as switching from Files. The sidebar handler sets the tab before it
+  selects the project, so the project switch queues no terminal focus.
 - On Windows, the inherited environment can hold `Path` instead of `PATH`.
   `${env.PATH}` is case-sensitive and then gives the empty string. This is
   a known limitation.
@@ -278,7 +291,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
 
 ### Project environment variables at spawn
 
-1. The user saves the dialog. `projects:update-config` runs
+1. The user saves the Env tab. `projects:update-config` runs
    `parseProjectEnv` on `env`. An invalid map is rejected before any write,
    with an error that names the key and never the value.
 2. `ProjectsRepo.updateConfig` merges the patch shallowly, so `env`
@@ -316,7 +329,9 @@ They reach the renderer with every project in `projects:list`. The editor
 says that values are stored unencrypted. Values are never logged and never
 shown in a notification or toast. One exception: when the user's own launch
 command uses `${env.NAME}` for a project variable in its argv, the resolved
-argv is stored in the shell row, as every resolved launch argv is.
+argv is stored in the shell row, as every resolved launch argv is. The
+Env tab says so. An inherited value that argv reads through `${env.NAME}`
+is stored there the same way.
 
 ## Infrastructure Dependencies
 
@@ -470,5 +485,5 @@ argv is stored in the shell row, as every resolved launch argv is.
   precedence of its env. `resolveSpawnEnv` computes both for every site, so
   the precedence cannot drift between sites again.
 - **The editor reads the project fresh.** The App's `projects:changed`
-  listener ignores `config.env`, so the dialog loads the project through
-  `projects:list` each time it opens instead of using cached state.
+  listener ignores `config.env`, so the Env tab loads the project through
+  `projects:list` each time it mounts instead of using cached state.
