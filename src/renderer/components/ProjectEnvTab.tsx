@@ -21,12 +21,32 @@ interface Props {
   drafts: EnvDrafts;
 }
 
+type RowPatch = Partial<Omit<EnvRow, 'key'>>;
+
 interface RowProps {
   row: EnvRow;
   index: number;
   problem: EnvRowProblem | null;
-  onChange: (key: number, patch: Partial<Omit<EnvRow, 'key'>>) => void;
+  onChange: (key: number, patch: RowPatch) => void;
   onRemove: (key: number) => void;
+}
+
+interface RowListProps {
+  rows: EnvRow[];
+  problems: Array<EnvRowProblem | null>;
+  onChange: (key: number, patch: RowPatch) => void;
+  onRemove: (key: number) => void;
+}
+
+interface FieldProps {
+  label: string;
+  value: string;
+  bad: boolean;
+  reasonId: string;
+  className: string;
+  testId: string;
+  rowKey?: number;
+  onChange: (value: string) => void;
 }
 
 interface ActionsProps {
@@ -37,6 +57,7 @@ interface ActionsProps {
 
 type LoadState = 'loading' | 'ready' | 'failed';
 type PendingFocus = { kind: 'row'; key: number } | { kind: 'add' } | null;
+type SetRows = (next: EnvRow[]) => void;
 
 function focusTarget(row: EnvRow | undefined): PendingFocus {
   return row ? { kind: 'row', key: row.key } : { kind: 'add' };
@@ -51,38 +72,59 @@ function errorDetail(e: unknown): string {
   return String(e).replace(/^Error:\s*/, '');
 }
 
+function EnvField({
+  label,
+  value,
+  bad,
+  reasonId,
+  className,
+  testId,
+  rowKey,
+  onChange,
+}: FieldProps) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={label}
+      aria-invalid={bad || undefined}
+      aria-describedby={bad ? reasonId : undefined}
+      spellCheck={false}
+      autoCapitalize="off"
+      autoCorrect="off"
+      data-row-key={rowKey}
+      className={`${INPUT_CLASS} ${bad ? 'border-[--danger]' : 'border-[--border]'} ${className}`}
+      data-testid={testId}
+    />
+  );
+}
+
 function EnvRowEditor({ row, index, problem, onChange, onRemove }: RowProps) {
   const n = index + 1;
   const reasonId = `project-env-reason-${row.key}`;
-  const nameBad = problem !== null && problem !== 'nul';
-  const border = (bad: boolean) => (bad ? 'border-[--danger]' : 'border-[--border]');
+  const valueBad = problem === 'nul';
+  const nameBad = problem !== null && !valueBad;
   return (
     <li className="space-y-1" data-testid={ENV_TESTIDS.row}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input
+        <EnvField
+          label={ENV_COPY.nameLabel(n)}
           value={row.name}
-          onChange={(e) => onChange(row.key, { name: e.target.value })}
-          aria-label={ENV_COPY.nameLabel(n)}
-          aria-invalid={nameBad || undefined}
-          aria-describedby={nameBad ? reasonId : undefined}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          data-row-key={row.key}
-          className={`${INPUT_CLASS} ${border(nameBad)} sm:w-[38%] sm:flex-none`}
-          data-testid={ENV_TESTIDS.name}
+          bad={nameBad}
+          reasonId={reasonId}
+          rowKey={row.key}
+          className="sm:w-[38%] sm:flex-none"
+          testId={ENV_TESTIDS.name}
+          onChange={(name) => onChange(row.key, { name })}
         />
-        <input
+        <EnvField
+          label={ENV_COPY.valueLabel(n)}
           value={row.value}
-          onChange={(e) => onChange(row.key, { value: e.target.value })}
-          aria-label={ENV_COPY.valueLabel(n)}
-          aria-invalid={problem === 'nul' || undefined}
-          aria-describedby={problem === 'nul' ? reasonId : undefined}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          className={`${INPUT_CLASS} ${border(problem === 'nul')} sm:flex-1`}
-          data-testid={ENV_TESTIDS.value}
+          bad={valueBad}
+          reasonId={reasonId}
+          className="sm:flex-1"
+          testId={ENV_TESTIDS.value}
+          onChange={(value) => onChange(row.key, { value })}
         />
         <button
           type="button"
@@ -100,6 +142,24 @@ function EnvRowEditor({ row, index, problem, onChange, onRemove }: RowProps) {
         </p>
       )}
     </li>
+  );
+}
+
+function EnvRowList({ rows, problems, onChange, onRemove }: RowListProps) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="space-y-2">
+      {rows.map((row, i) => (
+        <EnvRowEditor
+          key={row.key}
+          row={row}
+          index={i}
+          problem={problems[i] ?? null}
+          onChange={onChange}
+          onRemove={onRemove}
+        />
+      ))}
+    </ul>
   );
 }
 
@@ -149,6 +209,17 @@ function usePendingFocus(panel: React.RefObject<HTMLElement>, add: React.RefObje
   return request;
 }
 
+function EnvHeading({ projectName }: { projectName: string }) {
+  return (
+    <div className="min-w-0">
+      <h2 id={TITLE_ID} className="font-semibold text-[--text]">
+        {ENV_COPY.panelTitle}
+      </h2>
+      <p className="text-xs text-[--text-muted] truncate mt-0.5">{projectName}</p>
+    </div>
+  );
+}
+
 function EnvNotices() {
   return (
     <div className="space-y-1 text-xs leading-relaxed text-[--text-muted]">
@@ -185,6 +256,85 @@ function EnvActions({ saveDisabled, onDiscard, onSave }: ActionsProps) {
 }
 
 /**
+ * Save for the Env tab: persists `{ env }` alone, then adopts it as stored
+ * and drops the draft. A failure toasts (key names only) and keeps the draft.
+ */
+function useSaveEnv(
+  projectId: number,
+  drafts: EnvDrafts,
+  adopt: (env: Record<string, string>) => void,
+) {
+  const savingRef = useRef(false);
+  return async (rows: EnvRow[]) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    const env = rowsToEnv(rows);
+    try {
+      await api.invoke('projects:update-config', { id: projectId, config: { env } });
+      adopt(env);
+      drafts.clear(projectId);
+    } catch (e) {
+      toast(ENV_COPY.saveFailed, { kind: 'error', detail: errorDetail(e) });
+    } finally {
+      savingRef.current = false;
+    }
+  };
+}
+
+/** Add and remove for the Env tab, moving focus to the new row, the next row, or Add. */
+function rowActions(rows: EnvRow[], setRows: SetRows, requestFocus: (f: PendingFocus) => void) {
+  return {
+    onAdd: () => {
+      const next = addRow(rows);
+      setRows(next);
+      requestFocus(focusTarget(next.at(-1)));
+    },
+    onRemove: (key: number) => {
+      const at = rows.findIndex((r) => r.key === key);
+      const next = removeRow(rows, key);
+      setRows(next);
+      requestFocus(focusTarget(next[Math.min(at, next.length - 1)]));
+    },
+  };
+}
+
+/**
+ * State behind the Env tab: the stored map (loaded fresh), the rows shown
+ * (the project's draft, else the stored rows) and the edit, save and discard
+ * actions. An edit records the draft against the freshly loaded stored map;
+ * while that load is pending or has failed it keeps the draft's earlier
+ * baseline, so the unsaved marker never compares against an empty map.
+ */
+function useEnvEditor(projectId: number, drafts: EnvDrafts) {
+  const { stored, setStored, load } = useStoredEnv(projectId);
+  const storedRows = useMemo(() => rowsFromEnv(stored), [stored]);
+  const panelRef = useRef<HTMLElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  const requestFocus = usePendingFocus(panelRef, addRef);
+  const draft = drafts.get(projectId);
+  const rows = draft?.rows ?? storedRows;
+  const baseline = load === 'ready' ? stored : (draft?.stored ?? stored);
+  const setRows: SetRows = (next) => drafts.set(projectId, { stored: baseline, rows: next });
+  const save = useSaveEnv(projectId, drafts, setStored);
+  return {
+    load,
+    rows,
+    problems: rowProblems(rows),
+    panelRef,
+    addRef,
+    saveDisabled: load !== 'ready' || !canSave(rows),
+    onChange: (key: number, patch: RowPatch) => setRows(updateRow(rows, key, patch)),
+    ...rowActions(rows, setRows, requestFocus),
+    onSave: () => void save(rows),
+    onDiscard: () => drafts.clear(projectId),
+  };
+}
+
+function onPanelKeyDown(e: React.KeyboardEvent) {
+  if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault();
+}
+
+/**
  * The project's Env tab: edits its environment variables as name/value rows.
  * Stored values load fresh via `projects:list` on mount; edits live in the
  * project's entry in `drafts` (kept across tab and project switches) until
@@ -194,89 +344,34 @@ function EnvActions({ saveDisabled, onDiscard, onSave }: ActionsProps) {
  * input does nothing.
  */
 export function ProjectEnvTab({ projectId, projectName, drafts }: Props) {
-  const { stored, setStored, load } = useStoredEnv(projectId);
-  const storedRows = useMemo(() => rowsFromEnv(stored), [stored]);
-  const panelRef = useRef<HTMLElement>(null);
-  const addRef = useRef<HTMLButtonElement>(null);
-  const savingRef = useRef(false);
-  const requestFocus = usePendingFocus(panelRef, addRef);
-
-  const rows = drafts.get(projectId)?.rows ?? storedRows;
-  const problems = rowProblems(rows);
-  const setRows = (next: EnvRow[]) => drafts.set(projectId, { stored, rows: next });
-
-  function onAdd() {
-    const next = addRow(rows);
-    setRows(next);
-    requestFocus(focusTarget(next.at(-1)));
-  }
-
-  function onRemove(key: number) {
-    const at = rows.findIndex((r) => r.key === key);
-    const next = removeRow(rows, key);
-    setRows(next);
-    requestFocus(focusTarget(next[Math.min(at, next.length - 1)]));
-  }
-
-  async function onSave() {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    const env = rowsToEnv(rows);
-    try {
-      await api.invoke('projects:update-config', { id: projectId, config: { env } });
-      setStored(env);
-      drafts.clear(projectId);
-    } catch (e) {
-      toast(ENV_COPY.saveFailed, { kind: 'error', detail: errorDetail(e) });
-    } finally {
-      savingRef.current = false;
-    }
-  }
-
-  function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault();
-  }
-
+  const editor = useEnvEditor(projectId, drafts);
   return (
     <section
-      ref={panelRef}
+      ref={editor.panelRef}
       aria-labelledby={TITLE_ID}
-      onKeyDown={onKeyDown}
+      onKeyDown={onPanelKeyDown}
       className="flex-1 min-h-0 overflow-y-auto"
       data-testid={ENV_TESTIDS.panel}
     >
       <div className="max-w-3xl mx-auto p-5 space-y-4">
-        <div className="min-w-0">
-          <h2 id={TITLE_ID} className="font-semibold text-[--text]">
-            {ENV_COPY.panelTitle}
-          </h2>
-          <p className="text-xs text-[--text-muted] truncate mt-0.5">{projectName}</p>
-        </div>
+        <EnvHeading projectName={projectName} />
         <EnvNotices />
-        {load === 'ready' && rows.length === 0 && (
+        {editor.load === 'ready' && editor.rows.length === 0 && (
           <p className="text-sm text-[--text-muted]" data-testid={ENV_TESTIDS.empty}>
             {ENV_COPY.emptyState}
           </p>
         )}
-        {rows.length > 0 && (
-          <ul className="space-y-2">
-            {rows.map((row, i) => (
-              <EnvRowEditor
-                key={row.key}
-                row={row}
-                index={i}
-                problem={problems[i] ?? null}
-                onChange={(key, patch) => setRows(updateRow(rows, key, patch))}
-                onRemove={onRemove}
-              />
-            ))}
-          </ul>
-        )}
+        <EnvRowList
+          rows={editor.rows}
+          problems={editor.problems}
+          onChange={editor.onChange}
+          onRemove={editor.onRemove}
+        />
         <button
-          ref={addRef}
+          ref={editor.addRef}
           type="button"
-          onClick={onAdd}
-          disabled={load !== 'ready'}
+          onClick={editor.onAdd}
+          disabled={editor.load !== 'ready'}
           className={`text-sm px-3 py-1.5 rounded-md border border-[--border] text-[--text] hover:bg-[--panel] disabled:opacity-50 ${FOCUS_RING}`}
           data-testid={ENV_TESTIDS.add}
         >
@@ -284,9 +379,9 @@ export function ProjectEnvTab({ projectId, projectName, drafts }: Props) {
           {ENV_COPY.addRow}
         </button>
         <EnvActions
-          saveDisabled={load !== 'ready' || !canSave(rows)}
-          onDiscard={() => drafts.clear(projectId)}
-          onSave={() => void onSave()}
+          saveDisabled={editor.saveDisabled}
+          onDiscard={editor.onDiscard}
+          onSave={editor.onSave}
         />
       </div>
     </section>
