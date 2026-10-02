@@ -10,15 +10,18 @@ import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { StatusDot } from './StatusDot';
+import { ENV_COPY } from '@renderer/project-env-copy';
 
 interface Props {
   selectedProjectId: number | null;
   onSelect: (p: Project) => void;
   onNewProject?: () => void;
+  /** Opens the environment variables editor for a project (context menu). */
+  onEditEnv: (p: Project) => void;
   width?: number;
 }
 
-export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Props) {
+export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, width }: Props) {
   const { roots, refresh: refreshRoots } = useRoots();
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
@@ -148,6 +151,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
                 alive
                 onSelect={onSelect}
                 onRename={askRename}
+                onEditEnv={onEditEnv}
               />
             ))}
           </Section>
@@ -163,6 +167,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
                 alive={aliveIds.has(p.id)}
                 onSelect={onSelect}
                 onRename={askRename}
+                onEditEnv={onEditEnv}
               />
             ))}
           </Section>
@@ -178,6 +183,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
               aliveIds={aliveIds}
               onSelect={onSelect}
               onRename={askRename}
+              onEditEnv={onEditEnv}
             />
           ))}
         </Section>
@@ -248,6 +254,7 @@ function ProjectRow({
   alive,
   onSelect,
   onRename,
+  onEditEnv,
   indent = 12,
 }: {
   project: Project;
@@ -256,6 +263,7 @@ function ProjectRow({
   onSelect: (p: Project) => void;
   /** Lifted so the Rename dialog lives at Sidebar level and stays open across rerenders. */
   onRename: (p: Project) => void;
+  onEditEnv: (p: Project) => void;
   indent?: number;
 }) {
   const claudeState = useProjectClaudeState(project.id);
@@ -284,6 +292,7 @@ function ProjectRow({
   }
   const menuItems: ContextMenuItem[] = [
     { label: 'Rename folder…',  onClick: () => onRename(project) },
+    { label: ENV_COPY.contextMenuItem, onClick: () => onEditEnv(project) },
     { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
     { label: 'Copy full path',   onClick: () => void copyPath() },
   ];
@@ -378,6 +387,7 @@ function RootBlock({
   aliveIds,
   onSelect,
   onRename,
+  onEditEnv,
 }: {
   root: Root;
   projects: Project[];
@@ -385,6 +395,7 @@ function RootBlock({
   aliveIds: Set<number>;
   onSelect: (p: Project) => void;
   onRename: (p: Project) => void;
+  onEditEnv: (p: Project) => void;
 }) {
   const [collapsed, setCollapsedState] = useState<Set<number>>(readCollapsed);
   const open = !collapsed.has(root.id);
@@ -420,6 +431,7 @@ function RootBlock({
           alive={aliveIds.has(p.id)}
           onSelect={onSelect}
           onRename={onRename}
+          onEditEnv={onEditEnv}
           indent={22}
         />
       ))}

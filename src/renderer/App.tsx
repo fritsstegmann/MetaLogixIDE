@@ -18,6 +18,8 @@ import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
+import { ProjectEnvDialog } from './components/ProjectEnvDialog';
+import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
@@ -226,6 +228,7 @@ function MainApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
+  const [envTarget, setEnvTarget] = useState<{ id: number; name: string } | null>(null);
   const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
   const permissionMode = useClaudePermissionMode();
@@ -233,7 +236,7 @@ function MainApp() {
   shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
   const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
     || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
-    || permissionMode.status === 'unchosen';
+    || permissionMode.status === 'unchosen' || envTarget != null;
   useWindowTerminalFocus(overlayOpen);
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
@@ -679,6 +682,7 @@ function MainApp() {
             selectedProjectId={selected?.id ?? null}
             onSelect={pick}
             onNewProject={() => setNewProjectOpen(true)}
+            onEditEnv={(p) => setEnvTarget({ id: p.id, name: p.name })}
             width={sidebarWidth}
           />
           <ResizeHandle
@@ -792,6 +796,16 @@ function MainApp() {
                       aria-label="Search across all live shells"
                     >
                       <SearchIcon />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label={ENV_COPY.headerButton}>
+                    <button
+                      onClick={() => setEnvTarget({ id: selected.id, name: selected.name })}
+                      className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+                      data-testid={ENV_TESTIDS.headerButton}
+                      aria-label={ENV_COPY.headerButton}
+                    >
+                      <EnvVarsIcon />
                     </button>
                   </Tooltip>
                   <Tooltip label="Reveal project folder in Finder">
@@ -937,6 +951,14 @@ function MainApp() {
           }
         }}
       />
+      {envTarget && (
+        <ProjectEnvDialog
+          key={envTarget.id}
+          projectId={envTarget.id}
+          projectName={envTarget.name}
+          onClose={() => setEnvTarget(null)}
+        />
+      )}
       {permissionMode.status === 'unchosen' && (
         <PermissionModeDialog onConfirm={permissionMode.choose} error={permissionMode.error} />
       )}
@@ -1635,6 +1657,15 @@ function RevealFolderIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+    </svg>
+  );
+}
+
+function EnvVarsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1" />
+      <path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />
     </svg>
   );
 }

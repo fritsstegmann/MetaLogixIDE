@@ -17,6 +17,7 @@ export const ENV_COPY = {
   cancel: 'Cancel',
   close: 'Close',
   saveFailed: 'Could not save environment variables',
+  loadFailed: 'Could not load environment variables',
   reason: {
     invalid: 'Use letters, digits and _, not starting with a digit',
     'too-long': 'Name must be 255 characters or fewer',
