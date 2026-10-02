@@ -298,6 +298,76 @@ test('drafts survive tab and project switches and are marked as unsaved (AC3, D1
   expect(await storedEnv(win, PROJECT_A)).toEqual({ [VAR_URL]: 'stored' });
 });
 
+test('drafts for two projects are held at once and each survives switching (AC3, D12)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A, PROJECT_B]);
+  const { win } = h;
+  await openProject(win, PROJECT_A);
+  const panelA = await openEnvTab(win);
+  await addRow(panelA, 1, 'DRAFT_A', 'a');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+
+  // B gets its own draft while A's is still pending.
+  await selectProject(win, PROJECT_B);
+  const panelB = await openEnvTab(win);
+  // Control: B starts clean (A's draft/marker is not shown on B).
+  await expect(panelB.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toHaveCount(0);
+  await addRow(panelB, 1, 'DRAFT_B', 'b');
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+
+  // Back and forth: each project shows exactly its own draft and marker.
+  for (const [name, varName, value] of [[PROJECT_A, 'DRAFT_A', 'a'], [PROJECT_B, 'DRAFT_B', 'b'], [PROJECT_A, 'DRAFT_A', 'a']] as const) {
+    await selectProject(win, name);
+    const panel = await openEnvTab(win);
+    await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(1);
+    await expect(panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true })).toHaveValue(varName);
+    await expect(panel.getByLabel(ENV_COPY.valueLabel(1), { exact: true })).toHaveValue(value);
+    await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  }
+
+  // Neither draft was persisted.
+  expect(Object.keys((await storedEnv(win, PROJECT_A)) ?? {})).toEqual([]);
+  expect(Object.keys((await storedEnv(win, PROJECT_B)) ?? {})).toEqual([]);
+});
+
+test('removing a stored row deletes it from storage on Save and moves focus sensibly (AC3, AC4)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A, PROJECT_B]);
+  const { win } = h;
+  await openProject(win, PROJECT_A);
+  const panel = await openEnvTab(win);
+  await addRow(panel, 1, 'RM_ONE', '1');
+  await addRow(panel, 2, 'RM_TWO', '2');
+  await addRow(panel, 3, 'RM_THREE', '3');
+  await saveAndWait(win, PROJECT_A, { RM_ONE: '1', RM_TWO: '2', RM_THREE: '3' });
+
+  // Remove the middle row: it is a draft until Save, then gone from storage.
+  await panel.getByLabel(ENV_COPY.removeLabel(2), { exact: true }).click();
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(2);
+  await expect(win.getByTestId(ENV_TESTIDS.unsaved)).toBeVisible();
+  expect((await storedEnv(win, PROJECT_A))?.RM_TWO, 'control: not persisted before Save').toBe('2');
+  // Focus lands on the row that took its place (RM_THREE, now row 2).
+  const row2Name = panel.getByLabel(ENV_COPY.nameLabel(2), { exact: true });
+  await expect(row2Name).toHaveValue('RM_THREE');
+  await expect(row2Name).toBeFocused();
+  await saveAndWait(win, PROJECT_A, { RM_ONE: '1', RM_THREE: '3' });
+
+  // Remove the last row: focus falls back to the previous row's name input.
+  await panel.getByLabel(ENV_COPY.removeLabel(2), { exact: true }).click();
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(1);
+  const row1Name = panel.getByLabel(ENV_COPY.nameLabel(1), { exact: true });
+  await expect(row1Name).toHaveValue('RM_ONE');
+  await expect(row1Name).toBeFocused();
+
+  // Remove the only row left: focus moves to Add, empty state returns, Save stores {}.
+  await panel.getByLabel(ENV_COPY.removeLabel(1), { exact: true }).click();
+  await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
+  await expect(panel.getByTestId(ENV_TESTIDS.add)).toBeFocused();
+  await expect(panel.getByTestId(ENV_TESTIDS.empty)).toBeVisible();
+  await saveAndWait(win, PROJECT_A, {});
+});
+
 test('running shells keep old values; new shells get new; other projects stay empty (AC15, AC16)', async ({}, testInfo) => {
   testInfo.setTimeout(90_000);
   h = await launch([PROJECT_A, PROJECT_B]);
