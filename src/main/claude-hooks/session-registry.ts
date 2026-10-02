@@ -64,6 +64,11 @@ export class SessionRegistry {
     return id !== undefined && this.byId.get(id)?.confirmed === true;
   }
 
+  /** Id of the shell's current session, or null when it has none (never issued, or released). */
+  currentId(shell: ShellKey): string | null {
+    return this.idByShell.get(shellKeyString(shell)) ?? null;
+  }
+
   /** Forgets the shell's session so its id and token stop authenticating. */
   release(shell: ShellKey): void {
     const k = shellKeyString(shell);

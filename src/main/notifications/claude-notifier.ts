@@ -1,27 +1,30 @@
 /**
- * Turns authenticated Claude hook events into OS notifications (service
- * layer). Every event confirms its shell; needs-input and finished events
- * then notify subject to the per-kind toggle (read per event), OS support
- * and the "user is viewing this shell" rule, with at most one outstanding
- * notification per shell. Also hosts the generic notifier's confirmed-shell
- * filter.
+ * Turns the hooks the Claude state tracker applied into OS notifications
+ * (service layer), so notifications follow the same state as the dots
+ * (AC12). "Needs input" shows for a needs-input Notification that left the
+ * shell blocked; "finished" for a `Stop` with no background tasks that moved
+ * the shell from busy to idle. Each then notifies subject to the per-kind
+ * toggle (read per event), OS support and the "user is viewing this shell"
+ * rule, with at most one outstanding notification per shell. Session
+ * confirmation happens in the tracker. Also hosts the generic notifier's
+ * confirmed-shell filter.
  */
 import { classifyHookEvent, type HookEvent } from '@main/claude-hooks/hook-event';
-import type { ReceivedHook } from '@main/claude-hooks/receiver';
 import type { ShellKey } from '@main/claude-hooks/session-registry';
+import type { AppliedHook } from '@main/claude-status/state-tracker';
+import type { ClaudeShellState } from '@shared/claude-state';
 import type { NotificationHandle, NotificationsPort } from './os-notifications';
 
 /** The two toggles the notifier reads. */
 export type ClaudeNotifyToggle = 'notify_claude_needs_input' | 'notify_claude_finished';
 
-/** Injected ports; `sessions.confirm` returns false for a released session, which drops the event. */
+/** Injected ports. */
 export interface ClaudeNotifierDeps {
   notifications: NotificationsPort;
   isViewing: (shell: ShellKey) => boolean;
   navigate: (shell: ShellKey) => void;
   settings: { get(key: ClaudeNotifyToggle): boolean };
   projectName: (projectId: number) => string | null;
-  sessions: { confirm(sessionId: string): boolean };
 }
 
 const MAX_BODY_CHARS = 200;
@@ -37,10 +40,14 @@ function needsInputBody(message: string | null): string {
   return Array.from(clean).slice(0, MAX_BODY_CHARS).join('');
 }
 
-function contentFor(event: HookEvent): { toggle: ClaudeNotifyToggle; body: string } | null {
+function isFinishedTurn(event: HookEvent, from: ClaudeShellState, to: ClaudeShellState): boolean {
+  return event.backgroundTaskCount === 0 && from === 'busy' && to === 'idle';
+}
+
+function contentFor({ hook: { event }, from, to }: AppliedHook): { toggle: ClaudeNotifyToggle; body: string } | null {
   const kind = classifyHookEvent(event);
-  if (kind === 'needs-input') return { toggle: 'notify_claude_needs_input', body: needsInputBody(event.message) };
-  if (kind === 'finished') return { toggle: 'notify_claude_finished', body: FINISHED_BODY };
+  if (kind === 'needs-input' && to === 'blocked') return { toggle: 'notify_claude_needs_input', body: needsInputBody(event.message) };
+  if (kind === 'finished' && isFinishedTurn(event, from, to)) return { toggle: 'notify_claude_finished', body: FINISHED_BODY };
   return null;
 }
 
@@ -50,10 +57,10 @@ export class ClaudeNotifier {
 
   constructor(private readonly deps: ClaudeNotifierDeps) {}
 
-  /** Processes one authenticated hook event. */
-  handle(hook: ReceivedHook): void {
-    if (!this.deps.sessions.confirm(hook.sessionId)) return;
-    const content = contentFor(hook.event);
+  /** Processes one hook the state tracker applied (it already confirmed the session). */
+  handle(applied: AppliedHook): void {
+    const { hook } = applied;
+    const content = contentFor(applied);
     if (!content || !this.deps.settings.get(content.toggle)) return;
     if (!this.deps.notifications.isSupported() || this.deps.isViewing(hook.shell)) return;
     this.show(hook.shell, content.body);

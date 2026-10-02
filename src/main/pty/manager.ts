@@ -156,6 +156,12 @@ export class PtyManager extends EventEmitter {
     return this.entries.get(key(projectId, shellIndex))?.screen.snapshot() ?? '';
   }
 
+  /**
+   * Writes `data` to the live shell's PTY, then emits
+   * `'input' { projectId, shellIndex, data }` — the single choke point every
+   * input path (keystrokes, prompt paste, drag-drop) goes through. A shell
+   * that is not alive gets neither the write nor the event.
+   */
   write(projectId: number, shellIndex: number, data: string): void {
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
@@ -166,6 +172,7 @@ export class PtyManager extends EventEmitter {
       e.cmdNotified = false;
     }
     e.pty.write(data);
+    this.emit('input', { projectId, shellIndex, data });
   }
 
   /**

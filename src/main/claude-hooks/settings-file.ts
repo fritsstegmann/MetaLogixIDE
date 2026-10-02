@@ -1,7 +1,8 @@
 /**
  * The app-owned Claude Code settings file passed via `--settings`. It
- * registers one `http` hook on `Notification` (all types), `Stop` and
- * `UserPromptSubmit`, pointing at the loopback receiver with header
+ * registers one `http` hook on `Notification` (all types), `Stop`,
+ * `UserPromptSubmit`, the tool events, `PermissionRequest` and
+ * `StopFailure`, pointing at the loopback receiver with header
  * templates Claude fills from the PTY env. It holds no secret and lives
  * under `~/.metaide/claude-hooks/`, never under a Claude config path (AC7).
  * The file is keyed by the receiver port so app instances sharing one HOME
@@ -27,9 +28,14 @@ export interface HookGroup {
   hooks: HttpHook[];
 }
 
+/** Name of a hook event the app registers. */
+export type RegisteredHookEvent =
+  | 'Notification' | 'Stop' | 'UserPromptSubmit'
+  | 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionRequest' | 'StopFailure';
+
 /** The settings document written to disk. */
 export interface HookSettings {
-  hooks: { Notification: HookGroup[]; Stop: HookGroup[]; UserPromptSubmit: HookGroup[] };
+  hooks: Record<RegisteredHookEvent, HookGroup[]>;
 }
 
 const HOOK_TIMEOUT_SECONDS = 1;
@@ -50,11 +56,18 @@ export function buildHookSettings(url: string): HookSettings {
     headers: { [SHELL_HEADER]: `$${SHELL_ENV}`, Authorization: `Bearer $${TOKEN_ENV}` },
     allowedEnvVars: [SHELL_ENV, TOKEN_ENV],
   };
+  const all = (): HookGroup[] => [{ matcher: '', hooks: [hook] }];
+  const unmatched = (): HookGroup[] => [{ hooks: [hook] }];
   return {
     hooks: {
-      Notification: [{ matcher: '', hooks: [hook] }],
-      Stop: [{ hooks: [hook] }],
-      UserPromptSubmit: [{ hooks: [hook] }],
+      Notification: all(),
+      Stop: unmatched(),
+      UserPromptSubmit: unmatched(),
+      PreToolUse: all(),
+      PostToolUse: all(),
+      PostToolUseFailure: all(),
+      PermissionRequest: all(),
+      StopFailure: all(),
     },
   };
 }

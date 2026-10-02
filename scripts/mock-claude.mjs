@@ -7,7 +7,8 @@
 // `/flood [kb]` mimics how Claude Code's TUI draws: see flood() below.
 // `/truecolor-top` draws a screen whose first cell is truecolor: see truecolorTop().
 //
-// Claude Code hook emulation (docs/specs/claude-code-notifications.md):
+// Claude Code hook emulation (docs/specs/claude-code-notifications.md,
+// amended docs/specs/claude-status-dots.md §R1/R2 background work):
 // when launched with `--settings <path>`, reads the app-owned hook settings
 // file the same way real Claude does and POSTs JSON hook events to its
 // `http` hook's url. Headers are built from the hook's header templates,
@@ -15,6 +16,12 @@
 // Claude: it never leaks arbitrary env into a hook header). POSTs are
 // fire-and-forget — a failure is swallowed, never surfaced to the user or
 // the caller, because Claude's own hook delivery must never block a turn.
+// `/hook-stop` posts a plain Stop (no background_tasks). `/hook-stop-bg [n]`
+// posts a Stop with `n` (default 1) fake `background_tasks` entries — real
+// Claude sends this while paused waiting on its own background work, which
+// must NOT count as "finished" (AC24-AC26). `/hook-stop-crons` posts a Stop
+// with an empty `background_tasks` but a non-empty `session_crons`, which
+// must still count as "finished" (AC27, `session_crons` is never read).
 import { readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -176,6 +183,20 @@ process.stdin.on('data', (chunk) => {
   } else if (line === '/hook-stop') {
     postHook({ hook_event_name: 'Stop' });
     process.stdout.write('hook: Stop\n> ');
+  } else if (line === '/hook-stop-bg' || line.startsWith('/hook-stop-bg ')) {
+    // A Stop fired while Claude is only paused on its own background work —
+    // must not be treated as "finished" (AC24-AC26).
+    const rest = line.slice('/hook-stop-bg'.length).trim();
+    const parsed = rest === '' ? 1 : Number(rest);
+    const count = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+    const background_tasks = Array.from({ length: count }, (_, i) => ({ id: `bg-${i}`, type: 'shell', description: 'mock' }));
+    postHook({ hook_event_name: 'Stop', background_tasks });
+    process.stdout.write(`hook: Stop background_tasks=${count}\n> `);
+  } else if (line === '/hook-stop-crons') {
+    // `background_tasks` empty, `session_crons` non-empty — must still
+    // count as "finished" (AC27: only `background_tasks` matters).
+    postHook({ hook_event_name: 'Stop', background_tasks: [], session_crons: [{ id: 'c1' }] });
+    process.stdout.write('hook: Stop session_crons\n> ');
   } else if (line.startsWith('/hook-notify')) {
     const rest = line.slice('/hook-notify'.length).trim();
     const spaceIdx = rest.indexOf(' ');

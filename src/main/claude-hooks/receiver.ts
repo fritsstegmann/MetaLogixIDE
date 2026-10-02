@@ -1,10 +1,10 @@
 /**
  * Loopback HTTP receiver for Claude Code `http` hooks (IO layer). Accepts
  * only `POST /claude-hook` on 127.0.0.1 with an exact `Host`, a JSON body
- * of at most 64 KiB and a valid per-spawn id + bearer token; answers 204
- * with no body before handing the parsed event to its listener, so a hook
- * reply can never block or steer Claude (AC23, AC24). Never logs tokens or
- * bodies.
+ * of at most 1 MiB and a valid per-spawn id + bearer token, checked before
+ * any of the body is read; answers 204 with no body before handing the
+ * parsed event to its listener, so a hook reply can never block or steer
+ * Claude (AC23, AC24). Never logs tokens or bodies.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -38,7 +38,7 @@ interface Rejection {
 }
 
 const LOOPBACK = '127.0.0.1';
-const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 2000;
 const CONNECTION_CHECK_INTERVAL_MS = 250;
 const BEARER = /^Bearer (\S+)$/;

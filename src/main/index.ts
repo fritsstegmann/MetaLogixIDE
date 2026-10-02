@@ -8,6 +8,8 @@ import { buildServices, type Services } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
+import { installClaudeStatus } from './claude-status/install';
+import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 
 // Route console.log/warn/error to a rolling file at
@@ -385,14 +387,15 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
 
 /**
  * Starts the Claude hook receiver and writes its settings file. A failure
- * is logged and otherwise ignored: Claude shells then launch undecorated
- * and keep the generic notifier (AC22), with no dialog.
+ * is logged and otherwise ignored: Claude shells then launch undecorated,
+ * keep the generic notifier (AC22) and show a green status dot, with no
+ * dialog.
  */
 async function startClaudeHooks(services: Services): Promise<void> {
   try {
     await services.hookRuntime.start();
   } catch (err) {
-    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled', err);
+    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled and Claude status dots stay green', err);
   }
 }
 
@@ -443,7 +446,7 @@ app.whenReady().then(async () => {
   });
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
   installClaudeNotifications({
-    receiver: services.hookReceiver,
+    hooks: services.claudeState,
     sessions: services.hookSessions,
     ptyManager: services.ptyManager,
     viewedShells: services.viewedShells,
@@ -455,6 +458,12 @@ app.whenReady().then(async () => {
       popout: (s) => popoutWindows.get(`${s.projectId}:${s.shellIndex}`) ?? null,
       focused: () => BrowserWindow.getFocusedWindow(),
     },
+    broadcast,
+  });
+  const claudeStatus = installClaudeStatus({
+    receiver: createHookFanout(services.hookReceiver),
+    tracker: services.claudeState,
+    ptyManager: services.ptyManager,
     broadcast,
   });
 
@@ -515,6 +524,7 @@ app.whenReady().then(async () => {
 
   app.on('before-quit', () => {
     clearInterval(donePoll);
+    claudeStatus.stop();
     void services.hookRuntime.stop();
   });
 });
