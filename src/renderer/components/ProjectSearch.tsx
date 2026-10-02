@@ -116,7 +116,7 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
           {error && <span className="text-[--danger]">{error}</span>}
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {grouped.length === 0 && !loading && query.length >= 2 && !error && (
             <div className="p-6 text-center text-sm text-[--text-muted]">No matches.</div>
           )}

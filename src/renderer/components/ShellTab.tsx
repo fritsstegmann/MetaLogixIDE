@@ -11,7 +11,10 @@ import { api } from '@renderer/api';
 import { useShellStream } from '@renderer/hooks/useShellStream';
 import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
+import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewState } from './HoverPreview';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { toast } from '@renderer/hooks/useToasts';
 
 function readVar(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -55,6 +58,7 @@ export function ShellTab({
   const [fontSize, setFontSize] = usePersistedNumber('metaide.shellFontSize', 14, 9, 28);
   const [hover, setHover] = useState<HoverPreviewState | null>(null);
   const [dropActive, setDropActive] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
   const primaryRef = useRef(primary);
@@ -249,6 +253,25 @@ export function ShellTab({
     const ro = new ResizeObserver(syncSize);
     if (containerRef.current) ro.observe(containerRef.current);
 
+    // Intercept every copy from the terminal (Cmd+C, right-click Copy,
+    // browser Edit menu) and replace the clipboard payload with a
+    // sanitized version — strips ANSI, PUA icons, zero-width chars, NBSPs,
+    // and trailing-space column padding. Without this, pastes into email
+    // land as "Â " for NBSP and tofu boxes for Nerd Font glyphs.
+    function onCopy(e: ClipboardEvent) {
+      const sel = term.getSelection();
+      if (!sel) return;
+      e.preventDefault();
+      const cleaned = sanitizeTerminalCopy(sel);
+      try { e.clipboardData?.setData('text/plain', cleaned); }
+      catch { /* fall back to navigator.clipboard below */ }
+      if (!e.clipboardData) {
+        void navigator.clipboard?.writeText(cleaned).catch(() => {});
+      }
+    }
+    const copyHost = termHostRef.current;
+    copyHost?.addEventListener('copy', onCopy);
+
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onScheme = () => { term.options.theme = buildTheme(); };
     media.addEventListener('change', onScheme);
@@ -266,6 +289,7 @@ export function ShellTab({
       ro.disconnect();
       media.removeEventListener('change', onScheme);
       themeObserver.disconnect();
+      copyHost?.removeEventListener('copy', onCopy);
       linkProviderDisposable.dispose();
       focusReg.unregister();
       term.dispose();
@@ -356,6 +380,13 @@ export function ShellTab({
         }
       }}
       onDragLeave={() => setDropActive(false)}
+      onContextMenu={(e) => {
+        // Only intercept when the click is inside the terminal viewport.
+        // Anything else (search bar, drop overlay) uses default browser menu.
+        if (!(e.target as HTMLElement).closest('.xterm')) return;
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
       onDrop={(e) => {
         setDropActive(false);
         const dt = e.dataTransfer;
@@ -414,6 +445,63 @@ export function ShellTab({
         state={hover}
         onOpen={(relPath, line) => { setHover(null); onOpenFileRef.current?.(relPath, line); }}
       />
+      {menu && (() => {
+        const term = termRef.current;
+        const hasSelection = !!term?.hasSelection();
+        const items: ContextMenuItem[] = [
+          {
+            label: 'Copy',
+            disabled: !hasSelection,
+            onClick: async () => {
+              const sel = term?.getSelection() ?? '';
+              if (!sel) return;
+              try {
+                await navigator.clipboard.writeText(sanitizeTerminalCopy(sel));
+                toast('Copied', { kind: 'success' });
+              } catch (e) {
+                toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+              }
+            },
+          },
+          {
+            label: 'Copy all (visible scrollback)',
+            separatorAfter: true,
+            onClick: async () => {
+              const t = termRef.current;
+              if (!t) return;
+              const buf = t.buffer.active;
+              const lines: string[] = [];
+              for (let y = 0; y < buf.length; y++) {
+                const line = buf.getLine(y);
+                if (line) lines.push(line.translateToString(true));
+              }
+              try {
+                await navigator.clipboard.writeText(sanitizeTerminalCopy(lines.join('\n')));
+                toast(`Copied ${lines.length} lines`, { kind: 'success' });
+              } catch (e) {
+                toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+              }
+            },
+          },
+          {
+            label: 'Paste',
+            onClick: async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text) void api.invoke('shells:write', { projectId, shellIndex, data: text });
+              } catch (e) {
+                toast('Paste failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+              }
+            },
+          },
+          {
+            label: 'Clear selection',
+            disabled: !hasSelection,
+            onClick: () => { termRef.current?.clearSelection(); },
+          },
+        ];
+        return <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />;
+      })()}
     </div>
   );
 }

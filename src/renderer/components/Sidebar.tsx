@@ -137,7 +137,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, width }: Pr
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-1">
+      <div className="flex-1 min-h-0 overflow-y-auto py-1">
         {inUse.length > 0 && (
           <Section title="In use" testId="section-in-use" accent dotState={overallClaudeState}>
             {inUse.map((p) => (
