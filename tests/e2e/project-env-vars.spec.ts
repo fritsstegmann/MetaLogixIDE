@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ENV_COPY, ENV_TESTIDS } from '../../src/renderer/project-env-copy';
+import { DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
 import { launch, openProject, projectId, sendLine, type Api, type Harness } from './helpers/claude-harness';
 
 /**
@@ -451,8 +452,11 @@ test('keyboard: Env tab reachable from Files, tab order through rows, Enter neit
   await openProject(win, PROJECT_A);
   await clickTab(win, 'Files');
   await win.getByRole('button', { name: 'Files', exact: true }).focus();
+  // The Diff tab sits between Files and Env (diff-tab spec AC1).
   await win.keyboard.press('Tab');
-  expect(await activeId(win), 'Tab from Files lands on the Env tab button').toBe(`${ENV_TESTIDS.tab}|`);
+  expect(await activeId(win), 'Tab from Files lands on the Diff tab button').toBe(`${DIFF_TESTIDS.tab}|`);
+  await win.keyboard.press('Tab');
+  expect(await activeId(win), 'a second Tab lands on the Env tab button').toBe(`${ENV_TESTIDS.tab}|`);
   await win.keyboard.press('Enter');
   const panel = panelOf(win);
   await expect(panel).toBeVisible();

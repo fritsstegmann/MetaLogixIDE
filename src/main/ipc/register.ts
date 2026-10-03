@@ -2,7 +2,7 @@ import type { IpcMain } from 'electron';
 import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import type { Services } from '@main/services';
-import type { IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
+import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
@@ -19,7 +19,13 @@ import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
+import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
+import { describeGitFailure, runGit } from '@main/git/run-git';
+import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
+import { readDiffSides } from '@main/git/diff-sides';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+
+const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
 
 /** Spawn env overlay for a non-template spawn site: `templateEnv` ⊕ the project's interpolated variables. */
 function projectSpawnEnv(
@@ -952,42 +958,15 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'git:panel-status': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    if (!existsSync(join(p.path, '.git'))) {
-      return { isRepo: false, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    const empty = { branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    if (!existsSync(join(p.path, '.git'))) return { isRepo: false, ...empty };
+    const r = runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
+    if (r.status !== 0 || r.tooLarge || r.timedOut) {
+      const error = describeGitFailure(r, 'status');
+      log.warn('[git:panel-status] git status failed', { projectId, status: r.status, error });
+      return { isRepo: true, ...empty, error };
     }
-    const r = spawnSync('git', ['-C', p.path, 'status', '--porcelain=v1', '--branch', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000 });
-    if (r.status !== 0) return { isRepo: true, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
-    // Parse porcelain lines directly here — we need per-column detail
-    // (staged X vs unstaged Y) that the collapsed parseGitStatus loses.
-    const lines = r.stdout.split('\n');
-    let branch: string | null = null;
-    let ahead = 0;
-    let behind = 0;
-    const staged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
-    const unstaged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
-    const untracked: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith('## ')) {
-        const branchMatch = line.slice(3).match(/^([^.\s]+)(?:\.\.\.[^\s]+)?/);
-        if (branchMatch) branch = branchMatch[1] ?? null;
-        const aheadMatch = line.match(/ahead (\d+)/);
-        const behindMatch = line.match(/behind (\d+)/);
-        if (aheadMatch)  ahead  = Number(aheadMatch[1]);
-        if (behindMatch) behind = Number(behindMatch[1]);
-        continue;
-      }
-      if (line.length < 3) continue;
-      const x = line[0]!; const y = line[1]!;
-      const path = line.slice(3);
-      const norm = (c: string): 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' => {
-        if (c === 'M' || c === 'A' || c === 'D' || c === 'R' || c === 'U' || c === '?' || c === '!') return c;
-        return 'M';
-      };
-      if (x === '?' && y === '?') { untracked.push(path); continue; }
-      if (x !== ' ' && x !== '?') staged.push({ path, status: norm(x) });
-      if (y !== ' ' && y !== '?') unstaged.push({ path, status: norm(y) });
-    }
-    return { isRepo: true, branch, ahead, behind, staged, unstaged, untracked };
+    return { isRepo: true, ...parseGitPanelStatus(r.stdout.toString('utf8')) };
   },
   'git:stage':   async (s, { projectId, paths }) => {
     const p = s.projects.get(projectId);
@@ -1153,25 +1132,21 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { shellIndex: idx };
   },
 
+  /* ─── Diff tab: side-by-side data ─── */
+  'git:diff-sides': async (s, { projectId, kind, path, origPath, ifDiffHashNot }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (!GIT_DIFF_KINDS.has(kind)) throw new Error(`invalid diff kind ${String(kind)}`);
+    if (!existsSync(join(p.path, '.git'))) throw new Error(`${p.path} is not a git repository`);
+    return readDiffSides(p.path, { kind, path, origPath, ifDiffHashNot });
+  },
+
   /* ─── Per-file git diff ─── */
-  'git:file-diff': async (s, { projectId, path, staged, untracked }) => {
+  'git:file-diff': async (s, { projectId, path, origPath, staged, untracked }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     if (!existsSync(join(p.path, '.git'))) return { diff: '' };
-    // Untracked files aren't in the index; `--no-index` compares against
-    // /dev/null so we get a full add-diff — matches what `git diff` prints
-    // once the file is added, without side-effects.
-    if (untracked) {
-      const r = spawnSync('git', ['-C', p.path, 'diff', '--no-index', '--', '/dev/null', path], { encoding: 'utf8', timeout: 15000 });
-      // `--no-index` returns non-zero when the files differ (they always do
-      // here — one side is /dev/null). Prefer stdout unless it's empty.
-      return { diff: r.stdout || r.stderr || '' };
-    }
-    const args = staged
-      ? ['-C', p.path, 'diff', '--cached', '--', path]
-      : ['-C', p.path, 'diff', '--', path];
-    const r = spawnSync('git', args, { encoding: 'utf8', timeout: 15000 });
-    return { diff: r.stdout || '' };
+    return readFileDiff(p.path, { path, origPath, staged, untracked });
   },
 
   /* ─── Global scrollback search ─── */
