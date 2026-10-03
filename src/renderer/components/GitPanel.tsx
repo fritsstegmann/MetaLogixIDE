@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { gitStatusTextClass } from '@renderer/git-status-style';
+import { DIFF_COPY } from '@renderer/diff-tab-copy';
+import type { GitChangeEntry } from '@shared/ipc-contract';
 
-interface FileEntry { path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }
+type FileEntry = GitChangeEntry;
 interface Status {
   isRepo: boolean;
   branch: string | null;
@@ -11,6 +14,7 @@ interface Status {
   staged: FileEntry[];
   unstaged: FileEntry[];
   untracked: string[];
+  error?: string;
 }
 
 /**
@@ -120,7 +124,9 @@ export function GitPanel({ projectId }: { projectId: number | null }) {
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0 px-2 py-2 space-y-3 text-xs">
-        {nothingToDo && (
+        {status.error ? (
+          <div className="text-center text-[--danger] py-6 whitespace-pre-wrap break-words">{status.error}</div>
+        ) : nothingToDo && (
           <div className="text-center text-[--text-muted] py-6">Nothing to commit — working tree clean.</div>
         )}
         <Section title="Staged" count={status.staged.length} onBulk={unstageAll} bulkLabel="Unstage all">
@@ -210,12 +216,7 @@ function Row({ projectId, file, onAction, action, busy, staged, untracked }: {
   /** True when the file has never been tracked — diff comes from --no-index. */
   untracked?: boolean;
 }) {
-  const color =
-    file.status === 'M' ? 'text-amber-400' :
-    file.status === 'A' ? 'text-emerald-400' :
-    file.status === 'D' ? 'text-rose-400' :
-    file.status === '?' ? 'text-sky-400' :
-    'text-[--text-muted]';
+  const color = gitStatusTextClass(file.status);
   const [open, setOpen] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [diffBusy, setDiffBusy] = useState(false);
@@ -226,8 +227,8 @@ function Row({ projectId, file, onAction, action, busy, staged, untracked }: {
     if (diff != null) return;
     setDiffBusy(true);
     try {
-      const { diff } = await api.invoke('git:file-diff', { projectId, path: file.path, staged, untracked });
-      setDiff(diff || '(no changes)');
+      const res = await api.invoke('git:file-diff', { projectId, path: file.path, origPath: file.origPath, staged, untracked });
+      setDiff(res.tooLarge ? DIFF_COPY.tooLarge : res.diff || '(no changes)');
     } catch (e) {
       setDiff(`Error: ${String(e).replace(/^Error:\s*/, '')}`);
     } finally { setDiffBusy(false); }

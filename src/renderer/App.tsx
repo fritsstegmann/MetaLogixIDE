@@ -19,7 +19,10 @@ import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
+import { DiffTab } from './components/DiffTab';
 import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
+import { DIFF_COPY, DIFF_TESTIDS } from './diff-tab-copy';
+import { diffTabCount } from './diff/diff-selection';
 import { isMainTab, type MainTab } from './main-tab';
 import { useEnvDrafts } from './hooks/useEnvDrafts';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
@@ -241,6 +244,7 @@ function MainApp() {
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const { status: git } = useGitStatus(selected?.id ?? null);
+  const diffCount = diffTabCount(git);
   // Once a NON-primary shell (idx > 0) is popped out into its own window,
   // hide it from the tab strip — the window is now its home. Closing the
   // window returns the shell to the tab strip. Killing from the strip
@@ -270,6 +274,7 @@ function MainApp() {
     { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
+    { id: 'view.diff',       category: 'View',     title: DIFF_COPY.paletteTitle,                          run: () => setMainTab('diff') },
     { id: 'view.env',        category: 'View',     title: 'Switch to Env tab',                             run: () => setMainTab('env') },
     { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
     { id: 'proj.new',        category: 'Project',  title: 'New project…',                    hint: '⌘⇧N',  run: () => setNewProjectOpen(true) },
@@ -531,6 +536,8 @@ function MainApp() {
             onOpenRelPathConsumed={() => setOpenInFiles(null)}
           />
         );
+      case 'diff':
+        return <DiffTab key={project.id} projectId={project.id} />;
       case 'env':
         return (
           <ProjectEnvTab
@@ -809,9 +816,22 @@ function MainApp() {
           )}
         </Reveal>
         <main className="flex-1 flex flex-col min-h-0 bg-[--panel-strong]/40">
-          <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
+          <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
+            <TabButton
+              active={mainTab === 'diff'}
+              onClick={() => setMainTab('diff')}
+              testId={DIFF_TESTIDS.tab}
+              ariaLabel={diffCount !== null ? DIFF_COPY.tabCountLabel(diffCount) : undefined}
+            >
+              {DIFF_COPY.tabLabel}
+              {diffCount !== null && (
+                <span aria-hidden className="ml-1.5 font-mono text-[10px] text-[--text-muted]" data-testid={DIFF_TESTIDS.tabCount}>
+                  {diffCount}
+                </span>
+              )}
+            </TabButton>
             <TabButton
               active={mainTab === 'env'}
               onClick={() => setMainTab('env')}
