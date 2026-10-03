@@ -9,8 +9,8 @@ import {
 } from './helpers/claude-harness';
 import {
   HALF_EDIT, LINK_SECRET, LONG_EDITED_123, LONG_INSERTED, LONG_MERGED, LONG_PATH, MID_EDIT, RENAME_NEW, RENAME_OLD,
-  TEXTCONV_OUTPUT, XSS_IMG, XSS_SCRIPT, commitAll, git, programRuns, seedConflictRepo, seedRepo,
-  seedRepoProgramsRepo, uniquePathCount, type ScenarioName,
+  TEXTCONV_OUTPUT, XSS_IMG, XSS_SCRIPT, commitAll, git, porcelain, programRuns, seedConflictRepo, seedRepo,
+  seedRepoProgramsRepo, stagedEntries, uniquePathCount, type ScenarioName,
 } from './helpers/git-repo';
 
 /**
@@ -1056,6 +1056,31 @@ test('Git panel inherits the fixes: rename under its new path with a working dif
   await openProject(win, OTHER);
   await expect(gitView).toContainText(/fatal: not a git repository/i, { timeout: 10000 });
   await expect(gitView.getByText('Nothing to commit — working tree clean.')).toHaveCount(0);
+});
+
+test('Git panel unstages a staged rename completely: the old path is not left staged (AC33, gate F1)', async () => {
+  h = await launch([PROJ]);
+  seedRepo({ dir: projDir(), outside: join(h.isolatedHome, 'outside') }, ['rename']);
+  const win = h.win;
+  await openProject(win, PROJ);
+  await win.getByTestId('ab-git').click();
+  const gitView = win.locator('[data-view="git"]');
+
+  // Positive control: the rename is staged in git and listed under Staged in the panel.
+  expect(stagedEntries(projDir())).toEqual([{ xy: 'R ', path: RENAME_NEW, orig: RENAME_OLD }]);
+  const staged = gitView.locator("xpath=.//span[starts-with(normalize-space(text()), 'Staged')]/ancestor::div[2]");
+  const renameBtn = staged.locator(`button[title=${JSON.stringify(`Toggle diff for ${RENAME_NEW}`)}]`);
+  await expect(renameBtn).toBeVisible({ timeout: 10000 });
+
+  await renameBtn.locator('xpath=following-sibling::button[@title="Unstage"]').click();
+
+  // Nothing is left staged: before the fix, "D  old.ts" stayed in the index.
+  await expect.poll(() => stagedEntries(projDir()), { timeout: 5000 }).toEqual([]);
+  const entries = porcelain(projDir());
+  expect(entries).toContainEqual({ xy: '??', path: RENAME_NEW });
+  expect(entries.find((e) => e.path === RENAME_OLD), 'old path is an unstaged deletion').toEqual({ xy: ' D', path: RENAME_OLD });
+  await expect(gitView.locator("xpath=.//span[starts-with(normalize-space(text()), 'Staged')]"), 'no Staged section').toHaveCount(0, { timeout: 5000 });
+  await expect(gitView.locator(`button[title=${JSON.stringify(`Toggle diff for ${RENAME_NEW}`)}]`)).toBeVisible();
 });
 
 /* ═══════════════════════════════ 11. repo-configured programs ═══════════════════════════════ */

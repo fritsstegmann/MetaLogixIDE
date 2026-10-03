@@ -64,6 +64,11 @@ export function porcelain(dir: string): PorcelainEntry[] {
   return entries;
 }
 
+/** Porcelain entries with a staged change (index column set; untracked `??` excluded). */
+export function stagedEntries(dir: string): PorcelainEntry[] {
+  return porcelain(dir).filter((e) => e.xy[0] !== ' ' && e.xy[0] !== '?');
+}
+
 /** Stages everything and commits it, so the working tree is clean. */
 export function commitAll(dir: string, message: string): void {
   git(dir, ['add', '-A']);
