@@ -199,7 +199,7 @@ project and opens that tab.
 | Logic | `src/renderer/project-env-rows.ts` → `isDraftDirty` | Decides if a draft differs from the stored map: the ordered non-blank rows against the ordered stored entries. |
 | Presentation | `src/renderer/hooks/useEnvDrafts.ts` | Holds unsaved drafts per project, in memory only. A draft lasts until Save, Discard or app close. |
 | Presentation | `src/renderer/components/ProjectEnvTab.tsx` | The Env tab body. Reads the project fresh through `projects:list` when it mounts, edits the draft, and saves only `{ env }`. Save stays disabled until the stored values have loaded. |
-| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `env`) and `isMainTab`, the validator for the persisted tab. |
+| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `diff`, `env`) and `isMainTab`, the validator for the persisted tab. |
 | Contract | `src/renderer/project-env-copy.ts` | Every string and test id of the editor. |
 
 Rules:
@@ -239,6 +239,55 @@ Rules:
 - On Windows, the inherited environment can hold `Path` instead of `PATH`.
   `${env.PATH}` is case-sensitive and then gives the empty string. This is
   a known limitation.
+
+### Diff tab
+
+The Diff tab sits between Files and Env. It lists the uncommitted changes
+of the selected project in three groups: Staged, Changes and Untracked.
+It shows the selected file's diff side by side, before on the left and
+after on the right, with syntax highlighting. The tab is read-only.
+Staging and committing stay in the sidebar Git panel.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/ipc-contract.ts` | `GitChangeEntry`, `GitDiffKind`, `GitSideContent`, and the `git:panel-status`, `git:file-diff` and `git:diff-sides` channels. |
+| Logic | `src/shared/parse-git-panel-status.ts` | Parses `git status --porcelain=v1 -z` into staged, unstaged and untracked lists. Renames and copies carry `origPath`. A conflicted file goes into both lists. |
+| IO | `src/main/git/run-git.ts` | `runGit`: the only place that starts git for these channels. It adds the safety arguments and turns an output overflow or a timeout into a flag. It never returns partial output. |
+| Logic | `src/main/git/repo-path.ts` | `toRepoRelativePath` (lexical containment) and `assertWorktreeContained` (containment by real path of the parent folder). |
+| IO | `src/main/git/file-diff.ts` | `readFileDiff`: the unified diff of one entry, capped at 1 MiB (`GIT_DIFF_MAX_BYTES`). Used by the Git panel and by `readDiffSides`. |
+| IO | `src/main/git/diff-sides.ts` | `readDiffSides`: the diff plus the full old and new content of the file, each capped at 256 KiB (`HIGHLIGHT_MAX_BYTES`), for highlighting. |
+| IO | `src/main/ipc/register.ts` | Thin handlers for the three channels. They resolve the project and call the modules above. |
+| Logic | `src/renderer/diff/diff-selection.ts` | Groups the lists, keeps the selection across refreshes within the same group, and counts unique changed paths for the tab label. |
+| Logic | `src/renderer/diff/diff-load-state.ts` | The request gate that drops stale responses, the list phases, and the reducer for `git:diff-sides` responses. |
+| Logic | `src/renderer/diff/unified-diff.ts` | Parses a unified diff into hunks, and detects binary and mode-only changes. |
+| Logic | `src/renderer/diff/diff-rows.ts` | Aligns hunks into side-by-side rows with filler rows and line numbers. Checks that a side's content matches the diff. |
+| Logic | `src/renderer/diff/highlight-lang.ts` | `langForPath`: the language for a file extension. The Files tab uses the same map. |
+| Logic | `src/renderer/diff/highlight-lines.ts` | Highlights a full file with highlight.js and splits the result into one `SafeLineHtml` per line. |
+| Presentation | `src/renderer/hooks/useGitChanges.ts` | Polls `git:panel-status` every 3 s while the Diff tab body is mounted. |
+| Presentation | `src/renderer/hooks/useDiffSides.ts` | Loads `git:diff-sides` for the selected file and reloads it on each poll. |
+| Presentation | `src/renderer/components/DiffTab.tsx`, `DiffFileList.tsx` | The tab body, the empty and error states, and the file list. |
+| Presentation | `src/renderer/components/SplitDiffView.tsx`, `SplitDiffRows.tsx` | The side-by-side view. One vertical scroll container holds both sides. |
+| Contract | `src/renderer/diff-tab-copy.ts` | Every string and test id of the tab. |
+| Logic | `src/renderer/git-status-style.ts` | Status letter colours, shared by the Diff tab and the Git panel. |
+
+Rules:
+
+- A staged entry compares HEAD with the index. An unstaged entry compares
+  the index with the working tree. An untracked entry has an empty before
+  side.
+- The tab polls only while its body is mounted. A poll that finds the same
+  diff (same SHA-1 as the last one) gets `unchanged` and reads no file
+  content, so the pane does not change and keeps its scroll position.
+- A diff over 1 MiB shows "Diff too large to show". No file content is
+  read. If either side is over 256 KiB, the diff shows without
+  highlighting, with a note. A side whose content does not match the diff
+  shows as plain text without a note.
+- The tab label count comes from the app-wide `useGitStatus` poll (4 s).
+  It counts unique paths, so it can lag the list by one poll.
+- The Diff tab does not count as viewing a shell for notifications.
+  Switching from Diff back to Shell does not focus the terminal.
+- The Git panel uses the same `git:panel-status` and `git:file-diff`
+  handlers. It keeps its own unified diff, without highlighting.
 
 ## Data Flow
 
@@ -305,6 +354,27 @@ links outside a diagram open through the `app:open-external` IPC channel.
    overlay. For a Claude shell, the launch decorator adds the hook
    variables last.
 
+### Diff tab refresh
+
+1. While the Diff tab body is mounted, `useGitChanges` calls
+   `git:panel-status` every 3 s. It skips a tick while a request is in
+   flight, and drops a response that arrives after a project switch.
+2. The handler runs `git status --porcelain=v1 -z` through `runGit`.
+   On failure it returns git's error text in `error`, and the tab shows
+   the error state, not the clean state.
+3. `reconcileSelection` keeps the selected file if it is still in the same
+   group. Otherwise it selects the first file, or nothing.
+4. `useDiffSides` calls `git:diff-sides` with the SHA-1 of the diff it
+   already shows. `readDiffSides` checks the path, reads the diff and
+   compares the hash. A match returns `unchanged` and the pane stays as
+   it is.
+5. On a new diff, `readDiffSides` reads the before side and the after
+   side with `git cat-file blob` (`HEAD:<path>` or `:0:<path>`), or from
+   the working tree without following a symlink.
+6. `SplitDiffView` parses the diff, aligns the rows, and highlights each
+   side over its full content. The highlighting is memoised on the content
+   and the language, so an unchanged side is not highlighted again.
+
 ## Authorization Model
 
 Not applicable to the preview. It reads only the local file buffer.
@@ -333,12 +403,42 @@ argv is stored in the shell row, as every resolved launch argv is. The
 Env tab says so. An inherited value that argv reads through `${env.NAME}`
 is stored there the same way.
 
+The Diff tab reads git data from projects that can come from an untrusted
+clone. Two rules apply to `git:panel-status`, `git:file-diff` and
+`git:diff-sides`:
+
+- **Paths stay inside the project.** Every path from the renderer goes
+  through `toRepoRelativePath`, which rejects `..`, absolute paths and a
+  sibling folder whose name starts with the project's name. Working-tree
+  reads also go through `assertWorktreeContained`, which compares the real
+  path of the parent folder, so a symlinked folder cannot lead outside the
+  project. A rejected path runs no git command. A working-tree symlink is
+  shown as its link text and is never followed.
+- **Repository config cannot start programs.** `runGit` adds
+  `-c core.fsmonitor=false` and `--literal-pathspecs` to every call.
+  Every diff also runs with `--no-ext-diff` and `--no-textconv`. File
+  content is read with `git cat-file blob`, which runs no textconv or
+  filter.
+
+Known gaps, recorded as follow-ups: the app-wide `git:status` poll still
+runs a repository's `core.fsmonitor`. A repository's `filter.<name>.clean`
+programs can still run during status, because git cannot turn them off
+for one command. `files:read` checks containment with a plain
+`startsWith` on the project path.
+
+Highlighted lines reach the DOM through one `dangerouslySetInnerHTML`, in
+`SplitDiffRows.tsx`. It takes only the branded `SafeLineHtml` type, which
+only `highlight-lines.ts` creates. highlight.js escapes all text and emits
+only `<span class="…">` and `</span>`. Each line must also match an
+allow-list pattern. If any line fails, or the line count does not match,
+the whole side falls back to escaped plain text.
+
 ## Infrastructure Dependencies
 
 | Dependency | Version | Use |
 |---|---|---|
 | `markdown-it` | 14.3.0 | Markdown parser. `html` is `false`. |
-| `highlight.js` | lockfile | Code block highlighting. |
+| `highlight.js` | lockfile | Code block highlighting, and both sides of the Diff tab. |
 | `katex` | 0.16.47, exact pin | Math. Also the version `mermaid` depends on, so the bundle has one copy. |
 | `mermaid` | 11.17.2, exact pin | Diagrams. Version 12 requires Node 22, and the repo uses Node 20. |
 
@@ -487,3 +587,17 @@ is stored there the same way.
 - **The editor reads the project fresh.** The App's `projects:changed`
   listener ignores `config.env`, so the Env tab loads the project through
   `projects:list` each time it mounts instead of using cached state.
+- **A separate channel for the Diff tab.** `git:diff-sides` returns the
+  diff and both full sides in one call. The Git panel keeps
+  `git:file-diff`, so its unified diff does not pay for content reads.
+- **Highlighting runs over the full file.** Highlighting only the hunk
+  lines would colour a comment or string that opens above the hunk as
+  code. The full side is highlighted once and then split per line,
+  keeping open spans across line breaks.
+- **A hash check makes polls cheap.** The renderer sends the SHA-1 of the
+  diff it shows. When the diff is the same, main returns `unchanged`
+  without reading content, and the renderer keeps the same state object,
+  so nothing renders again.
+- **`-z` porcelain for the panel status.** Without `-z`, git quotes paths
+  with spaces or non-ASCII characters and writes renames as `old -> new`,
+  which the diff call could not resolve.
