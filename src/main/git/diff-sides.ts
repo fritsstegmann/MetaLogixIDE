@@ -13,7 +13,8 @@ import { readFileDiff, type FileDiffDeps } from './file-diff';
 import { assertWorktreeContained, toRepoRelativePath } from './repo-path';
 import { runGit, type GitRunner } from './run-git';
 
-export const HIGHLIGHT_MAX_BYTES = 512 * 1024;
+/** Per-side highlight limit. 512 KiB cost ~300 ms of extra click-to-highlight time in the e2e measurement, so the plan's 256 KiB fallback applies. */
+export const HIGHLIGHT_MAX_BYTES = 256 * 1024;
 const CONTENT_TIMEOUT_MS = 15_000;
 const BINARY_SCAN_BYTES = 8192;
 

@@ -99,8 +99,20 @@ describe('readDiffSides caps and skips (AC20, AC30, AC41, AC42)', () => {
     expect(ok(root, { kind: 'unstaged', path: 'a.ts', ifDiffHashNot: 'deadbeef' }).newSide).toEqual({ text: 'two\n' });
   });
 
-  it('HIGHLIGHT_MAX_BYTES is 512 KiB', () => {
-    expect(HIGHLIGHT_MAX_BYTES).toBe(512 * 1024);
+  it('HIGHLIGHT_MAX_BYTES is 256 KiB', () => {
+    expect(HIGHLIGHT_MAX_BYTES).toBe(256 * 1024);
+  });
+
+  it('a 300 KiB file, between 256 KiB and the old 512 KiB limit, gives too-large', () => {
+    const { root } = initRepo();
+    const body = 'const value = 1;\n'.repeat(Math.ceil((300 * 1024) / 17));
+    writeFileSync(join(root, 'big.ts'), body);
+    commitAll(root);
+    writeFileSync(join(root, 'big.ts'), `// edit\n${body}`);
+    const r = ok(root, { kind: 'unstaged', path: 'big.ts' });
+    expect(r.diff).toContain('+// edit');
+    expect(r.oldSide).toEqual({ text: null, skipped: 'too-large' });
+    expect(r.newSide).toEqual({ text: null, skipped: 'too-large' });
   });
 
   it('a 600 KiB file gives too-large on both sides while the diff is still returned', () => {
@@ -122,7 +134,7 @@ describe('readDiffSides caps and skips (AC20, AC30, AC41, AC42)', () => {
     expect(unstaged.newSide).toEqual({ text: null, skipped: 'too-large' });
   });
 
-  it('a side of exactly 512 KiB is read, and one byte more is too large, for git and worktree reads', () => {
+  it('a side of exactly HIGHLIGHT_MAX_BYTES is read, and one byte more is too large, for git and worktree reads', () => {
     const { root } = initRepo();
     const exact = `${'x'.repeat(63)}\n`.repeat(HIGHLIGHT_MAX_BYTES / 64);
     expect(Buffer.byteLength(exact)).toBe(HIGHLIGHT_MAX_BYTES);
