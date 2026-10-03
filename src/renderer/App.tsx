@@ -18,6 +18,10 @@ import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
+import { ProjectEnvTab } from './components/ProjectEnvTab';
+import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
+import { isMainTab, type MainTab } from './main-tab';
+import { useEnvDrafts } from './hooks/useEnvDrafts';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
@@ -113,11 +117,7 @@ function MainApp() {
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [aliveCount, setAliveCount] = useState(0);
-  const [mainTab, setMainTab] = usePersistedState<'shell' | 'files'>(
-    'metaide.mainTab',
-    'shell',
-    (v): v is 'shell' | 'files' => v === 'shell' || v === 'files',
-  );
+  const [mainTab, setMainTab] = usePersistedState<MainTab>('metaide.mainTab', 'shell', isMainTab);
   const mainTabRef = useRef(mainTab);
   mainTabRef.current = mainTab;
   // Unread chat count for the sidebar badge. Increments on every incoming
@@ -226,6 +226,8 @@ function MainApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
+  const envDrafts = useEnvDrafts();
+  const envDirty = selected != null && envDrafts.isDirty(selected.id);
   const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
   const permissionMode = useClaudePermissionMode();
@@ -268,6 +270,7 @@ function MainApp() {
     { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
+    { id: 'view.env',        category: 'View',     title: 'Switch to Env tab',                             run: () => setMainTab('env') },
     { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
     { id: 'proj.new',        category: 'Project',  title: 'New project…',                    hint: '⌘⇧N',  run: () => setNewProjectOpen(true) },
     { id: 'shell.unload',    category: 'Shell',    title: 'Unload current session',                        run: async () => { if (selected) { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 }); toast('Session unloaded', { kind: 'success' }); } } },
@@ -490,6 +493,56 @@ function MainApp() {
     }
   }
 
+  function editEnv(p: Project) {
+    // Set synchronously so pick() sees 'env' and queues no terminal focus for a later Env -> Shell switch.
+    mainTabRef.current = 'env';
+    setMainTab('env');
+    void pick(p);
+  }
+
+  function mainBody(project: Project) {
+    switch (mainTab) {
+      case 'shell':
+        return (
+          <ShellSplit
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            leftIndex={activeShellIndex}
+            rightIndex={rightShellIndex}
+            ratio={splitRatio}
+            onRatioChange={setSplitRatio}
+            isPoppedLeft={isPopped(project.id, activeShellIndex)}
+            isPoppedRight={rightShellIndex != null && isPopped(project.id, rightShellIndex)}
+            onCloseSplit={closeSplit}
+            onOpenFile={(relPath, line) => {
+              setMainTab('files');
+              setOpenInFiles({ relPath, line });
+            }}
+          />
+        );
+      case 'files':
+        return (
+          <FilesTab
+            key={project.id}
+            projectId={project.id}
+            openRelPath={openInFiles?.relPath ?? null}
+            openLine={openInFiles?.line ?? null}
+            onOpenRelPathConsumed={() => setOpenInFiles(null)}
+          />
+        );
+      case 'env':
+        return (
+          <ProjectEnvTab
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            drafts={envDrafts}
+          />
+        );
+    }
+  }
+
   async function popoutCurrent() {
     if (!selected) return;
     try {
@@ -679,6 +732,7 @@ function MainApp() {
             selectedProjectId={selected?.id ?? null}
             onSelect={pick}
             onNewProject={() => setNewProjectOpen(true)}
+            onEditEnv={editEnv}
             width={sidebarWidth}
           />
           <ResizeHandle
@@ -758,6 +812,19 @@ function MainApp() {
           <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
+            <TabButton
+              active={mainTab === 'env'}
+              onClick={() => setMainTab('env')}
+              testId={ENV_TESTIDS.tab}
+              ariaLabel={envDirty ? ENV_COPY.tabUnsavedLabel : undefined}
+            >
+              {ENV_COPY.tabLabel}
+              {envDirty && (
+                <span aria-hidden className="ml-1 text-[--accent]" data-testid={ENV_TESTIDS.unsaved}>
+                  {ENV_COPY.tabUnsavedMarker}
+                </span>
+              )}
+            </TabButton>
             <div className="ml-auto flex items-center gap-1.5 pr-2">
               {selected && (
                 <>
@@ -844,32 +911,7 @@ function MainApp() {
                 onToggleSplit={() => (rightShellIndex != null ? void closeSplit() : void openSplit())}
               />
             )}
-            {selected ? (
-              mainTab === 'shell'
-                ? <ShellSplit
-                  key={selected.id}
-                  projectId={selected.id}
-                  projectName={selected.name}
-                  leftIndex={activeShellIndex}
-                  rightIndex={rightShellIndex}
-                  ratio={splitRatio}
-                  onRatioChange={setSplitRatio}
-                  isPoppedLeft={isPopped(selected.id, activeShellIndex)}
-                  isPoppedRight={rightShellIndex != null && isPopped(selected.id, rightShellIndex)}
-                  onCloseSplit={closeSplit}
-                  onOpenFile={(relPath, line) => {
-                    setMainTab('files');
-                    setOpenInFiles({ relPath, line });
-                  }}
-                />
-                : <FilesTab
-                    key={selected.id}
-                    projectId={selected.id}
-                    openRelPath={openInFiles?.relPath ?? null}
-                    openLine={openInFiles?.line ?? null}
-                    onOpenRelPathConsumed={() => setOpenInFiles(null)}
-                  />
-            ) : <EmptyState />}
+            {selected ? mainBody(selected) : <EmptyState />}
           </div>
         </main>
       </div>
@@ -1023,10 +1065,20 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  testId?: string;
+  ariaLabel?: string;
+  children: React.ReactNode;
+}
+
+function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      data-testid={testId}
+      aria-label={ariaLabel}
       className={`px-3 py-1.5 border-b-2 transition-colors ${
         active
           ? 'border-[--accent] text-[--text]'

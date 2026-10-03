@@ -5,7 +5,13 @@ import { openDb } from '@main/db/connection';
 import { runMigrations } from '@main/db/migrator';
 import { SettingsRepo } from '@main/repos/settings-repo';
 import { ViewedShells } from '@main/notifications/viewed-shells';
-import { mkdtempSync } from 'node:fs';
+import { RootsRepo } from '@main/repos/roots-repo';
+import { ProjectsRepo } from '@main/repos/projects-repo';
+import { ShellsRepo } from '@main/repos/shells-repo';
+import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
+import type { ProjectConfig } from '@shared/types';
+import type { ResolvedLaunch } from '@main/domain/launch';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -173,5 +179,285 @@ describe('registerIpc', () => {
       await expect(handler({}, req)).rejects.toThrow(/viewed shells/);
       expect(viewedShells.isViewing({ projectId: 3, shellIndex: 1 }, mainFocused)).toBe(true);
     });
+  });
+});
+
+/**
+ * Real projects/shells/settings repos on a temp db, a spy ptyManager and two
+ * projects on disk, for exercising project env at every spawn site.
+ */
+function envRig() {
+  const dir = mkdtempSync(join(tmpdir(), 'reg-env-'));
+  const db = openDb(join(dir, 'db'));
+  runMigrations(db, migrationsDir);
+  const settings = new SettingsRepo(db);
+  settings.seedDefaults();
+  applyClaudePermissionMode(settings, 'auto');
+  const projects = new ProjectsRepo(db);
+  const shells = new ShellsRepo(db);
+  const root = new RootsRepo(db).add(dir);
+  const pathA = join(dir, 'alpha');
+  const pathB = join(dir, 'beta');
+  mkdirSync(pathA);
+  mkdirSync(pathB);
+  const a = projects.upsert(root.id, pathA, 'alpha');
+  const b = projects.upsert(root.id, pathB, 'beta');
+  const ptyManager = fakePtyManager();
+  const events: string[] = [];
+  const ipc = fakeIpcMain();
+  const services = {
+    settings,
+    projects,
+    shells,
+    ptyManager,
+    homeDir: '/home/u',
+  } as unknown as Parameters<typeof registerIpc>[1];
+  registerIpc(ipc as unknown as IpcMain, services, ((channel: string) => {
+    events.push(channel);
+  }) as never);
+  const call = (channel: string, req: unknown) => ipc.handlers.get(channel)!({}, req);
+  const spawned = (n: number) =>
+    (ptyManager.spawn.mock.calls[n] as unknown as [number, number, ResolvedLaunch])[2];
+  const setEnv = (id: number, env: Record<string, string>) => projects.updateConfig(id, { env });
+  return {
+    dir,
+    settings,
+    projects,
+    shells,
+    ptyManager,
+    events,
+    call,
+    spawned,
+    setEnv,
+    a,
+    b,
+    pathA,
+  };
+}
+
+describe('projects:update-config — env validation (AC8, AC9)', () => {
+  const seeded: ProjectConfig = {
+    env: { A: '1' },
+    launchCmd: { first: { argv: ['echo'], env: {} } },
+    cliProfiles: [{ name: 'p', argv: ['codex'] }],
+    defaultCliName: 'p',
+  };
+
+  it.each([
+    ['an invalid name', { env: { 'MY-VAR': 'x' } }],
+    ['a leading-digit name', { env: { '1FOO': 'x' } }],
+    ['a reserved name', { env: { METAIDE_HOOK_TOKEN: 'x' } }],
+    ['a reserved lower-case name', { env: { metaide_x: 'x' } }],
+    ['an own __proto__ name', JSON.parse('{"env":{"__proto__":"x"}}') as unknown],
+    ['a non-string value', { env: { A: 1 } }],
+    ['a null value', { env: { A: null } }],
+    ['a NUL value', { env: { A: 'x\0y' } }],
+    ['an array env', { env: [['A', '1']] }],
+    ['a null env', { env: null }],
+    ['a string env', { env: 'A=1' }],
+  ])('rejects %s and leaves the stored config and events unchanged', async (_label, config) => {
+    const rig = envRig();
+    rig.projects.updateConfig(rig.a.id, seeded);
+    const before = rig.projects.get(rig.a.id)!.config;
+    await expect(rig.call('projects:update-config', { id: rig.a.id, config })).rejects.toThrow();
+    expect(rig.projects.get(rig.a.id)!.config).toStrictEqual(before);
+    expect(rig.events).toEqual([]);
+  });
+
+  it.each([
+    ['null', null],
+    ['an array', [{ env: {} }]],
+    ['a string', 'env'],
+    ['missing', undefined],
+  ])('rejects a config that is %s without writing', async (_label, config) => {
+    const rig = envRig();
+    rig.projects.updateConfig(rig.a.id, seeded);
+    const before = rig.projects.get(rig.a.id)!.config;
+    await expect(rig.call('projects:update-config', { id: rig.a.id, config })).rejects.toThrow();
+    expect(rig.projects.get(rig.a.id)!.config).toStrictEqual(before);
+  });
+
+  it('AC17 — the rejection names the key and never the value', async () => {
+    const rig = envRig();
+    const err = await rig
+      .call('projects:update-config', { id: rig.a.id, config: { env: { TOKEN: 'S3CRET\0' } } })
+      .catch((e: Error) => e);
+    expect((err as Error).message).toContain('TOKEN');
+    expect((err as Error).message).not.toContain('S3CRET');
+  });
+
+  it('a valid env save replaces the whole map and keeps every other field', async () => {
+    const rig = envRig();
+    rig.projects.updateConfig(rig.a.id, seeded);
+    const res = (await rig.call('projects:update-config', {
+      id: rig.a.id,
+      config: { env: { B: '2', EMPTY: '' } },
+    })) as { project: { config: ProjectConfig } };
+    const expected = { ...seeded, env: { B: '2', EMPTY: '' } };
+    expect(res.project.config).toStrictEqual(expected);
+    expect(rig.projects.get(rig.a.id)!.config).toStrictEqual(expected);
+  });
+
+  it('an empty env map clears every variable', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { A: '1' });
+    await rig.call('projects:update-config', { id: rig.a.id, config: { env: {} } });
+    expect(rig.projects.get(rig.a.id)!.config.env).toStrictEqual({});
+  });
+
+  it('a save without env is not validated as env and works as before', async () => {
+    const rig = envRig();
+    await rig.call('projects:update-config', { id: rig.a.id, config: { model: 'opus' } });
+    expect(rig.projects.get(rig.a.id)!.config).toStrictEqual({ model: 'opus' });
+  });
+
+  it('a successful save emits projects:changed', async () => {
+    const rig = envRig();
+    await rig.call('projects:update-config', { id: rig.a.id, config: { env: { A: '1' } } });
+    expect(rig.events).toEqual(['projects:changed']);
+  });
+});
+
+describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
+  it('shells:launch (first) passes the project var and project wins over template env', async () => {
+    const rig = envRig();
+    rig.projects.updateConfig(rig.a.id, {
+      launchCmd: { first: { argv: ['run', '${env.K}'], env: { K: 'tpl', T: 't' } } },
+      env: { K: 'proj', P: '${PROJECT_NAME}' },
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ K: 'proj', T: 't', P: 'alpha' });
+    expect(rig.spawned(0).argv).toEqual(['run', 'proj']);
+  });
+
+  it('shells:launch (subsequent) passes the project var', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { API_URL: 'http://localhost:4000' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    rig.ptyManager.spawn.mockImplementationOnce(async () => {
+      const onExit = rig.ptyManager.on.mock.calls.filter((c) => c[0] === 'exit').at(-1)![1] as (
+        ev: unknown,
+      ) => void;
+      onExit({ projectId: rig.a.id, shellIndex: 0, code: 0, uptimeMs: 10_000, earlyOutput: '' });
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(1);
+    expect(rig.spawned(0).variant).toBe('subsequent');
+    expect(rig.spawned(0).env).toStrictEqual({ API_URL: 'http://localhost:4000' });
+  });
+
+  it('shells:launch no-session fallback passes the project var on the retry', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { API_URL: 'http://localhost:4000' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    rig.ptyManager.spawn.mockImplementationOnce(async () => {
+      const onExit = rig.ptyManager.on.mock.calls.filter((c) => c[0] === 'exit').at(-1)![1] as (
+        ev: unknown,
+      ) => void;
+      onExit({
+        projectId: rig.a.id,
+        shellIndex: 0,
+        code: 1,
+        uptimeMs: 100,
+        earlyOutput: 'No conversation found to continue',
+      });
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(2);
+    expect(rig.spawned(1).variant).toBe('first');
+    expect(rig.spawned(1).env).toStrictEqual({ API_URL: 'http://localhost:4000' });
+  });
+
+  it('shells:launch-plain passes the interpolated project vars', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { API_URL: 'http://localhost:4000', BIN: '${PROJECT_PATH}/bin' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({
+      API_URL: 'http://localhost:4000',
+      BIN: `${rig.pathA}/bin`,
+    });
+  });
+
+  it('shells:launch-cli profile — project NODE_ENV wins over the profile', async () => {
+    const rig = envRig();
+    rig.projects.updateConfig(rig.a.id, {
+      cliProfiles: [{ name: 'prof', argv: ['node'], env: { NODE_ENV: 'production', X: 'x' } }],
+      env: { NODE_ENV: 'development' },
+    });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, profileName: 'prof' });
+    expect(rig.spawned(0).env).toStrictEqual({ NODE_ENV: 'development', X: 'x' });
+  });
+
+  it('shells:launch-cli inline argv+env — project wins; inline env stays uninterpolated', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { E: 'proj', H: '${HOME}' });
+    await rig.call('shells:launch-cli', {
+      projectId: rig.a.id,
+      argv: ['codex'],
+      env: { E: 'inline', T: '${HOME}' },
+    });
+    expect(rig.spawned(0).env).toStrictEqual({ E: 'proj', T: '${HOME}', H: '/home/u' });
+  });
+
+  it('tasks:run passes the project var', async () => {
+    const rig = envRig();
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    rig.setEnv(rig.a.id, { API_URL: 'http://localhost:4000' });
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect(rig.spawned(0).argv).toEqual(['npm', 'run', 'dev']);
+    expect(rig.spawned(0).env).toStrictEqual({ API_URL: 'http://localhost:4000' });
+  });
+
+  it('AC16 — a second project spawns without project A vars', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { API_URL: 'a-only' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    await rig.call('shells:launch-plain', { projectId: rig.b.id });
+    expect(rig.spawned(1).env).toStrictEqual({});
+  });
+
+  it("AC14 — no vars: every site passes exactly today's env", async () => {
+    const rig = envRig();
+    rig.settings.set('default_launch_cmd.first', { argv: ['claude'], env: { T: '${HOME}/t' } });
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    rig.projects.updateConfig(rig.a.id, {
+      cliProfiles: [{ name: 'prof', argv: ['node'], env: { NODE_ENV: 'production' } }],
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, profileName: 'prof' });
+    await rig.call('shells:launch-cli', {
+      projectId: rig.a.id,
+      argv: ['codex'],
+      env: { I: '${HOME}' },
+    });
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect([0, 1, 2, 3, 4].map((n) => rig.spawned(n).env)).toStrictEqual([
+      { T: '/home/u/t' },
+      {},
+      { NODE_ENV: 'production' },
+      { I: '${HOME}' },
+      {},
+    ]);
+  });
+
+  it('AC15 — each spawn reflects the config at its own spawn time', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { API_URL: 'old' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    await rig.call('projects:update-config', { id: rig.a.id, config: { env: { API_URL: 'new' } } });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ API_URL: 'old' });
+    expect(rig.spawned(1).env).toStrictEqual({ API_URL: 'new' });
+    expect(rig.ptyManager.write).not.toHaveBeenCalled();
+  });
+
+  it('AC17 — the persisted shell row holds argv only, never a project value', async () => {
+    const rig = envRig();
+    rig.setEnv(rig.a.id, { TOKEN: 'S3CRET' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    const rows = rig.shells.list();
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows)).not.toContain('S3CRET');
   });
 });

@@ -8,6 +8,9 @@ import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
+import { resolveSpawnEnv } from '@main/domain/spawn-env';
+import { parseProjectEnv } from '@shared/project-env';
+import type { Project, ProjectConfig } from '@shared/types';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
@@ -17,6 +20,29 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+
+/** Spawn env overlay for a non-template spawn site: `templateEnv` ⊕ the project's interpolated variables. */
+function projectSpawnEnv(
+  s: Services,
+  project: Project,
+  templateEnv: Record<string, string>,
+): Record<string, string> {
+  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir }).env;
+}
+
+/**
+ * Validates an untrusted `projects:update-config` patch before any write.
+ * Only `env` is checked (AC8); the error names a key, never a value (AC17).
+ */
+function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
+  if (typeof config !== 'object' || config === null || Array.isArray(config))
+    throw new Error('config must be an object');
+  const patch = config as Partial<ProjectConfig>;
+  if (patch.env === undefined) return patch;
+  const parsed = parseProjectEnv(patch.env);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return patch;
+}
 
 type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
@@ -270,7 +296,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
   'projects:pin':          async (s, { id, pinned }) => { s.projects.setPinned(id, pinned); return { ok: true } as const; },
   'projects:hide':         async (s, { id, hidden }) => { s.projects.setHidden(id, hidden); return { ok: true } as const; },
-  'projects:update-config':async (s, { id, config }) => ({ project: s.projects.updateConfig(id, config) }),
+  'projects:update-config':async (s, { id, config }) => ({ project: s.projects.updateConfig(id, validatedConfigPatch(config)) }),
   'projects:recents':      async (s, { limit }) => ({ projects: s.projects.listRecents(limit ?? 10) }),
 
   'shells:launch': async (s, { projectId }) => {
@@ -292,7 +318,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       }
     }
 
-    let launch = resolveLaunch(project, s.settings, s.homeDir);
+    let launch = resolveLaunch(project, s.settings, s.homeDir, process.env);
     let fallbackApplied = false;
 
     // If subsequent variant (--continue) exits within ~3s with "no
@@ -321,7 +347,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         // in the resolved project view, re-resolve, then restart cleanly.
         s.projects.updateConfig(projectId, {}); // touch — no-op
         const reProject = { ...project, firstLaunchedAt: null };
-        launch = resolveLaunch(reProject, s.settings, s.homeDir);
+        launch = resolveLaunch(reProject, s.settings, s.homeDir, process.env);
         fallbackApplied = true;
         await s.ptyManager.spawn(projectId, 0, launch);
       }
@@ -356,7 +382,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: defaultShellArgv(), cwd: project.path, env: {}, variant: 'first' as const };
+    const launch = {
+      argv: defaultShellArgv(),
+      cwd: project.path,
+      env: projectSpawnEnv(s, project, {}),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -406,7 +437,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: resolvedArgv, cwd: project.path, env: resolvedEnv, variant: 'first' as const };
+    const launch = {
+      argv: resolvedArgv,
+      cwd: project.path,
+      env: projectSpawnEnv(s, project, resolvedEnv),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -1104,7 +1140,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: task.command, cwd: p.path, env: {}, variant: 'first' as const };
+    const launch = {
+      argv: task.command,
+      cwd: p.path,
+      env: projectSpawnEnv(s, p, {}),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -1202,6 +1243,7 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'shells:launch-cli':   ['alive-shells:changed', 'projects:changed'],
   'shells:cli-profiles-remove': ['projects:changed'],
   'shells:set-default-cli': ['projects:changed'],
+  'projects:update-config': ['projects:changed'],
   'shells:kill':    ['alive-shells:changed'],
   'shells:pin':     ['alive-shells:changed'],
 };
