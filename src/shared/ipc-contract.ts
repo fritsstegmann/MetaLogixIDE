@@ -9,6 +9,18 @@ import type { ClaudeShellStateEntry } from './claude-state';
  */
 export type GitFileStatus = 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!';
 
+/** One changed path in the git panel / Diff tab. `origPath` is set for renames and copies (status 'R'). */
+export interface GitChangeEntry { path: string; status: GitFileStatus; origPath?: string }
+
+/** Which comparison a Diff tab entry shows: staged = HEAD vs index, unstaged = index vs worktree, untracked = nothing vs worktree. */
+export type GitDiffKind = 'staged' | 'unstaged' | 'untracked';
+
+/** Full content of one side, used only for syntax highlighting. `text` is null when it was not read; `skipped` says why. */
+export interface GitSideContent {
+  text: string | null;
+  skipped?: 'absent' | 'too-large' | 'binary' | 'unavailable';
+}
+
 export interface IpcContract {
   // roots
   'roots:list':    { request: undefined;                  response: { roots: Root[] } };
@@ -154,9 +166,9 @@ export interface IpcContract {
   'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
   'search:project':  { request: { projectId: number; query: string; caseSensitive?: boolean; regex?: boolean; maxFiles?: number; maxMatchesPerFile?: number }; response: { matches: Array<{ relPath: string; line: number; col: number; preview: string }>; filesScanned: number; truncated: boolean } };
 
-  // Git — surfaced for the sidebar + status bar; read-only.
+  // Git — surfaced for the sidebar, status bar and Diff tab: status, staging, commit, push/pull.
   'git:status':      { request: { projectId: number }; response: { isRepo: boolean; branch: string | null; ahead: number; behind: number; files: Record<string, GitFileStatus>; dirty: boolean } };
-  /** Detailed status for the git panel: staged vs unstaged split. */
+  /** Detailed status for the git panel and Diff tab: staged vs unstaged split. */
   'git:panel-status': {
     request: { projectId: number };
     response: {
@@ -164,9 +176,11 @@ export interface IpcContract {
       branch: string | null;
       ahead: number;
       behind: number;
-      staged: Array<{ path: string; status: GitFileStatus }>;
-      unstaged: Array<{ path: string; status: GitFileStatus }>;
+      staged: GitChangeEntry[];
+      unstaged: GitChangeEntry[];
       untracked: string[];
+      /** git's error text when status could not be read (non-zero exit, timeout, output too large). Lists are then empty. */
+      error?: string;
     };
   };
   'git:stage':       { request: { projectId: number; paths: string[] }; response: { ok: true } };
@@ -297,9 +311,24 @@ export interface IpcContract {
    * Returns the unified diff for a single file. `staged: true` diffs the
    * index vs HEAD (what's in the "Staged" section of the panel); false
    * diffs the working copy vs the index. For untracked files, returns the
-   * whole file as an add-diff so the viewer works uniformly.
+   * whole file as an add-diff so the viewer works uniformly. `origPath` is
+   * the old path of a staged rename. `tooLarge` is set (and `diff` is '')
+   * when git's output exceeded the 1 MiB cap.
    */
-  'git:file-diff':  { request: { projectId: number; path: string; staged?: boolean; untracked?: boolean }; response: { diff: string } };
+  'git:file-diff':  { request: { projectId: number; path: string; origPath?: string; staged?: boolean; untracked?: boolean }; response: { diff: string; tooLarge?: true } };
+  /**
+   * Side-by-side data for one Diff tab entry: the unified diff plus each
+   * side's full content for highlighting. `unchanged` is returned when
+   * sha1(diff) equals `ifDiffHashNot`; `too-large` when the diff exceeds
+   * 1 MiB (no content is read).
+   */
+  'git:diff-sides': {
+    request: { projectId: number; kind: GitDiffKind; path: string; origPath?: string; ifDiffHashNot?: string };
+    response:
+      | { status: 'ok'; diff: string; diffHash: string; oldSide: GitSideContent; newSide: GitSideContent }
+      | { status: 'unchanged' }
+      | { status: 'too-large' };
+  };
 
   /* ─── Global scrollback search ─── */
   'shells:search-scrollback': {

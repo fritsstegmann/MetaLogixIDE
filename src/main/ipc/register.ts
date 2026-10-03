@@ -1153,6 +1153,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { shellIndex: idx };
   },
 
+  /* ─── Diff tab: side-by-side data ─── */
+  'git:diff-sides': async () => { throw new Error('git:diff-sides is not implemented yet'); },
+
   /* ─── Per-file git diff ─── */
   'git:file-diff': async (s, { projectId, path, staged, untracked }) => {
     const p = s.projects.get(projectId);
