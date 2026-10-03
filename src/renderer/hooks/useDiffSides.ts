@@ -13,16 +13,18 @@ import {
 /**
  * Loads `git:diff-sides` for the selected Diff tab entry (spec AC17, AC20, AC23, AC30). A new selection
  * shows loading; each `reloadToken` bump reloads quietly with `ifDiffHashNot`, and an `unchanged` or
- * identical response leaves the state object untouched, so nothing re-renders. Superseded responses are
- * dropped.
+ * identical response leaves the state object untouched, so nothing re-renders. Each `refreshToken` bump
+ * (a manual Refresh) reads the full sides again, as does a reload while a side fails the content check
+ * (AC38). Superseded responses are dropped.
  */
-export function useDiffSides(projectId: number, entry: DiffEntry | null, reloadToken: number): DiffSidesState {
+export function useDiffSides(projectId: number, entry: DiffEntry | null, reloadToken: number, refreshToken: number): DiffSidesState {
   const [state, dispatch] = useReducer(diffSidesReducer, IDLE_SIDES);
   const stateRef = useRef(state);
   stateRef.current = state;
   const gateRef = useRef(createRequestGate());
   const entryRef = useRef(entry);
   entryRef.current = entry;
+  const refreshRef = useRef(refreshToken);
   const key = entry ? entryKey(entry) : null;
   const origPath = entry?.origPath;
 
@@ -31,10 +33,12 @@ export function useDiffSides(projectId: number, entry: DiffEntry | null, reloadT
   }, [key]);
 
   useEffect(() => {
+    const forced = refreshRef.current !== refreshToken;
+    refreshRef.current = refreshToken;
     const current = entryRef.current;
     if (!current || key === null) return;
     const gate = gateRef.current;
-    const plan = planSidesRequest(stateRef.current, key, gate.inFlight);
+    const plan = planSidesRequest(stateRef.current, key, gate.inFlight, forced);
     if (plan.skip) return;
     const seq = gate.begin();
     api
@@ -46,7 +50,7 @@ export function useDiffSides(projectId: number, entry: DiffEntry | null, reloadT
         if (gate.isLatest(seq)) dispatch({ type: 'failure', key, message: errorText(e) });
       })
       .finally(() => gate.settle(seq));
-  }, [projectId, key, origPath, reloadToken]);
+  }, [projectId, key, origPath, reloadToken, refreshToken]);
 
   useEffect(() => {
     const gate = gateRef.current;

@@ -1,7 +1,8 @@
 /**
  * The single git runner for the Diff tab and the Git panel's status and diff reads (spec AC32, AC43).
- * Every call disables a repo-local `core.fsmonitor` program and pathspec magic, and maps spawn
- * failures to plain values so callers decide what an overflow or a timeout means.
+ * Every call disables a repo-local `core.fsmonitor` program and pathspec magic, and sets
+ * `GIT_OPTIONAL_LOCKS=0` so status takes no optional index lock and polling never contends with the
+ * user's own git; spawn failures map to plain values so callers decide what an overflow or a timeout means.
  */
 import { spawnSync, type SpawnSyncOptionsWithBufferEncoding, type SpawnSyncReturns } from 'node:child_process';
 

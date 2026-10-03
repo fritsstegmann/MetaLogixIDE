@@ -178,3 +178,70 @@ describe('planSidesRequest', () => {
     expect(planSidesRequest(loaded, 'staged:b.ts', true)).toEqual({ skip: false, extra: {} });
   });
 });
+
+describe('planSidesRequest after a content mismatch (AC38 heals on the next poll or refresh)', () => {
+  const diff = 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n';
+  const shown = (oldSide: GitSideContent, newSide: GitSideContent): DiffSidesState =>
+    ({ status: 'ok', key: 'unstaged:a.ts', diff, diffHash: 'h1', oldSide, newSide });
+
+  it('sends the hash when both sides match the diff', () => {
+    expect(planSidesRequest(shown(side('keep\nold\n'), side('keep\nnew\n')), 'unstaged:a.ts', false)).toEqual({
+      skip: false,
+      extra: { ifDiffHashNot: 'h1' },
+    });
+  });
+
+  it('sends the hash when a side has no content to check', () => {
+    const absent: GitSideContent = { text: null, skipped: 'absent' };
+    expect(planSidesRequest(shown(absent, side('keep\nnew\n')), 'unstaged:a.ts', false)).toEqual({
+      skip: false,
+      extra: { ifDiffHashNot: 'h1' },
+    });
+  });
+
+  it('sends no hash when the old side failed the content check, so the full sides are read again', () => {
+    expect(planSidesRequest(shown(side('keep\nedited\n'), side('keep\nnew\n')), 'unstaged:a.ts', false)).toEqual({
+      skip: false,
+      extra: {},
+    });
+  });
+
+  it('sends no hash when the new side failed the content check', () => {
+    expect(planSidesRequest(shown(side('keep\nold\n'), side('keep\nedited\n')), 'unstaged:a.ts', false)).toEqual({
+      skip: false,
+      extra: {},
+    });
+  });
+});
+
+describe('planSidesRequest on a manual refresh', () => {
+  const loaded: DiffSidesState = { key: 'unstaged:a.ts', ...okResponse('d1', 'h1') };
+
+  it('sends no hash for the shown entry', () => {
+    expect(planSidesRequest(loaded, 'unstaged:a.ts', false, true)).toEqual({ skip: false, extra: {} });
+  });
+
+  it('is not skipped while a quiet reload is in flight', () => {
+    expect(planSidesRequest(loaded, 'unstaged:a.ts', true, true)).toEqual({ skip: false, extra: {} });
+  });
+});
+
+describe('diffSidesReducer when the diff is unchanged but the content changed', () => {
+  const loaded: DiffSidesState = { key: 'unstaged:a.ts', ...okResponse('d1', 'h1') };
+
+  it('replaces the sides when an ok response has the same hash but new content', () => {
+    const response = { status: 'ok', diff: 'd1', diffHash: 'h1', oldSide: side('a'), newSide: side('b2') } as const;
+    expect(diffSidesReducer(loaded, { type: 'response', key: 'unstaged:a.ts', response })).toEqual({
+      key: 'unstaged:a.ts',
+      ...response,
+    });
+  });
+
+  it('replaces the sides when only a side\'s skipped reason changed', () => {
+    const response = { status: 'ok', diff: 'd1', diffHash: 'h1', oldSide: side('a'), newSide: { text: 'b', skipped: 'too-large' } } as const;
+    expect(diffSidesReducer(loaded, { type: 'response', key: 'unstaged:a.ts', response })).toEqual({
+      key: 'unstaged:a.ts',
+      ...response,
+    });
+  });
+});

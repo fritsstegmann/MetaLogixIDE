@@ -5,13 +5,11 @@ import {
   groupChanges,
   reconcileSelection,
   type ChangeLists,
-  type DiffEntry,
 } from '@renderer/diff/diff-selection';
-import type { DiffSidesState } from '@renderer/diff/diff-load-state';
 import { useGitChanges } from '@renderer/hooks/useGitChanges';
 import { useDiffSides } from '@renderer/hooks/useDiffSides';
 import { DiffFileList } from './DiffFileList';
-import { SplitDiffView } from './SplitDiffView';
+import { CenteredMessage, DiffPane } from './DiffPane';
 
 interface Props {
   projectId: number;
@@ -22,11 +20,6 @@ interface ChangesViewProps {
   lists: ChangeLists;
   reloadToken: number;
   onRefresh: () => void;
-}
-
-interface DiffPaneProps {
-  entry: DiffEntry | null;
-  sides: DiffSidesState;
 }
 
 const FOCUS_RING = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]';
@@ -44,48 +37,24 @@ function RefreshButton({ onRefresh }: { onRefresh: () => void }) {
   );
 }
 
-function CenteredMessage({ children, testId }: { children: React.ReactNode; testId?: string }) {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center text-sm text-[--text-muted]" data-testid={testId}>
-      {children}
-    </div>
-  );
-}
-
-function DiffPane({ entry, sides }: DiffPaneProps) {
-  const current = entry !== null && 'key' in sides && sides.key === entryKey(entry) ? sides : null;
-  if (entry === null) return null;
-  if (current === null || current.status === 'loading') {
-    return <CenteredMessage><p role="status">{DIFF_COPY.loadingDiff}</p></CenteredMessage>;
-  }
-  if (current.status === 'too-large') return <CenteredMessage><p>{DIFF_COPY.tooLarge}</p></CenteredMessage>;
-  if (current.status === 'error') {
-    return <CenteredMessage><p role="alert" className="text-[--danger] whitespace-pre-wrap break-words">{current.message}</p></CenteredMessage>;
-  }
-  return (
-    <SplitDiffView
-      diff={current.diff}
-      oldPath={entry.origPath ?? entry.path}
-      newPath={entry.path}
-      oldSide={current.oldSide}
-      newSide={current.newSide}
-    />
-  );
-}
-
 function ChangesView({ projectId, lists, reloadToken, onRefresh }: ChangesViewProps) {
   const groups = useMemo(() => groupChanges(lists), [lists]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const selected = reconcileSelection(selectedKey, groups.flatMap((g) => g.entries));
   const reconciledKey = selected ? entryKey(selected) : null;
   useEffect(() => setSelectedKey(reconciledKey), [reconciledKey]);
-  const sides = useDiffSides(projectId, selected, reloadToken);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const sides = useDiffSides(projectId, selected, reloadToken, refreshToken);
+  const refresh = () => {
+    setRefreshToken((t) => t + 1);
+    onRefresh();
+  };
 
   if (groups.length === 0) {
     return (
       <CenteredMessage testId={DIFF_TESTIDS.empty}>
         <p>{DIFF_COPY.clean}</p>
-        <RefreshButton onRefresh={onRefresh} />
+        <RefreshButton onRefresh={refresh} />
       </CenteredMessage>
     );
   }
@@ -94,7 +63,7 @@ function ChangesView({ projectId, lists, reloadToken, onRefresh }: ChangesViewPr
       <div className="max-h-[40%] md:max-h-none md:w-[280px] shrink-0 flex flex-col min-h-0 border-b md:border-b-0 md:border-r border-[--border] bg-[--panel]/40">
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[--border] shrink-0">
           <h2 className="flex-1 text-xs font-medium text-[--text]">{DIFF_COPY.listLabel}</h2>
-          <RefreshButton onRefresh={onRefresh} />
+          <RefreshButton onRefresh={refresh} />
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto">
           <DiffFileList groups={groups} selectedKey={reconciledKey} onSelect={(e) => setSelectedKey(entryKey(e))} />

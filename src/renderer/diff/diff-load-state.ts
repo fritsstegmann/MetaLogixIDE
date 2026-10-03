@@ -2,13 +2,17 @@
  * Pure load-state logic behind the Diff tab hooks: a request-sequence gate that drops superseded
  * responses and reports an in-flight request, the `git:panel-status` → list phase mapping, and the
  * reducer for the selected entry's `git:diff-sides` data, which leaves its state object untouched for
- * an unchanged reload (spec AC17, AC20, AC21, AC23, AC24, AC28–AC30).
+ * an unchanged reload, and the request plan, which reads the full sides again while a shown side does not
+ * match its diff or on a manual refresh (spec AC17, AC20, AC21, AC23, AC24, AC28–AC30, AC38).
  */
 import type { GitSideContent, IpcContract } from '@shared/ipc-contract';
 import type { ChangeLists } from '@renderer/diff/diff-selection';
+import { parseUnifiedDiff } from '@renderer/diff/unified-diff';
+import { alignHunks, sideMatchesContent } from '@renderer/diff/diff-rows';
 
 type PanelStatusResponse = IpcContract['git:panel-status']['response'];
 type DiffSidesResponse = IpcContract['git:diff-sides']['response'];
+type OkSides = Extract<DiffSidesState, { status: 'ok' }>;
 
 export interface RequestGate {
   readonly inFlight: boolean;
@@ -81,30 +85,63 @@ export function changesStateFromFailure(e: unknown): ChangesState {
   return { phase: 'error', message: errorText(e) };
 }
 
+function sameSide(a: GitSideContent, b: GitSideContent): boolean {
+  return a.text === b.text && a.skipped === b.skipped;
+}
+
+function sameOk(state: OkSides, response: Extract<DiffSidesResponse, { status: 'ok' }>): boolean {
+  return state.diffHash === response.diffHash && sameSide(state.oldSide, response.oldSide) && sameSide(state.newSide, response.newSide);
+}
+
 function applyResponse(state: DiffSidesState, key: string, response: DiffSidesResponse): DiffSidesState {
   if (response.status === 'unchanged') return state;
   if (response.status === 'too-large') return state.status === 'too-large' ? state : { status: 'too-large', key };
-  if (state.status === 'ok' && state.diffHash === response.diffHash) return state;
+  if (state.status === 'ok' && sameOk(state, response)) return state;
   const { diff, diffHash, oldSide, newSide } = response;
   return { status: 'ok', key, diff, diffHash, oldSide, newSide };
+}
+
+function selectTransition(state: DiffSidesState, shownKey: string | null, key: string | null): DiffSidesState {
+  if (key === shownKey) return state;
+  return key === null ? IDLE_SIDES : { status: 'loading', key };
+}
+
+function applyFailure(state: DiffSidesState, key: string, message: string): DiffSidesState {
+  if (state.status === 'error' && state.message === message) return state;
+  return { status: 'error', key, message };
 }
 
 /** Selected-entry diff state; every no-op transition returns the same object so React skips the render. */
 export function diffSidesReducer(state: DiffSidesState, action: DiffSidesAction): DiffSidesState {
   const shownKey = state.status === 'idle' ? null : state.key;
-  if (action.type === 'select') {
-    if (action.key === shownKey) return state;
-    return action.key === null ? IDLE_SIDES : { status: 'loading', key: action.key };
-  }
+  if (action.type === 'select') return selectTransition(state, shownKey, action.key);
   if (action.key !== shownKey) return state;
   if (action.type === 'response') return applyResponse(state, action.key, action.response);
-  if (state.status === 'error' && state.message === action.message) return state;
-  return { status: 'error', key: action.key, message: action.message };
+  return applyFailure(state, action.key, action.message);
 }
 
-/** Whether to request the sides for `key` now, and with which hash: a reload of the shown diff sends its hash, and is skipped while one is in flight. */
-export function planSidesRequest(state: DiffSidesState, key: string, inFlight: boolean): SidesRequestPlan {
+const sidesMatchCache = new WeakMap<OkSides, boolean>();
+
+/** Whether every shown side with content matches the diff (AC38), memoised per state object so a poll does not re-parse an unchanged diff. */
+function sidesMatchDiff(state: OkSides): boolean {
+  const cached = sidesMatchCache.get(state);
+  if (cached !== undefined) return cached;
+  const rows = alignHunks(parseUnifiedDiff(state.diff).hunks);
+  const { text: oldText } = state.oldSide;
+  const { text: newText } = state.newSide;
+  const matches = (oldText === null || sideMatchesContent(rows, 'left', oldText)) && (newText === null || sideMatchesContent(rows, 'right', newText));
+  sidesMatchCache.set(state, matches);
+  return matches;
+}
+
+/**
+ * Whether to request the sides for `key` now, and with which hash. A quiet reload of the shown diff sends its hash
+ * and is skipped while one is in flight; a manual refresh (`force`), or a shown side that failed the content check,
+ * sends no hash so the full sides are read again.
+ */
+export function planSidesRequest(state: DiffSidesState, key: string, inFlight: boolean, force = false): SidesRequestPlan {
   const isReload = state.status !== 'idle' && state.key === key;
-  if (isReload && inFlight) return { skip: true };
-  return { skip: false, extra: isReload && state.status === 'ok' ? { ifDiffHashNot: state.diffHash } : {} };
+  if (isReload && inFlight && !force) return { skip: true };
+  const quiet = isReload && !force && state.status === 'ok' && sidesMatchDiff(state);
+  return { skip: false, extra: quiet ? { ifDiffHashNot: state.diffHash } : {} };
 }

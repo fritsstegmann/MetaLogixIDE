@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { gitStatusTextClass } from '@renderer/git-status-style';
+import { unstagePaths } from '@renderer/git-unstage-paths';
 import { DIFF_COPY } from '@renderer/diff-tab-copy';
 import type { GitChangeEntry } from '@shared/ipc-contract';
 
@@ -60,15 +61,15 @@ export function GitPanel({ projectId }: { projectId: number | null }) {
     await run('stage-all', () => api.invoke('git:stage', { projectId: projectId!, paths }));
   }
   async function unstageAll() {
-    const paths = (status?.staged ?? []).map((f) => f.path);
+    const paths = unstagePaths(status?.staged ?? []);
     if (paths.length === 0) return;
     await run('unstage-all', () => api.invoke('git:unstage', { projectId: projectId!, paths }));
   }
   async function stageOne(path: string) {
     await run(`stage:${path}`, () => api.invoke('git:stage', { projectId: projectId!, paths: [path] }));
   }
-  async function unstageOne(path: string) {
-    await run(`unstage:${path}`, () => api.invoke('git:unstage', { projectId: projectId!, paths: [path] }));
+  async function unstageOne(file: FileEntry) {
+    await run(`unstage:${file.path}`, () => api.invoke('git:unstage', { projectId: projectId!, paths: unstagePaths([file]) }));
   }
   async function commit() {
     const msg = message.trim();
@@ -131,7 +132,7 @@ export function GitPanel({ projectId }: { projectId: number | null }) {
         )}
         <Section title="Staged" count={status.staged.length} onBulk={unstageAll} bulkLabel="Unstage all">
           {status.staged.map((f) => (
-            <Row key={`s:${f.path}`} projectId={projectId!} file={f} staged onAction={() => void unstageOne(f.path)} action="−" busy={busy === `unstage:${f.path}`} />
+            <Row key={`s:${f.path}`} projectId={projectId!} file={f} staged onAction={() => void unstageOne(f)} action="−" busy={busy === `unstage:${f.path}`} />
           ))}
         </Section>
         <Section title="Changes" count={status.unstaged.length + untrackedAsEntries.length} onBulk={stageAll} bulkLabel="Stage all">

@@ -29,8 +29,31 @@ function normalise(code: string): GitFileStatus {
 }
 
 function entry(path: string, code: string, origPath: string | undefined): GitChangeEntry {
-  const renamed = code === 'R' || code === 'C';
-  return renamed && origPath !== undefined ? { path, status: normalise(code), origPath } : { path, status: normalise(code) };
+  return isRenameOrCopy(code) && origPath !== undefined ? { path, status: normalise(code), origPath } : { path, status: normalise(code) };
+}
+
+function isRenameOrCopy(code: string): boolean {
+  return code === 'R' || code === 'C';
+}
+
+function pushChange(out: GitPanelStatus, path: string, x: string, y: string, origPath: string | undefined): void {
+  if (x !== ' ') out.staged.push(entry(path, x, origPath));
+  if (y !== ' ') out.unstaged.push(entry(path, y, origPath));
+}
+
+/** Adds the change record at `fields[i]` to `out` and returns the index of its last field (the old path of a rename). */
+function parseRecord(fields: readonly string[], i: number, out: GitPanelStatus): number {
+  const field = fields[i]!;
+  const x = field[0]!;
+  const y = field[1]!;
+  const path = field.slice(3);
+  if (x === '?' || x === '!') {
+    if (x === '?') out.untracked.push(path);
+    return i;
+  }
+  const last = isRenameOrCopy(x) || isRenameOrCopy(y) ? i + 1 : i;
+  pushChange(out, path, x, y, last > i ? fields[last] : undefined);
+  return last;
 }
 
 /**
@@ -43,15 +66,8 @@ export function parseGitPanelStatus(raw: string): GitPanelStatus {
   const fields = raw.split('\0');
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i]!;
-    if (field.startsWith('## ')) { Object.assign(out, parseHeader(field.slice(3))); continue; }
-    if (field.length < 4) continue;
-    const x = field[0]!;
-    const y = field[1]!;
-    const path = field.slice(3);
-    if (x === '?' || x === '!') { if (x === '?') out.untracked.push(path); continue; }
-    const origPath = x === 'R' || x === 'C' || y === 'R' || y === 'C' ? fields[++i] : undefined;
-    if (x !== ' ') out.staged.push(entry(path, x, origPath));
-    if (y !== ' ') out.unstaged.push(entry(path, y, origPath));
+    if (field.startsWith('## ')) Object.assign(out, parseHeader(field.slice(3)));
+    else if (field.length >= 4) i = parseRecord(fields, i, out);
   }
   return out;
 }

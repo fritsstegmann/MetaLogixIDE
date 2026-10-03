@@ -415,7 +415,9 @@ clone. Two rules apply to `git:panel-status`, `git:file-diff` and
   project. A rejected path runs no git command. A working-tree symlink is
   shown as its link text and is never followed.
 - **Repository config cannot start programs.** `runGit` adds
-  `-c core.fsmonitor=false` and `--literal-pathspecs` to every call.
+  `-c core.fsmonitor=false` and `--literal-pathspecs` to every call, and
+  sets `GIT_OPTIONAL_LOCKS=0`, so status takes no optional index lock and
+  polling never contends with the user's own git commands.
   Every diff also runs with `--no-ext-diff` and `--no-textconv`. File
   content is read with `git cat-file blob`, which runs no textconv or
   filter.
