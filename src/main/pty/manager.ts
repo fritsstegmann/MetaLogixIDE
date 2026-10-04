@@ -172,6 +172,7 @@ export class PtyManager extends EventEmitter {
       e.cmdNotified = false;
     }
     e.pty.write(data);
+    if (data.includes('\x03')) this.clearPorts(e);
     this.emit('input', { projectId, shellIndex, data });
   }
 
@@ -288,10 +289,19 @@ export class PtyManager extends EventEmitter {
     this.releaseEntry(key(projectId, shellIndex), e);
   }
 
+  /** Remove port announcements for a process that ended or was interrupted. */
+  private clearPorts(entry: Entry): void {
+    if (entry.ports.size === 0) return;
+    entry.ports.clear();
+    this.emit('ports', { projectId: entry.projectId, shellIndex: entry.shellIndex, ports: [] });
+  }
+
   /** Drop the entry and its headless terminal, unless a respawn already replaced it. */
   private releaseEntry(k: string, entry: Entry): void {
+    if (this.entries.get(k) !== entry) return;
     entry.screen.dispose();
-    if (this.entries.get(k) === entry) this.entries.delete(k);
+    this.entries.delete(k);
+    this.clearPorts(entry);
   }
 
   isAlive(projectId: number, shellIndex: number): boolean {

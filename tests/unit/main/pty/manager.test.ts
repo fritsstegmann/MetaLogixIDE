@@ -83,6 +83,58 @@ describe('PtyManager', () => {
     expect(mgr.list().find(s => s.projectId === 3)).toBeUndefined();
   });
 
+  it('clears announced ports when the process exits', async () => {
+    const mgr = new PtyManager();
+    const events: Array<{ projectId: number; shellIndex: number; ports: number[] }> = [];
+    mgr.on('ports', (event) => events.push(event));
+    const exited = new Promise<void>((resolveExit) => mgr.once('exit', () => resolveExit()));
+
+    await mgr.spawn(30, 2, {
+      argv: ['node', '-e', 'process.stdout.write("http://localhost:4321\\n")'],
+      env: {},
+      cwd: process.cwd(),
+      variant: 'first',
+    });
+    await exited;
+
+    expect(events).toEqual([
+      { projectId: 30, shellIndex: 2, ports: [4321] },
+      { projectId: 30, shellIndex: 2, ports: [] },
+    ]);
+  });
+
+  it('clears announced ports when Ctrl+C ends a server but leaves the shell alive', async () => {
+    const mgr = new PtyManager();
+    const announced = new Promise<void>((resolveAnnounced) => {
+      mgr.on('ports', ({ ports }: { ports: number[] }) => {
+        if (ports.includes(4322)) resolveAnnounced();
+      });
+    });
+
+    await mgr.spawn(31, 0, {
+      argv: [
+        'node',
+        '-e',
+        'process.on("SIGINT",()=>{});process.stdin.resume();process.stdout.write("http://localhost:4322\\n")',
+      ],
+      env: {},
+      cwd: process.cwd(),
+      variant: 'first',
+    });
+    await announced;
+    const cleared = new Promise<void>((resolveCleared) => {
+      mgr.on('ports', ({ ports }: { ports: number[] }) => {
+        if (ports.length === 0) resolveCleared();
+      });
+    });
+
+    mgr.write(31, 0, '\x03');
+    await cleared;
+
+    expect(mgr.isAlive(31, 0)).toBe(true);
+    await mgr.kill(31, 0);
+  });
+
   it('rejects duplicate spawn for same (project, index)', async () => {
     const mgr = new PtyManager();
     await mgr.spawn(4, 0, launch());

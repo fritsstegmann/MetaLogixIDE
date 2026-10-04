@@ -104,7 +104,8 @@ export interface IpcContract {
    * Snapshot of every alive shell's currently-detected ports. The main
    * process scans PTY output for common "listening on 3000" / "Local:
    * http://localhost:3000/" patterns and keeps a per-shell Set<number>.
-   * The ports:changed event fires whenever that set grows.
+   * The ports:changed event fires when that set grows and with an empty set
+   * when the shell exits or its active process is interrupted.
    */
   'shells:ports':       { request: undefined; response: { entries: Array<{ projectId: number; shellIndex: number; ports: number[] }> } };
   /**
