@@ -15,7 +15,7 @@ export interface ViewedShellsInput {
 /**
  * Derives which shells the renderer is currently showing, for suppression of
  * Claude notifications (spec Definitions "Viewing the shell", D5). Returns an
- * empty list when no project is selected or the Files or Env tab is showing;
+ * empty list when no project is selected or the Files, Diff or Env tab is showing;
  * otherwise the active shell plus the right split pane when one is open,
  * deduped so a shell shown in both panes appears once.
  */

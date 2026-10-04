@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IpcMain } from 'electron';
 import { registerIpc } from '@main/ipc/register';
 import { openDb } from '@main/db/connection';
@@ -11,7 +11,9 @@ import { ShellsRepo } from '@main/repos/shells-repo';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { commitAll, git, makeConflict, markerScript, stubGitEnv, tempProject } from '../git/temp-repo';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -459,5 +461,131 @@ describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
     const rows = rig.shells.list();
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows)).not.toContain('S3CRET');
+  });
+});
+
+describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC31–AC33)', () => {
+  beforeEach(stubGitEnv);
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A project folder (no git yet) and a handler caller whose services resolve only project 1 to it. */
+  function gitRig() {
+    const { base, root } = tempProject('reg-git-');
+    const ipc = fakeIpcMain();
+    const projects = { get: (id: number) => (id === 1 ? { id: 1, path: root } : undefined) };
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    const call = (channel: string, req: unknown) => ipc.handlers.get(channel)!({}, req);
+    return { base, root, call };
+  }
+
+  function repoRig() {
+    const rig = gitRig();
+    git(rig.root, 'init', '-q', '-b', 'main');
+    return rig;
+  }
+
+  it('git:panel-status on an empty .git folder is a repo with empty lists and git\'s error text', async () => {
+    const { root, call } = gitRig();
+    mkdirSync(join(root, '.git'));
+    const res = await call('git:panel-status', { projectId: 1 });
+    expect(res).toMatchObject({ isRepo: true, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] });
+    expect(res).toMatchObject({ error: expect.stringMatching(/not a git repository/i) });
+  });
+
+  it('git:panel-status without .git is not a repo and carries no error', async () => {
+    const { call } = gitRig();
+    expect(await call('git:panel-status', { projectId: 1 })).toEqual({ isRepo: false, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] });
+  });
+
+  it('git:panel-status on a real repo lists unquoted renames with origPath, UU in both groups and every untracked file, with no error', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'old.ts'), 'export const x = 1;\n'.repeat(5));
+    makeConflict(root);
+    git(root, 'mv', 'old.ts', 'new name é.js');
+    mkdirSync(join(root, 'dir', 'sub'), { recursive: true });
+    writeFileSync(join(root, 'dir', 'sub', 'u1.txt'), 'u');
+    writeFileSync(join(root, 'dir', 'u2.txt'), 'u');
+    const res = await call('git:panel-status', { projectId: 1 }) as Record<string, unknown>;
+    expect(res).not.toHaveProperty('error');
+    expect(res).toMatchObject({ isRepo: true, branch: 'main' });
+    expect(res.staged).toEqual(expect.arrayContaining([
+      { path: 'new name é.js', status: 'R', origPath: 'old.ts' },
+      { path: 'f.ts', status: 'U' },
+    ]));
+    expect(res.unstaged).toEqual([{ path: 'f.ts', status: 'U' }]);
+    expect(res.untracked).toEqual(['dir/sub/u1.txt', 'dir/u2.txt']);
+  });
+
+  it('git:panel-status lists files named like pathspec magic exactly as git status does without literal pathspecs', async () => {
+    const { root, call } = repoRig();
+    for (const name of ['*.ts', ':(exclude)x', 'a.ts']) writeFileSync(join(root, name), 'one\n');
+    commitAll(root);
+    for (const name of ['*.ts', ':(exclude)x', 'a.ts']) writeFileSync(join(root, name), 'two\n');
+    writeFileSync(join(root, '[ab].ts'), 'new\n');
+    const res = await call('git:panel-status', { projectId: 1 }) as { unstaged: { path: string }[]; untracked: string[] };
+    const plain = git(root, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all');
+    expect(plain).toBe(' M *.ts\0 M :(exclude)x\0 M a.ts\0?? [ab].ts\0');
+    expect(res.unstaged.map((e) => e.path)).toEqual(['*.ts', ':(exclude)x', 'a.ts']);
+    expect(res.untracked).toEqual(['[ab].ts']);
+  });
+
+  it('git:panel-status never runs a repo-local core.fsmonitor program', async () => {
+    const { base, root, call } = repoRig();
+    writeFileSync(join(root, 'a.txt'), 'a');
+    const { script, marker } = markerScript(base, 'fsmonitor');
+    git(root, 'config', 'core.fsmonitor', script);
+    await call('git:panel-status', { projectId: 1 });
+    expect(existsSync(marker)).toBe(false);
+    spawnSync('git', ['status'], { cwd: root });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it.each(['git:panel-status', 'git:file-diff', 'git:diff-sides'])('%s rejects an unknown project', async (channel) => {
+    const { call } = gitRig();
+    await expect(call(channel, { projectId: 99, path: 'a', kind: 'unstaged' })).rejects.toThrow(/no project 99/);
+  });
+
+  it.each(['../x', '/etc/passwd', '../proj-evil/x'])('git:diff-sides and git:file-diff reject %j', async (bad) => {
+    const { call } = repoRig();
+    await expect(call('git:diff-sides', { projectId: 1, kind: 'untracked', path: bad })).rejects.toThrow(/path|absolute/);
+    await expect(call('git:file-diff', { projectId: 1, path: bad, untracked: true })).rejects.toThrow(/path|absolute/);
+    await expect(call('git:file-diff', { projectId: 1, path: 'ok.ts', origPath: bad, staged: true })).rejects.toThrow(/path|absolute/);
+  });
+
+  it('git:diff-sides rejects an unknown kind', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'u.txt'), 'u\n');
+    await expect(call('git:diff-sides', { projectId: 1, kind: 'worktree', path: 'u.txt' })).rejects.toThrow(/kind/);
+  });
+
+  it('git:diff-sides rejects a project that is not a git repository', async () => {
+    const { root, call } = gitRig();
+    writeFileSync(join(root, 'u.txt'), 'u\n');
+    await expect(call('git:diff-sides', { projectId: 1, kind: 'untracked', path: 'u.txt' })).rejects.toThrow(/not a git repository/);
+  });
+
+  it('git:diff-sides returns the diff and both sides, then unchanged for the same hash', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'u.txt'), 'hello\n');
+    const first = await call('git:diff-sides', { projectId: 1, kind: 'untracked', path: 'u.txt' }) as { status: string; diffHash: string; diff: string };
+    expect(first).toMatchObject({ status: 'ok', oldSide: { text: null, skipped: 'absent' }, newSide: { text: 'hello\n' } });
+    expect(first.diff).toContain('+hello');
+    await expect(call('git:diff-sides', { projectId: 1, kind: 'untracked', path: 'u.txt', ifDiffHashNot: first.diffHash })).resolves.toEqual({ status: 'unchanged' });
+  });
+
+  it('git:file-diff gives a rename diff with origPath, and tooLarge over 1 MiB', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'old.ts'), 'export const x = 1;\n'.repeat(5));
+    commitAll(root);
+    git(root, 'mv', 'old.ts', 'new.ts');
+    const rename = await call('git:file-diff', { projectId: 1, path: 'new.ts', origPath: 'old.ts', staged: true }) as { diff: string };
+    expect(rename.diff).toContain('rename from old.ts');
+    writeFileSync(join(root, 'big.txt'), 'line of text\n'.repeat(100_000));
+    await expect(call('git:file-diff', { projectId: 1, path: 'big.txt', untracked: true })).resolves.toEqual({ diff: '', tooLarge: true });
+  });
+
+  it('git:file-diff without .git returns an empty diff', async () => {
+    const { call } = gitRig();
+    await expect(call('git:file-diff', { projectId: 1, path: 'a.ts' })).resolves.toEqual({ diff: '' });
   });
 });

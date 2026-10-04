@@ -4,6 +4,7 @@ import { api } from '@renderer/api';
 import { ResizeHandle } from './ResizeHandle';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { MarkdownPreview } from './MarkdownPreview';
+import { langForPath } from '@renderer/diff/highlight-lang';
 import { usePersistedNumber } from '@renderer/hooks/usePersistedNumber';
 import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { toast } from '@renderer/hooks/useToasts';
@@ -17,16 +18,6 @@ interface OpenFile {
   kind: 'text' | 'binary';
   editing: boolean;
 }
-
-const EXT_TO_LANG: Record<string, string> = {
-  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java', kt: 'kotlin',
-  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cs: 'csharp', swift: 'swift',
-  sh: 'bash', bash: 'bash', zsh: 'bash',
-  json: 'json', jsonc: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
-  html: 'xml', xml: 'xml', css: 'css', scss: 'scss',
-  sql: 'sql', dockerfile: 'dockerfile',
-};
 
 const MD_EXT   = new Set(['md', 'markdown', 'mdx']);
 const IMG_EXT  = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp']);
@@ -604,13 +595,13 @@ function FilePreview({
           <div className="p-4 text-sm text-[--text-muted]">Image preview is a Phase 2 feature.</div>
         )}
         {file.kind === 'text' && editing && (
-          <EditorWithLineNumbers value={file.buffer} onChange={onChange} scrollToLine={scrollToLine} onScrolled={onScrolled} lang={isMd ? 'markdown' : EXT_TO_LANG[ext] ?? ''} />
+          <EditorWithLineNumbers value={file.buffer} onChange={onChange} scrollToLine={scrollToLine} onScrolled={onScrolled} lang={langForPath(file.relPath)} />
         )}
         {file.kind === 'text' && !editing && isMd && (
           <MarkdownPreview source={file.buffer} />
         )}
         {file.kind === 'text' && !editing && !isMd && (
-          <SyntaxHighlightedPre content={file.buffer} lang={EXT_TO_LANG[ext] ?? ''} scrollToLine={scrollToLine} onScrolled={onScrolled} />
+          <SyntaxHighlightedPre content={file.buffer} lang={langForPath(file.relPath)} scrollToLine={scrollToLine} onScrolled={onScrolled} />
         )}
       </div>
     </div>
