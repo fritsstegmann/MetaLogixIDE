@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { api } from '@renderer/api';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -36,10 +36,14 @@ export function useTheme(): {
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
   );
 
-  // Apply on first render and on change.
-  useEffect(() => {
+  // Apply before the browser paints so a persisted light theme never flashes
+  // the dark default during startup or reload.
+  useLayoutEffect(() => {
     applyToDom(mode);
     localStorage.setItem(STORAGE_KEY, mode);
+  }, [mode]);
+
+  useEffect(() => {
     void api.invoke('app:set-native-theme', { source: mode });
   }, [mode]);
 
