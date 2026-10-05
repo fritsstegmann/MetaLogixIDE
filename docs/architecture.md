@@ -345,7 +345,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
    value.
 2. The main process validates and normalizes the value. It stores the value,
    then broadcasts `settings:changed` for that key
-   (`src/main/ipc/register.ts:566-572`, `:1300-1304`).
+   (`src/main/ipc/register.ts:572-578`, `:1275-1279`).
 3. Each renderer font store reads the changed key. The main window and each
    popout window therefore receive the same durable value
    (`src/renderer/fonts/font-settings-context.tsx:39-68`).
