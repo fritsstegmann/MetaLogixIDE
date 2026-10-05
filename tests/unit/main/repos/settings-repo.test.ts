@@ -34,6 +34,54 @@ describe('SettingsRepo', () => {
     expect(repo.get('keep_alive_cap')).toBe(3);
   });
 
+  describe('font preferences', () => {
+    it('AC7 — fresh installs seed both font preferences to null', () => {
+      const repo = seed();
+      expect(repo.get('ui_font_family')).toBeNull();
+      expect(repo.get('terminal_font_family')).toBeNull();
+    });
+
+    it('AC7 — upgraded installs add null font preferences without changing existing settings', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('theme', JSON.stringify('light'));
+      const repo = new SettingsRepo(db);
+
+      repo.seedDefaults();
+
+      expect(repo.get('ui_font_family')).toBeNull();
+      expect(repo.get('terminal_font_family')).toBeNull();
+      expect(repo.get('theme')).toBe('light');
+    });
+
+    it('AC8 — UI and terminal preferences set, reset, and persist independently', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      const repo = new SettingsRepo(db);
+      repo.seedDefaults();
+
+      repo.set('ui_font_family', 'Avenir Next');
+      repo.set('terminal_font_family', 'JetBrains Mono');
+      repo.set('ui_font_family', null);
+
+      const reopened = new SettingsRepo(db);
+      expect(reopened.get('ui_font_family')).toBeNull();
+      expect(reopened.get('terminal_font_family')).toBe('JetBrains Mono');
+    });
+
+    it('AC10/AC20 — persistence preserves printable punctuation and non-ASCII verbatim', () => {
+      const repo = seed();
+      const uiFamily = '字體 “Quoted”, Semi; Slash\\';
+      const terminalFamily = 'Málaga [Mono] #1';
+
+      repo.set('ui_font_family', uiFamily);
+      repo.set('terminal_font_family', terminalFamily);
+
+      expect(repo.get('ui_font_family')).toBe(uiFamily);
+      expect(repo.get('terminal_font_family')).toBe(terminalFamily);
+    });
+  });
+
   it('AC1 — fresh seed leaves claude_permission_mode null', () => {
     const repo = seed();
     expect(repo.get('claude_permission_mode')).toBeNull();

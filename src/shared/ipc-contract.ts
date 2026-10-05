@@ -1,6 +1,7 @@
 import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
 import type { ClaudePermissionMode } from './claude-permission-mode';
 import type { ClaudeShellStateEntry } from './claude-state';
+import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -135,6 +136,7 @@ export interface IpcContract {
   // settings
   'settings:get': { request: { key: keyof SettingsMap };                        response: { value: SettingsMap[keyof SettingsMap] } };
   'settings:set': { request: { key: keyof SettingsMap; value: SettingsMap[keyof SettingsMap] }; response: { ok: true } };
+  'settings:set-font': { request: { key: FontSettingKey; value: unknown }; response: { value: FontFamilyPreference } };
   'settings:set-claude-permission-mode': { request: { mode: ClaudePermissionMode }; response: { mode: ClaudePermissionMode; changedKeys: Array<keyof SettingsMap> } };
 
   // notifications

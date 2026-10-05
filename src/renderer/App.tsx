@@ -44,6 +44,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
 import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
 import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
+import { useApplyUiFont } from './fonts/use-apply-ui-font';
 
 interface PopoutInfo {
   projectId: number;
@@ -66,7 +67,9 @@ function readPopout(): PopoutInfo | null {
   return { projectId, shellIndex };
 }
 
+/** Selects the renderer shell and applies synchronized application typography. */
 export function App() {
+  useApplyUiFont();
   const popout = useMemo(readPopout, []);
   // ErrorBoundary catches render/lifecycle errors so an unhandled throw in
   // any descendant doesn't unmount the whole tree and leave the user with

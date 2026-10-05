@@ -1,17 +1,49 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LaunchCmd, Root, SettingsMap } from '@shared/types';
+import {
+  TERMINAL_FONT_FALLBACK,
+  UI_FONT_FALLBACK,
+  type FontFamilyPreference,
+} from '@shared/font-settings';
 import { parseArgv } from '@shared/parse-argv';
 import { api } from '@renderer/api';
 import { useTheme, type ThemeMode } from '@renderer/hooks/useTheme';
 import { useClaudePermissionMode } from '@renderer/hooks/useClaudePermissionMode';
 import { PermissionModeControl } from '@renderer/components/PermissionModeControl';
+import {
+  FontControl,
+  type FontDiscoveryState,
+} from '@renderer/components/FontControl';
+import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
+import { useFontSettings } from '@renderer/fonts/font-settings-context';
+import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
 import { PERMISSION_MODE_COPY, PERMISSION_MODE_TEST_IDS } from '@renderer/permission-mode-copy';
 import type { ClaudePermissionMode } from '@shared/claude-permission-mode';
-
 type Section = 'general' | 'roots' | 'launch' | 'metaproject';
 
-export function Settings({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Renders application settings and owns installed-font discovery for one open session. */
+export function Settings({ open, onClose }: { open: boolean; onClose: () => void }): React.JSX.Element | null {
   const [section, setSection] = useState<Section>('general');
+  const [fontDiscovery, setFontDiscovery] = useState<FontDiscoveryState>({ status: 'idle' });
+  const fontDiscoveryAttempted = useRef(false);
+  const fontDiscoveryGeneration = useRef(0);
+
+  useEffect(() => {
+    if (open) return;
+    fontDiscoveryGeneration.current += 1;
+    fontDiscoveryAttempted.current = false;
+    setFontDiscovery({ status: 'idle' });
+  }, [open]);
+
+  const loadInstalledFonts = useCallback(async (): Promise<void> => {
+    if (fontDiscoveryAttempted.current) return;
+    fontDiscoveryAttempted.current = true;
+    const generation = fontDiscoveryGeneration.current;
+    setFontDiscovery({ status: 'loading' });
+    const result = await discoverLocalFonts(window);
+    if (fontDiscoveryGeneration.current === generation) setFontDiscovery(result);
+  }, []);
+
   if (!open) return null;
   return (
     <div
@@ -20,15 +52,16 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
       data-testid="settings-modal"
     >
       <div
-        className="modal-panel relative bg-[--panel-strong] w-[760px] max-w-[92vw] h-[600px] max-h-[92vh] rounded-xl shadow-2xl border border-[--border] overflow-hidden flex flex-col"
+        className="modal-panel relative flex h-[600px] max-h-[92vh] w-[760px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-[--border] bg-[--panel-strong] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="drag h-11 flex items-center justify-between border-b border-[--border] pl-4 pr-2 shrink-0 bg-[--panel]/60">
           <span className="text-sm font-semibold">Settings</span>
           <button
+            type="button"
             onClick={onClose}
-            className="no-drag text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-md hover:bg-[--panel-strong]"
+            className="no-drag flex min-h-11 min-w-11 items-center justify-center rounded-md text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text]"
             title="Close (Esc)"
             data-testid="settings-close"
             aria-label="Close settings"
@@ -38,20 +71,25 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
         </div>
 
         {/* Body: nav + panel */}
-        <div className="flex-1 min-h-0 flex">
-          <nav className="w-48 shrink-0 border-r border-[--border] bg-[--panel]/40 p-3 flex flex-col gap-1">
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <nav aria-label="Settings sections" className="flex w-full shrink-0 gap-2 overflow-x-auto border-b border-[--border] bg-[--panel]/40 p-3 sm:w-48 sm:flex-col sm:gap-1 sm:overflow-visible sm:border-b-0 sm:border-r">
             <SectionButton active={section === 'general'} onClick={() => setSection('general')}>General</SectionButton>
-            <SectionButton active={section === 'roots'}   onClick={() => setSection('roots')}>Root directories</SectionButton>
-            <SectionButton active={section === 'launch'}  onClick={() => setSection('launch')}>Launch commands</SectionButton>
+            <SectionButton active={section === 'roots'} onClick={() => setSection('roots')}>Root directories</SectionButton>
+            <SectionButton active={section === 'launch'} onClick={() => setSection('launch')}>Launch commands</SectionButton>
             <SectionButton active={section === 'metaproject'} onClick={() => setSection('metaproject')}>Metaproject</SectionButton>
-            <div className="mt-auto text-[10px] text-[--text-muted] px-2 pt-3">
+            <div className="mt-auto hidden px-2 pt-3 text-[10px] text-[--text-muted] sm:block">
               MetaLogix IDE · Phase 1
             </div>
           </nav>
-          <div className="flex-1 min-h-0 overflow-y-auto p-6">
-            {section === 'general' && <GeneralPanel />}
-            {section === 'roots'   && <RootsPanel />}
-            {section === 'launch'  && <LaunchPanel />}
+          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+            {section === 'general' && (
+              <GeneralPanel
+                fontDiscovery={fontDiscovery}
+                onLoadInstalledFonts={loadInstalledFonts}
+              />
+            )}
+            {section === 'roots' && <RootsPanel />}
+            {section === 'launch' && <LaunchPanel />}
             {section === 'metaproject' && <MetaprojectPanel />}
           </div>
         </div>
@@ -59,8 +97,9 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
         {/* Footer */}
         <div className="h-12 flex items-center justify-end gap-2 border-t border-[--border] px-4 bg-[--panel]/60">
           <button
+            type="button"
             onClick={onClose}
-            className="text-sm px-4 py-1.5 pressable bg-[--accent] hover:brightness-110 text-white rounded-md"
+            className="pressable min-h-11 rounded-md bg-[--accent] px-4 text-sm text-white hover:brightness-110"
             data-testid="settings-done"
           >
             Done
@@ -83,8 +122,9 @@ function CloseIcon() {
 function SectionButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`w-full text-left px-2 py-1.5 rounded-md text-sm ${
+      className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-left text-sm sm:w-full sm:px-2 ${
         active ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong] text-[--text]'
       }`}
     >
@@ -95,7 +135,13 @@ function SectionButton({ active, onClick, children }: { active: boolean; onClick
 
 /* ─────────────────────────────── General ─────────────────────────────── */
 
-function GeneralPanel() {
+function GeneralPanel({
+  fontDiscovery,
+  onLoadInstalledFonts,
+}: {
+  readonly fontDiscovery: FontDiscoveryState;
+  readonly onLoadInstalledFonts: () => Promise<void>;
+}) {
   const { mode, effective, setMode } = useTheme();
   const [cap, setCap] = useState<number | null>(null);
   const [scanDepth, setScanDepth] = useState<number | null>(null);
@@ -156,6 +202,11 @@ function GeneralPanel() {
         </div>
       </Field>
 
+      <FontSettingsControls
+        discovery={fontDiscovery}
+        onLoadInstalledFonts={onLoadInstalledFonts}
+      />
+
       <Field label="Keep-alive cap" hint="How many project shells can stay running simultaneously. LRU evicts the oldest.">
         <NumberInput value={cap} min={1} max={20} onChange={(v) => { setCap(v); void save('keep_alive_cap', v); }} />
       </Field>
@@ -209,6 +260,77 @@ function GeneralPanel() {
         </div>
       </Field>
     </div>
+  );
+}
+
+function fontDiscoverySummary(discovery: FontDiscoveryState): string {
+  if (discovery.status === 'idle') return 'Installed fonts are loaded only when you request them.';
+  if (discovery.status === 'loading') return 'Loading installed fonts…';
+  if (discovery.status === 'success') {
+    return `${discovery.families.length} installed font ${discovery.families.length === 1 ? 'family' : 'families'} loaded.`;
+  }
+  if (discovery.status === 'unsupported') return 'Installed font discovery is not supported. Exact family names still work.';
+  if (discovery.status === 'denied') return 'Access to installed fonts was denied. Exact family names still work.';
+  return 'Installed fonts could not be loaded. Exact family names still work.';
+}
+
+function FontSettingsControls({
+  discovery,
+  onLoadInstalledFonts,
+}: {
+  readonly discovery: FontDiscoveryState;
+  readonly onLoadInstalledFonts: () => Promise<void>;
+}) {
+  const { uiFontFamily, terminalFontFamily } = useFontSettings();
+  const discoveryStatusId = 'font-discovery-status';
+
+  async function saveFont(
+    key: 'ui_font_family' | 'terminal_font_family',
+    value: FontFamilyPreference,
+  ): Promise<void> {
+    await api.invoke('settings:set-font', { key, value });
+  }
+
+  return (
+    <section className="space-y-3" aria-labelledby="font-settings-heading">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
+          <h3 id="font-settings-heading" className="text-sm font-medium">{FONT_COPY.sectionLabel}</h3>
+          <p className="text-xs text-[--text-muted]">
+            Choose independent fonts for application text and terminal glyphs.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void onLoadInstalledFonts()}
+          disabled={discovery.status !== 'idle'}
+          aria-describedby={discoveryStatusId}
+          className="pressable min-h-11 shrink-0 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid={FONT_TEST_IDS.loadInstalled}
+        >
+          {FONT_COPY.loadInstalled}
+        </button>
+      </div>
+      <p id={discoveryStatusId} aria-live="polite" className="text-xs text-[--text-muted]">
+        {fontDiscoverySummary(discovery)}
+      </p>
+      <FontControl
+        settingKey="ui_font_family"
+        label={FONT_COPY.uiLabel}
+        value={uiFontFamily}
+        fallback={UI_FONT_FALLBACK}
+        discovery={discovery}
+        onSave={(value) => saveFont('ui_font_family', value)}
+      />
+      <FontControl
+        settingKey="terminal_font_family"
+        label={FONT_COPY.terminalLabel}
+        value={terminalFontFamily}
+        fallback={TERMINAL_FONT_FALLBACK}
+        discovery={discovery}
+        onSave={(value) => saveFont('terminal_font_family', value)}
+      />
+    </section>
   );
 }
 
