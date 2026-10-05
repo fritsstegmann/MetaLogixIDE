@@ -52,7 +52,7 @@ describe('registerIpc', () => {
       'projects:update-config', 'projects:recents',
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
-      'settings:get', 'settings:set', 'settings:set-claude-permission-mode',
+      'settings:get', 'settings:set', 'settings:set-font', 'settings:set-claude-permission-mode',
       'files:tree', 'app:ping', 'notifications:viewed-shells', 'claude-state:list',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
@@ -77,6 +77,112 @@ describe('registerIpc', () => {
     const handler = ipc.handlers.get('settings:set')!;
     await expect(handler({}, { key: 'claude_permission_mode', value: 'auto' })).rejects.toThrow();
     expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['ui_font_family', 'terminal_font_family'] as const)('settings:set rejects font key %s without writing', async (key) => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    const setSpy = vi.spyOn(settings, 'set');
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+    await expect(ipc.handlers.get('settings:set')!({}, { key, value: 'Bypass Font' })).rejects.toThrow();
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(settings.get(key)).toBeNull();
+  });
+
+  it('settings:set-font normalizes, persists, returns, then emits one keyed change event', async () => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    const events: Array<{ channel: string; payload: unknown; stored: unknown }> = [];
+    const sendEvent = (channel: string, payload: unknown) => {
+      events.push({ channel, payload, stored: settings.get('ui_font_family') });
+    };
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, sendEvent as never);
+
+    await expect(ipc.handlers.get('settings:set-font')!({}, {
+      key: 'ui_font_family',
+      value: '  字體 “Quoted”, Semi; Slash\\  ',
+    })).resolves.toEqual({ value: '字體 “Quoted”, Semi; Slash\\' });
+    expect(settings.get('ui_font_family')).toBe('字體 “Quoted”, Semi; Slash\\');
+    expect(settings.get('terminal_font_family')).toBeNull();
+    expect(events).toEqual([{
+      channel: 'settings:changed',
+      payload: { key: 'ui_font_family' },
+      stored: '字體 “Quoted”, Semi; Slash\\',
+    }]);
+  });
+
+  it('settings:set-font resets only the requested preference to null', async () => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    settings.set('ui_font_family', 'UI Font');
+    settings.set('terminal_font_family', 'Terminal Font');
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+      events.push({ channel, payload });
+    }) as never);
+
+    await expect(ipc.handlers.get('settings:set-font')!({}, {
+      key: 'terminal_font_family',
+      value: null,
+    })).resolves.toEqual({ value: null });
+    expect(settings.get('ui_font_family')).toBe('UI Font');
+    expect(settings.get('terminal_font_family')).toBeNull();
+    expect(events).toEqual([{
+      channel: 'settings:changed',
+      payload: { key: 'terminal_font_family' },
+    }]);
+  });
+
+  it.each([
+    ['invalid key', { key: 'theme', value: 'Font' }],
+    ['numeric key', { key: 42, value: 'Font' }],
+    ['undefined value', { key: 'ui_font_family', value: undefined }],
+    ['object value', { key: 'ui_font_family', value: { family: 'Font' } }],
+    ['empty value', { key: 'ui_font_family', value: '   ' }],
+    ['NUL value', { key: 'ui_font_family', value: 'Bad\u0000Font' }],
+    ['C0 value', { key: 'ui_font_family', value: 'Bad\nFont' }],
+    ['overlength value', { key: 'ui_font_family', value: '😀'.repeat(257) }],
+  ])('settings:set-font rejects %s without state change or event', async (_case, request) => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    settings.set('ui_font_family', 'Existing Font');
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+      events.push({ channel, payload });
+    }) as never);
+
+    await expect(ipc.handlers.get('settings:set-font')!({}, request)).rejects.toThrow();
+    expect(settings.get('ui_font_family')).toBe('Existing Font');
+    expect(settings.get('terminal_font_family')).toBeNull();
+    expect(events).toEqual([]);
+  });
+
+  it('settings:set-font leaves state unchanged and emits nothing when persistence fails', async () => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    settings.set('ui_font_family', 'Existing Font');
+    const setSpy = vi.spyOn(settings, 'set').mockImplementation(() => {
+      throw new Error('write failed');
+    });
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+      events.push({ channel, payload });
+    }) as never);
+
+    await expect(ipc.handlers.get('settings:set-font')!({}, {
+      key: 'ui_font_family',
+      value: 'Valid Font',
+    })).rejects.toThrow('write failed');
+    expect(setSpy).toHaveBeenCalledWith('ui_font_family', 'Valid Font');
+    expect(settings.get('ui_font_family')).toBe('Existing Font');
+    expect(settings.get('terminal_font_family')).toBeNull();
+    expect(events).toEqual([]);
   });
 
   it.each(['plan', 'bypassPermissions', '', undefined])('settings:set-claude-permission-mode rejects mode %j without changing anything', async (mode) => {

@@ -15,6 +15,16 @@ import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewState } from './HoverPreview';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { toast } from '@renderer/hooks/useToasts';
+import { useFontSettings } from '@renderer/fonts/font-settings-context';
+import { buildFontFamilyStack } from '@renderer/fonts/font-family';
+import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
+import {
+  createTerminalFontUpdater,
+  createTerminalGeometrySynchronizer,
+  type TerminalFontUpdater,
+  type TerminalGeometrySynchronizer,
+} from '@renderer/terminal-font-update';
+const TERMINAL_FONT_READY_TIMEOUT_MS = 1500;
 
 function readVar(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -44,6 +54,9 @@ export function ShellTab({
   const termRef = useRef<Terminal | null>(null);
   const searchRef = useRef<SearchAddon | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const geometrySyncRef = useRef<TerminalGeometrySynchronizer | null>(null);
+  const fontUpdaterRef = useRef<TerminalFontUpdater | null>(null);
+  const appliedFontFamilyRef = useRef<FontFamilyPreference>(null);
   // Ordering guard for the "snapshot vs live" race on remount. Live PTY
   // data can arrive between term.open() and the snapshot HTTP round-trip
   // resolving; if we wrote it straight to xterm and then also wrote the
@@ -56,6 +69,9 @@ export function ShellTab({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [fontSize, setFontSize] = usePersistedNumber('metaide.shellFontSize', 14, 9, 28);
+  const { terminalFontFamily } = useFontSettings();
+  const terminalFontFamilyRef = useRef<FontFamilyPreference>(terminalFontFamily);
+  terminalFontFamilyRef.current = terminalFontFamily;
   const [hover, setHover] = useState<HoverPreviewState | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -71,7 +87,7 @@ export function ShellTab({
       // Explicit SF Mono stack — first match wins. Falls back through
       // common developer monospace fonts. `ui-monospace` alone can pick
       // Menlo bitmap fallback on some setups and looks pixelated.
-      fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace',
+      fontFamily: buildFontFamilyStack(terminalFontFamilyRef.current, TERMINAL_FONT_FALLBACK),
       fontSize,
       fontWeight: 'normal',
       fontWeightBold: 'bold',
@@ -147,25 +163,28 @@ export function ShellTab({
       focus: () => term.focus(),
     });
 
-    // Track the last-fit rows/cols so we can drop no-op resize calls that
-    // would otherwise spam the PTY when the container reports the same
-    // size repeatedly.
-    let lastCols = -1, lastRows = -1;
-    function syncSize() {
-      if (!opened) return;
-      try {
+    const synchronizeGeometry = createTerminalGeometrySynchronizer({
+      terminal: term,
+      fit,
+      dimensions: () => {
         const host = termHostRef.current;
-        if (!host || host.clientWidth < 20 || host.clientHeight < 20) return;
-        fit.fit();
-        // After a fit, force a repaint — xterm's canvas/DOM renderer
-        // occasionally leaves stale glyphs at the old cell positions
-        // (that's why a manual window resize used to "fix" the display).
-        try { term.refresh(0, Math.max(0, term.rows - 1)); } catch { /* fine */ }
-        if (term.cols === lastCols && term.rows === lastRows) return;
-        lastCols = term.cols; lastRows = term.rows;
-        void api.invoke('shells:resize', { projectId, shellIndex, cols: term.cols, rows: term.rows });
-      } catch { /* container might be zero-sized during transitions */ }
-    }
+        if (!opened || !host) return null;
+        return { width: host.clientWidth, height: host.clientHeight };
+      },
+      resize: (cols, rows) => {
+        void api.invoke('shells:resize', { projectId, shellIndex, cols, rows });
+      },
+    });
+    geometrySyncRef.current = synchronizeGeometry;
+    const fontUpdater = createTerminalFontUpdater({
+      terminal: term,
+      synchronize: synchronizeGeometry,
+      loadFont: (specification) => document.fonts.load(specification),
+      timeoutMs: TERMINAL_FONT_READY_TIMEOUT_MS,
+    });
+    fontUpdaterRef.current = fontUpdater;
+    appliedFontFamilyRef.current = terminalFontFamilyRef.current;
+    const initialFontUpdate = fontUpdater.apply(terminalFontFamilyRef.current);
 
     // Snapshot fetch runs in parallel with the open-when-ready gate below;
     // whichever finishes second writes the snapshot into a correctly-sized
@@ -190,7 +209,7 @@ export function ShellTab({
       snapshotReady.current = true;
       pendingLive.current = '';
       // One last fit + refresh once xterm has processed the write queue.
-      requestAnimationFrame(syncSize);
+      requestAnimationFrame(() => synchronizeGeometry());
     }
 
     /**
@@ -202,7 +221,8 @@ export function ShellTab({
      * the wrong column.
      */
     async function openWhenReady(): Promise<void> {
-      try { await (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts?.ready; }
+      await initialFontUpdate;
+      try { await document.fonts.ready; }
       catch { /* fine — best-effort */ }
       // Poll (via rAF) until the host has real dimensions. Bail after
       // ~2s so we don't hold up the terminal forever if a parent layout
@@ -234,7 +254,7 @@ export function ShellTab({
       term.textarea?.addEventListener('focus', () => focusReg.used());
       focusReg.opened();
       // First fit AFTER open so xterm has an element to measure.
-      syncSize();
+      synchronizeGeometry();
       // Snapshot may already be back — write it into the correctly-sized
       // terminal. If not yet, the .then() below picks up.
       if (cachedSnapshot != null) writeSnapshotAndFlush();
@@ -245,12 +265,12 @@ export function ShellTab({
     // Fit follow-ups catch flex parents that settle after our open, plus
     // any late-arriving font-metric changes. The ResizeObserver below
     // handles genuine size changes during the terminal's lifetime.
-    const late1 = window.setTimeout(syncSize, 150);
-    const late2 = window.setTimeout(syncSize, 400);
-    const onWinFocus = () => syncSize();
+    const late1 = window.setTimeout(synchronizeGeometry, 150);
+    const late2 = window.setTimeout(synchronizeGeometry, 400);
+    const onWinFocus = () => synchronizeGeometry();
     window.addEventListener('focus', onWinFocus);
 
-    const ro = new ResizeObserver(syncSize);
+    const ro = new ResizeObserver(() => synchronizeGeometry());
     if (containerRef.current) ro.observe(containerRef.current);
 
     // Intercept every copy from the terminal (Cmd+C, right-click Copy,
@@ -282,7 +302,9 @@ export function ShellTab({
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     return () => {
+      fontUpdater.dispose();
       disposed = true;
+      opened = false;
       window.clearTimeout(late1);
       window.clearTimeout(late2);
       window.removeEventListener('focus', onWinFocus);
@@ -293,12 +315,13 @@ export function ShellTab({
       linkProviderDisposable.dispose();
       focusReg.unregister();
       term.dispose();
-      termRef.current = null;
+      if (termRef.current === term) termRef.current = null;
+      if (fontUpdaterRef.current === fontUpdater) fontUpdaterRef.current = null;
+      if (geometrySyncRef.current === synchronizeGeometry) geometrySyncRef.current = null;
       searchRef.current = null;
     };
-    // We deliberately don't include fontSize here — a font-size change
-    // shouldn't recreate the terminal. The separate effect below applies
-    // it to the running Terminal instance instead.
+    // Font metric changes must not recreate the terminal. Dedicated effects below
+    // apply font size and family updates to the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, shellIndex]);
 
@@ -311,18 +334,19 @@ export function ShellTab({
     searchRef.current.findPrevious(q, { caseSensitive: false, wholeWord: false, regex: false });
   }, []);
 
-  // Push font-size changes into the running Terminal instance so ⌘+/⌘- feels live.
+  // Push font-size changes into the running instance and immediately remeasure its geometry.
   useEffect(() => {
     if (!termRef.current) return;
     termRef.current.options.fontSize = fontSize;
-    // Trigger a resize so the fit addon recomputes cols/rows for the new font metrics.
-    try {
-      const el = containerRef.current;
-      if (el) {
-        const evt = new Event('resize'); void evt; // no-op; ResizeObserver already handles container size, but font metric change requires fit re-run
-      }
-    } catch { /* ignore */ }
+    geometrySyncRef.current?.({ forceResize: true });
   }, [fontSize]);
+
+  useEffect(() => {
+    const updater = fontUpdaterRef.current;
+    if (!updater || appliedFontFamilyRef.current === terminalFontFamily) return;
+    appliedFontFamilyRef.current = terminalFontFamily;
+    void updater.apply(terminalFontFamily);
+  }, [terminalFontFamily]);
 
   // ⌘F opens the terminal search overlay when this tab has focus.
   // ⌘= / ⌘- / ⌘0 zoom the terminal font.

@@ -563,10 +563,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
 
   'settings:get': async (s, { key }) => ({ value: s.settings.get(key) }),
   'settings:set': async (s, { key, value }) => {
-    // The permission mode can only change through applyClaudePermissionMode
-    // (settings:set-claude-permission-mode), which keeps it in lockstep with
-    // the managed launch commands it rewrites — never via the generic setter.
+    // Permission mode and font preferences have dedicated validated setters.
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
+    if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -1256,13 +1255,15 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   }
 
   const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all', 'files:start-drag', 'app:renderer-ready-for-files']);
-  // Wired separately below: its emitted `settings:changed` events are keyed
-  // per changed setting, which the fixed per-channel CHANNEL_EMITS payload
-  // (one static payload per event name) can't express.
-  const CUSTOM_EMIT_CHANNELS = new Set<IpcChannelName>(['settings:set-claude-permission-mode']);
+  // Wired separately below: these channels emit keyed `settings:changed`
+  // events that the fixed per-channel payload cannot express.
+  const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
+    'settings:set-font': true,
+    'settings:set-claude-permission-mode': true,
+  };
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
-    if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS.has(channel)) continue; // wired below
+    if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS[channel]) continue; // wired below
     ipcMain.handle(channel, async (event, req) => {
       const fn = handlers[channel] as (s: Services, req: unknown, e?: Electron.IpcMainInvokeEvent) => Promise<unknown>;
       const result = await fn(services, req, event);
@@ -1270,6 +1271,12 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
       return result;
     });
   }
+
+  ipcMain.handle('settings:set-font', async (_e, req: IpcRequest<'settings:set-font'>) => {
+    const result = await handlers['settings:set-font'](services, req);
+    sendEvent('settings:changed', { key: req.key });
+    return result;
+  });
 
   ipcMain.handle('settings:set-claude-permission-mode', async (_e, req: IpcRequest<'settings:set-claude-permission-mode'>) => {
     const result = await handlers['settings:set-claude-permission-mode'](services, req);

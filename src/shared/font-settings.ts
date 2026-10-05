@@ -20,11 +20,14 @@ export function parseFontFamilyPreference(value: unknown): FontFamilyParseResult
   if (family.length === 0) return { ok: false, error: 'font family cannot be empty' };
   if (/[\u0000-\u001F]/u.test(family)) return { ok: false, error: 'font family cannot contain control characters' };
   let codePoints = 0;
-  for (const _codePoint of family) {
+  for (let offset = 0; offset < family.length;) {
+    const codePoint = family.codePointAt(offset);
+    if (codePoint === undefined) break;
     codePoints += 1;
     if (codePoints > MAX_FONT_FAMILY_CODE_POINTS) {
       return { ok: false, error: `font family cannot exceed ${MAX_FONT_FAMILY_CODE_POINTS} Unicode code points` };
     }
+    offset += codePoint > 0xFFFF ? 2 : 1;
   }
   return { ok: true, value: family };
 }
