@@ -13,6 +13,8 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'scrollback_lines':              10000,
   'max_watched_paths':             500,
   'theme':                         'dark',
+  'ui_font_family':                null,
+  'terminal_font_family':          null,
   'metaproject_base_url':          'https://projects.metalogix.solutions',
   'metaproject_last_username':     '',
   'window_opacity':                100,

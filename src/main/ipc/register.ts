@@ -15,6 +15,7 @@ import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
+import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -568,6 +569,13 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
     s.settings.set(key, value as never);
     return { ok: true } as const;
+  },
+  'settings:set-font': async (s, request) => {
+    if (!isFontSettingKey(request.key)) throw new Error('invalid font setting key');
+    const parsed = parseFontFamilyPreference(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    s.settings.set(request.key, parsed.value);
+    return { value: parsed.value };
   },
   'settings:set-claude-permission-mode': async (s, { mode }) => {
     if (!isClaudePermissionMode(mode)) throw new Error(`invalid Claude permission mode (expected 'auto' or 'bypass')`);
