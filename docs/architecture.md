@@ -38,6 +38,34 @@ Edit mode (`src/renderer/components/FilesTab.tsx:610`).
 | Contract | `src/renderer/markdown/mermaid/paletteContract.ts` | Token names, reference materials and contrast thresholds shared by the palette and the E2E suite. |
 | Contract | `src/renderer/markdown/contract.ts` | Class names, attributes, messages and types that the other files and the E2E suite share. |
 
+### Configurable fonts
+
+The app stores independent UI and Terminal font-family preferences. A null
+preference preserves the compatibility stack (`src/shared/font-settings.ts:1-10`).
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/font-settings.ts` | Defines the two keys, fallback stacks, and bounded family-name parser. |
+| Persistence | `src/main/repos/settings-repo.ts` | Seeds null defaults and stores the selected family in SQLite. |
+| IO | `src/main/ipc/register.ts` | Validates dedicated font writes, blocks the generic setter, and broadcasts keyed changes after a successful write. |
+| Renderer state | `src/renderer/fonts/font-settings-context.tsx` | Loads both preferences once per renderer and refreshes the changed key. |
+| Platform adapter | `src/renderer/fonts/local-font-access.ts` | Requests installed-family metadata after a user action. It does not read font blobs. |
+| Presentation | `src/renderer/components/FontControl.tsx` | Provides manual entry, installed-family selection, preview, status, and reset. |
+| Style adapter | `src/renderer/fonts/use-apply-ui-font.ts` | Sets the UI font through one CSS custom property. |
+| Terminal adapter | `src/renderer/terminal-font-update.ts` | Updates xterm in place, waits for readiness, and synchronizes terminal geometry. |
+
+The UI preference changes inherited application text. Explicit `.font-mono`
+and Markdown code rules keep their compatibility stack
+(`src/renderer/styles.css:413-415`, `:457-458`). The layered Files editor
+therefore keeps identical metrics for its gutter, syntax underlay, and
+textarea (`src/renderer/components/FilesTab.tsx:621-624`, `:698-720`).
+
+The Terminal preference updates every `ShellTab` through the renderer-local
+font store. The updater changes `term.options.fontFamily`, waits for the
+selected family with a bounded timeout, fits the terminal, clears stale glyph
+state, repaints all rows, and reports the resulting dimensions to the PTY
+(`src/renderer/terminal-font-update.ts:108-139`).
+
 ### Terminal focus
 
 When a window gains OS focus, or the user switches project, the visible
@@ -311,6 +339,23 @@ A link click in the preview always calls `preventDefault`
 Links inside a diagram do nothing. `http`, `https`, `mailto` and `file`
 links outside a diagram open through the `app:open-external` IPC channel.
 
+### Font preference change
+
+1. The renderer sends `settings:set-font` with one font key and an unknown
+   value.
+2. The main process validates and normalizes the value. It stores the value,
+   then broadcasts `settings:changed` for that key
+   (`src/main/ipc/register.ts:566-572`, `:1300-1304`).
+3. Each renderer font store reads the changed key. The main window and each
+   popout window therefore receive the same durable value
+   (`src/renderer/fonts/font-settings-context.tsx:39-68`).
+4. The UI adapter updates the root CSS property, or each terminal updater
+   changes its existing xterm instance (`src/renderer/fonts/use-apply-ui-font.ts:12-28`,
+   `src/renderer/components/ShellTab.tsx:337-349`).
+5. A terminal font change completes with fit, repaint, and PTY resize. It
+   does not recreate the PTY or replay scrollback
+   (`src/renderer/terminal-font-update.ts:68-105`).
+
 ### Claude notification event
 
 1. At app start, `runtime.ts` starts the receiver on an ephemeral
@@ -536,6 +581,16 @@ the whole side falls back to escaped plain text.
   is blocked. The renderer build excludes font files from asset inlining
   (`electron.vite.config.ts:63`). The KaTeX stylesheet is imported in
   `src/renderer/main.tsx:5`.
+- **Font discovery is explicit and optional.** Chromium Local Font Access is
+  permission-sensitive. Settings calls it only after the user selects
+  **Load installed fonts**. Manual exact-name entry and Reset remain
+  available when discovery is unsupported or denied
+  (`src/renderer/components/Settings.tsx:277-333`).
+- **A selected family is one literal CSS family.** The serializer validates
+  the value, escapes quotes and backslashes, and places it before the exact
+  compatibility fallback. It sets one CSSOM property and never creates
+  stylesheet text (`src/renderer/fonts/font-family.ts:10-25`,
+  `src/renderer/fonts/use-apply-ui-font.ts:12-28`).
 - **Terminal focus uses the renderer `window` focus event.** On macOS,
   webContents `focus` and `blur` do not fire when the user switches between
   windows, so the coordinator listens on the renderer `window` instead.
