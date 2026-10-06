@@ -12,6 +12,7 @@ import { expect, _electron as electron, type Page, type ElectronApplication } fr
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { SIDEBAR_TESTIDS } from '../../../src/renderer/sidebar-copy';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 
@@ -72,6 +73,10 @@ export async function launch(projectNames: string[] = ['alpha']): Promise<Launch
     },
   };
 }
+
+/** The sidebar filter's text input, whether the test id sits on the input or on its wrapping field. */
+export const SIDEBAR_FILTER_INPUT =
+  `input[data-testid="${SIDEBAR_TESTIDS.filter}"], [data-testid="${SIDEBAR_TESTIDS.filter}"] input`;
 
 /** The sidebar row button for a project, by exact name. */
 export function projectRow(win: Page, name: string) {
@@ -219,7 +224,7 @@ export async function rememberedState(
 export async function clickRowsInOneTask(
   win: Page, names: string[], after: 'none' | 'focus-sidebar-filter' | 'open-switcher' = 'none',
 ): Promise<void> {
-  await win.evaluate(({ names, after }: { names: string[]; after: string }) => {
+  await win.evaluate(({ names, after, filterSel }: { names: string[]; after: string; filterSel: string }) => {
     const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="project-row"]')];
     for (const n of names) {
       const row = rows.find((r) => r.textContent?.trim() === n);
@@ -227,13 +232,13 @@ export async function clickRowsInOneTask(
       row.click();
     }
     if (after === 'focus-sidebar-filter') {
-      const filter = document.querySelector<HTMLInputElement>('input[placeholder="Filter…"]');
+      const filter = document.querySelector<HTMLInputElement>(filterSel);
       if (!filter) throw new Error('sidebar filter input not found');
       filter.focus();
     } else if (after === 'open-switcher') {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
     }
-  }, { names, after });
+  }, { names, after, filterSel: SIDEBAR_FILTER_INPUT });
 }
 
 /** The project switcher's search input (the switcher has no test id). */

@@ -284,14 +284,14 @@ async function focusMain(app: ElectronApplication): Promise<void> {
   }).toBe(true);
 }
 
-/** Computed bottom-border colour of a tab button (the active-tab underline). */
-async function underline(loc: Locator): Promise<string> {
-  return loc.evaluate((el) => getComputedStyle(el).borderBottomColor);
+/** Computed fill of a tab button (the active tab wears the accent tint). */
+async function tabFill(loc: Locator): Promise<string> {
+  return loc.evaluate((el) => getComputedStyle(el).backgroundColor);
 }
 
 /* ═══════════════════════════════ 1. placement ═══════════════════════════════ */
 
-test('tab bar reads Shell, Files, Diff, Env for any project; Diff activates with the shared underline (AC1, AC2)', async () => {
+test('tab bar reads Shell, Files, Diff, Env for any project; Diff activates with the shared active fill (AC1, AC2)', async () => {
   const win = await setup(['aTs'], { other: true });
   const tabBar = win.getByTestId(DIFF_TESTIDS.tabBar);
   const checkOrder = async () => {
@@ -307,16 +307,16 @@ test('tab bar reads Shell, Files, Diff, Env for any project; Diff activates with
   const shell = tabBar.getByRole('button', { name: 'Shell', exact: true });
   const files = tabBar.getByRole('button', { name: 'Files', exact: true });
   const diff = win.getByTestId(DIFF_TESTIDS.tab);
-  const activeColour = await underline(shell);
-  const inactiveColour = await underline(files);
-  expect(activeColour, 'control: active and inactive underlines differ').not.toBe(inactiveColour);
+  const activeColour = await tabFill(shell);
+  const inactiveColour = await tabFill(files);
+  expect(activeColour, 'control: active and inactive tab fills differ').not.toBe(inactiveColour);
 
   await diff.click();
   await expect(panelOf(win)).toBeVisible();
   await expect(win.locator('[data-testid="shell-tab"]'), 'the Shell body is gone').toHaveCount(0);
   // The tab buttons animate their colours (transition-colors), so wait for the transition to settle.
-  await expect.poll(() => underline(diff), { message: 'Diff wears the active underline' }).toBe(activeColour);
-  await expect.poll(() => underline(shell), { message: 'Shell is now inactive' }).toBe(inactiveColour);
+  await expect.poll(() => tabFill(diff), { message: 'Diff wears the active fill' }).toBe(activeColour);
+  await expect.poll(() => tabFill(shell), { message: 'Shell is now inactive' }).toBe(inactiveColour);
 
   // The other project (harness-default, not seeded) shows the same tab bar.
   await selectProject(win, OTHER);

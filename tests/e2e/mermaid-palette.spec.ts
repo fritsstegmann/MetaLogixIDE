@@ -70,6 +70,7 @@ import {
   type RoleSelector,
   type TextPair,
 } from './helpers/mermaid-palette';
+import { colourDistance, fmtColour, resolveToken } from './helpers/chrome-colour';
 
 const THEMES: EffectiveTheme[] = ['dark', 'light'];
 
@@ -423,6 +424,29 @@ test.describe('mermaid app palette', () => {
         }
       }
       expect(failures).toEqual([]);
+    });
+
+    test(`AC30a (${theme}): diagram text is scored over the translucent --surface-sheet`, async () => {
+      const win = ide.win;
+      await setTheme(win, theme);
+      const sheet = await resolveToken(win, '--surface-sheet');
+      // Translucent, so a scorer that skipped it would see a different backdrop.
+      expect(sheet.a, `--surface-sheet ${fmtColour(sheet)} is translucent`).toBeGreaterThan(0);
+      expect(sheet.a, `--surface-sheet ${fmtColour(sheet)} is translucent`).toBeLessThan(1);
+      const p = await openSettled(win, 'flowchart.md', 3);
+      const samples = await collectTextSamples(p.locator(BLOCK).nth(0));
+      const sheetLayers = samples
+        .flatMap((s) => s.stacks.flat())
+        .filter((l) => /^main\b/.test(l.desc));
+      // AC3/AC4 composite every stack, so the sheet sitting in the stacks is what they score over.
+      expect(sheetLayers.length, 'text stacks that include the <main> sheet').toBeGreaterThan(0);
+      for (const l of sheetLayers) {
+        const c = mustParse(l.colour, `sheet layer ${l.desc}`);
+        expect(
+          colourDistance(c, sheet),
+          `${l.desc} ${fmtColour(c)} vs --surface-sheet ${fmtColour(sheet)}`,
+        ).toBeLessThanOrEqual(2);
+      }
     });
 
     test(`AC5 (${theme}): meaningful graphics clear 3:1 against both reference backgrounds`, async () => {

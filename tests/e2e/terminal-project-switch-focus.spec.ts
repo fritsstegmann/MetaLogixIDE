@@ -51,8 +51,9 @@ import {
   switcherInput, switcherResult, newShellTab, sendNotificationFocusRequest,
   holdProjectOpen, hideTerminalHosts, showTerminalHosts, recordFocusins,
   rememberPrimaryTextarea, focusinsInclude,
-  MOCK_CLAUDE_BANNER, PRIMARY,
+  MOCK_CLAUDE_BANNER, PRIMARY, SIDEBAR_FILTER_INPUT,
 } from './helpers/focus';
+import { SIDEBAR_TESTIDS } from '../../src/renderer/sidebar-copy';
 
 const FOCUS_TIMEOUT = 10000;
 
@@ -147,7 +148,8 @@ test.describe('project switch focus', () => {
     const { app, win, cleanup } = await launch(['alpha']);
     try {
       await openProject(win, 'alpha');
-      await win.getByTestId('new-project-btn').click();
+      await win.getByTestId(SIDEBAR_TESTIDS.addButton).click();
+      await win.getByTestId(SIDEBAR_TESTIDS.menuNewProject).click();
       const dialog = win.getByTestId('new-project-dialog');
       await expect(dialog).toBeVisible();
       await win.getByTestId('new-project-name').fill('gamma');
@@ -276,7 +278,7 @@ test.describe('project switch focus', () => {
       const { app, win, cleanup } = await launch(['alpha', 'beta']);
       try {
         await openProject(win, 'alpha');
-        const filter = win.locator('input[placeholder="Filter…"]');
+        const filter = win.locator(SIDEBAR_FILTER_INPUT);
 
         await clickRowsInOneTask(win, ['beta'], 'focus-sidebar-filter');
 

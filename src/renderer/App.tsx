@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
+import { TitleGroup } from './components/TitleGroup';
+import { CHROME_TESTIDS } from './chrome-testids';
+import { SIDEBAR_WIDTH, useSidebarWidth } from './sidebar-width';
 import { ShellTab } from './components/ShellTab';
 import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
@@ -143,7 +146,7 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'settings',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks',
   );
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
@@ -223,7 +226,7 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
-  const [sidebarWidth, setSidebarWidth] = usePersistedNumber('metaide.sidebarWidth', 288, 200, 560);
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
   const [chatPanelWidth, setChatPanelWidth] = usePersistedNumber('metaide.chatPanelWidth', 400, 300, 640);
@@ -678,19 +681,20 @@ function MainApp() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-transparent">
-      {/* Native-feeling drag region for hidden-inset title bar */}
-      <div className="drag h-9 flex items-center pl-[76px] pr-2 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border]">
-        <span className="text-xs opacity-70 ml-1 font-medium">MetaLogix IDE</span>
-        {selected && (
-          <span className="text-[11px] text-[--text-muted] ml-3 truncate max-w-[360px]" title={selected.path}>
-            <span className="opacity-60">▸ </span>{selected.name}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1 no-drag">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+      {/* Native-feeling drag region for hidden-inset title bar. pr-[3px] puts the
+          last button's 14px glyph 12px from the right edge, mirroring the traffic lights' inset. */}
+      <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
+        <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
+          <TitleGroup
+            projectName={selected?.name ?? null}
+            branch={git.isRepo ? (git.branch ?? 'HEAD') : null}
+          />
+        </div>
+        <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
           <button
             onClick={cycleTheme}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title={`Theme: ${themeMode}${themeMode === 'system' ? ` (following OS — currently ${effectiveTheme})` : ''}. Click to toggle.`}
             data-testid="theme-toggle"
             data-theme-mode={themeMode}
@@ -704,7 +708,7 @@ function MainApp() {
                 toast(`Tiled ${arranged} window${arranged === 1 ? '' : 's'}`, { kind: 'success', timeoutMs: 1200 });
               } catch (e) { toast('Tile failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') }); }
             }}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Tile all our windows on the screen"
             data-testid="tile-windows"
           >
@@ -712,7 +716,7 @@ function MainApp() {
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Settings (⌘,)"
             data-testid="settings-open"
           >
@@ -725,14 +729,9 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            if (v === 'settings') { setSettingsOpen(true); return; }
-            if (v === 'chat' || v === 'projects' || v === 'git' || v === 'tasks') {
-              // Toggle if the same view is clicked twice — quality-of-life.
-              setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
-              if (!sidebarOpen) toggleSidebar(true, true);
-              return;
-            }
-            setActiveView(v);
+            // Toggle if the same view is clicked twice — quality-of-life.
+            setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
+            if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}
@@ -755,16 +754,16 @@ function MainApp() {
           <ResizeHandle
             value={sidebarWidth}
             onChange={setSidebarWidth}
-            onReset={() => setSidebarWidth(288)}
-            min={200}
-            max={560}
+            onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+            min={SIDEBAR_WIDTH.min}
+            max={SIDEBAR_WIDTH.max}
             side="left"
           />
           {activeView === 'chat' && (
             <>
               <div
                 data-view="chat"
-                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                className="section-panel h-full flex flex-col shrink-0"
                 style={{ width: chatPanelWidth }}
               >
                 <ChatTab
@@ -787,7 +786,7 @@ function MainApp() {
             <>
               <div
                 data-view="git"
-                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                className="section-panel h-full flex flex-col shrink-0"
                 style={{ width: chatPanelWidth }}
               >
                 <GitPanel projectId={selected?.id ?? null} />
@@ -806,7 +805,7 @@ function MainApp() {
             <>
               <div
                 data-view="tasks"
-                className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+                className="section-panel h-full flex flex-col shrink-0"
                 style={{ width: chatPanelWidth }}
               >
                 <TasksPanel
@@ -825,8 +824,8 @@ function MainApp() {
             </>
           )}
         </Reveal>
-        <main className="flex-1 flex flex-col min-h-0 bg-[--panel-strong]/40">
-          <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60" data-testid={DIFF_TESTIDS.tabBar}>
+        <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
+          <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
             <TabButton
@@ -837,7 +836,7 @@ function MainApp() {
             >
               {DIFF_COPY.tabLabel}
               {diffCount !== null && (
-                <span aria-hidden className="ml-1.5 font-mono text-[10px] text-[--text-muted]" data-testid={DIFF_TESTIDS.tabCount}>
+                <span aria-hidden className="ml-1.5 font-mono text-[10px] text-[--hue-orange-text]" data-testid={DIFF_TESTIDS.tabCount}>
                   {diffCount}
                 </span>
               )}
@@ -858,7 +857,7 @@ function MainApp() {
             <div className="ml-auto flex items-center gap-1.5 pr-2">
               {selected && (
                 <>
-                  <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--panel-strong] border border-[--border] text-[11px] max-w-[280px]" title={selected.path}>
+                  <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
                     <StatusDot state={selectedClaudeState} />
                     <span className="truncate font-medium">{selected.name}</span>
                     <button
@@ -1042,8 +1041,8 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
       : `MetaLogix IDE · shell`;
   }, [projectName, shellIndex]);
   return (
-    <div className="h-screen w-screen flex flex-col bg-transparent">
-      <div className="drag h-9 flex items-center gap-2 pl-[76px] pr-3 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border] min-w-0">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+      <div className="drag h-11 flex items-center gap-2 pl-[76px] pr-3 shrink-0 min-w-0">
         {/* Prominent project name — the whole reason a user pops shells out
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
@@ -1059,17 +1058,17 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
           MetaLogix IDE
         </span>
       </div>
-      <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
+      <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0">
         <button
           onClick={() => setTab('shell')}
-          className={`px-3 py-1.5 border-b-2 transition-colors ${tab === 'shell' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1 rounded-md transition-colors ${tab === 'shell' ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'}`}
         >Shell</button>
         <button
           onClick={() => setTab('files')}
-          className={`px-3 py-1.5 border-b-2 transition-colors ${tab === 'files' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1 rounded-md transition-colors ${tab === 'files' ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'}`}
         >Files</button>
       </div>
-      <div className="flex-1 min-h-0 bg-[--panel-strong]/40">
+      <div className="flex-1 min-h-0 bg-[--surface-sheet] rounded-xl mx-2 mb-2">
         {tab === 'shell' ? (
           <ShellTab
             projectId={projectId}
@@ -1109,10 +1108,11 @@ function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonPr
       onClick={onClick}
       data-testid={testId}
       aria-label={ariaLabel}
-      className={`px-3 py-1.5 border-b-2 transition-colors ${
+      aria-current={active ? 'page' : undefined}
+      className={`h-8 px-3 rounded-lg transition-colors ${
         active
-          ? 'border-[--accent] text-[--text]'
-          : 'border-transparent text-[--text-muted] hover:text-[--text]'
+          ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium'
+          : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
       }`}
     >
       {children}
@@ -1419,7 +1419,7 @@ function ShellTabsBar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="flex items-center gap-1 px-2 py-1 border-b border-[--border] bg-[--panel]/40 text-xs shrink-0 overflow-visible">
+    <div className="flex items-center gap-1 px-2 py-1 text-xs shrink-0 overflow-visible">
       <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
@@ -1434,7 +1434,7 @@ function ShellTabsBar({
               data-testid={SHELL_TAB_TEST_ID}
               data-shell-index={s.shellIndex}
               className={`group flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md cursor-pointer whitespace-nowrap
-                ${isActive ? 'bg-[--panel-strong] border border-[--border]' : 'hover:bg-[--panel-strong]/60 border border-transparent'}`}
+                ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}
               onClick={() => onSelect(s.shellIndex)}
             >
               <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />
@@ -1572,7 +1572,7 @@ function ShellSplit({
           role="separator"
           aria-orientation="vertical"
           onMouseDown={() => setDragging(true)}
-          className={`shrink-0 w-1 cursor-col-resize bg-transparent hover:bg-[color:var(--accent)]/40 border-l border-[--border] ${dragging ? 'bg-[color:var(--accent)]/60' : ''}`}
+          className={`shrink-0 w-1 cursor-col-resize ${dragging ? 'bg-[color:var(--accent)]/60' : 'bg-[--surface-hover] hover:bg-[color:var(--accent)]/40'}`}
         />
         {shownRight != null && (
           <div className="flex-1 min-h-0 min-w-0 relative" data-testid="split-right">
@@ -1795,13 +1795,13 @@ function MetaprojectBoardButton({ project, onRequestLink }: { project: Project; 
           toast('Could not open the board', { kind: 'error', detail: `${String(e).replace(/^Error:\s*/, '')} — URL: ${url}` });
         }
       }}
-      className={`text-[11px] px-2 py-0.5 rounded-md border border-[--border] flex items-center gap-1 ${
+      className={`text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1.5 ${
         isLinked ? 'hover:bg-[--panel-strong] text-[--text]' : 'text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text]'
       }`}
       title={isLinked ? `Open ${linked} on the metaproject board` : 'Not linked to a metaproject board — click to link or create one'}
       data-testid="metaproject-board"
     >
-      <BoardIcon />
+      <span className="text-[--hue-purple]"><BoardIcon /></span>
       <span>{isLinked ? 'Board' : 'Board · link'}</span>
     </button>
   );

@@ -17,6 +17,7 @@ import { test, expect, _electron as electron, type Page, type ElectronApplicatio
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { SIDEBAR_TESTIDS } from '../../src/renderer/sidebar-copy';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 type Recorded = { testid: string | null; clip: boolean };
@@ -121,7 +122,7 @@ test('split open/close animates the right pane and keeps the left terminal mount
 test('sidebar animates on click but toggles instantly from the keyboard', async () => {
   const { app, win, cleanup } = await launch();
   try {
-    const sidebar = win.getByTestId('new-project-btn');
+    const sidebar = win.getByTestId(SIDEBAR_TESTIDS.addButton);
     await expect(sidebar).toBeVisible();
 
     await recordAnimations(win);

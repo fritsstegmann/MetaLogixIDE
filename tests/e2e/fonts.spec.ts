@@ -146,25 +146,60 @@ async function setFontThroughUi(win: Page, key: FontSettingKey, value: string): 
   await expect.poll(() => setting(win, key), { timeout: E2E_TIMEOUT }).toBe(value.trim());
 }
 
+type FontQueryGlobals = { __fontQueryCount?: number; __releaseFontQuery?: () => void };
+
+/**
+ * Replaces `window.queryLocalFonts`. Every call is counted in
+ * `__fontQueryCount` (see `fontQueryCount`). `deferred` answers with
+ * `families` only once `releaseFontQuery` runs, so a test can act while
+ * discovery is still pending.
+ */
 async function mockLocalFonts(
   win: Page,
-  behavior: { kind: 'success'; families: string[] } | { kind: 'denied' } | { kind: 'unsupported' },
+  behavior:
+    | { kind: 'success'; families: string[] }
+    | { kind: 'deferred'; families: string[] }
+    | { kind: 'denied' }
+    | { kind: 'unsupported' },
 ): Promise<void> {
   await win.evaluate((mock) => {
+    const globals = window as unknown as Window & FontQueryGlobals;
     if (mock.kind === 'unsupported') {
       Object.defineProperty(window, 'queryLocalFonts', { configurable: true, value: undefined });
       return;
     }
-    const query = mock.kind === 'denied'
-      ? async (): Promise<never> => { throw new DOMException('Font access denied by test', 'NotAllowedError'); }
-      : async (): Promise<Array<{ family: string }>> => mock.families.map((family) => ({ family }));
+    const metadata = (): Array<{ family: string }> => (mock.kind === 'denied' ? [] : mock.families.map((family) => ({ family })));
+    const query = async (): Promise<Array<{ family: string }>> => {
+      globals.__fontQueryCount = (globals.__fontQueryCount ?? 0) + 1;
+      if (mock.kind === 'denied') throw new DOMException('Font access denied by test', 'NotAllowedError');
+      if (mock.kind === 'deferred') {
+        await new Promise<void>((release) => { globals.__releaseFontQuery = release; });
+      }
+      return metadata();
+    };
     Object.defineProperty(window, 'queryLocalFonts', { configurable: true, value: query });
   }, behavior);
 }
 
-function installedFamilies(win: Page, key: FontSettingKey): Locator {
+/** How many times the page has called `queryLocalFonts` since the first mock. */
+async function fontQueryCount(win: Page): Promise<number> {
+  return win.evaluate(() => (window as unknown as Window & FontQueryGlobals).__fontQueryCount ?? 0);
+}
+
+/** Lets a pending `deferred` discovery answer. */
+async function releaseFontQuery(win: Page): Promise<void> {
+  await win.evaluate(() => {
+    const globals = window as unknown as Window & FontQueryGlobals;
+    if (!globals.__releaseFontQuery) throw new Error('no deferred font query is pending');
+    globals.__releaseFontQuery();
+    delete globals.__releaseFontQuery;
+  });
+}
+
+/** The open option list of one font combobox ("System default", installed families, "Use …"). */
+function fontOptions(win: Page, key: FontSettingKey): Locator {
   const label = key === 'ui_font_family' ? FONT_COPY.uiLabel : FONT_COPY.terminalLabel;
-  return win.getByRole('list', { name: `Installed fonts for ${label.toLowerCase()}`, exact: true });
+  return win.getByRole('listbox', { name: `${label} options`, exact: true });
 }
 
 /** Finds xterm Terminal refs through the same React-fiber hook precedent as claude-tab-remount.spec.ts. */
@@ -389,30 +424,85 @@ function latestCallsByShell(calls: ResizeCall[]): Map<number, ResizeCall> {
   return latest;
 }
 
+type SetFontGlobals = typeof globalThis & { __fontSetCalls: string[] };
+
+/** Records the key of every `settings:set-font` call the renderer makes. */
+async function installSetFontRecorder(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ ipcMain }) => {
+    const ipcMainWithHandlers = ipcMain as unknown as IpcMainWithHandlers;
+    const original = ipcMainWithHandlers._invokeHandlers?.get('settings:set-font');
+    if (!original) throw new Error('settings:set-font handler unavailable');
+    const globals = globalThis as SetFontGlobals;
+    globals.__fontSetCalls = [];
+    ipcMain.removeHandler('settings:set-font');
+    ipcMain.handle('settings:set-font', (event, request: { key?: string }) => {
+      globals.__fontSetCalls.push(String(request.key));
+      return original(event, request);
+    });
+  });
+}
+
+async function setFontCalls(app: ElectronApplication, key: FontSettingKey): Promise<number> {
+  return app.evaluate((_electron, settingKey) => (globalThis as SetFontGlobals).__fontSetCalls.filter((k) => k === settingKey).length, key);
+}
+
+/** Moves the real mouse over a row twice, so the second event is a genuine change of position. */
+async function hoverRow(win: Page, row: Locator): Promise<void> {
+  await expect(row).toBeVisible();
+  // mouse.move does not scroll: a row under the modal footer would receive no events.
+  await row.scrollIntoViewIfNeeded();
+  let box = await row.boundingBox();
+  // The list animates in; wait for the row to stop moving before aiming at it.
+  await expect.poll(async () => {
+    const next = await row.boundingBox();
+    const settled = next !== null && box !== null && next.x === box.x && next.y === box.y;
+    box = next;
+    return settled;
+  }).toBe(true);
+  if (!box) throw new Error('option row has no bounding box');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await win.mouse.move(x - 20, y);
+  await win.mouse.move(x, y);
+  await win.mouse.move(x + 6, y + 1);
+}
+
+/** Clicks the Fonts heading: neutral Settings content outside both font lists. */
+async function clickElsewhere(win: Page): Promise<void> {
+  await win.getByTestId('settings-modal').getByRole('heading', { name: FONT_COPY.sectionLabel, exact: true }).click();
+}
+
 test.describe.serial('configurable UI and terminal fonts', () => {
-  test('AC1-AC7, AC9-AC10: independent accessible controls support manual keyboard entry, validation, reset, and safe literal names', async () => {
+  test('AC40-AC42 (fonts spec AC2, AC4-AC7, AC9-AC10): independent Interface and Terminal comboboxes support manual keyboard entry, validation, System default, and safe literal names', async () => {
     const harness = await launchHarness();
     try {
       const { win } = harness;
+      await mockLocalFonts(win, { kind: 'success', families: [] });
       await openSettings(win);
       const modal = win.getByTestId('settings-modal');
-      const ui = win.getByLabel(FONT_COPY.uiLabel, { exact: true });
-      const terminal = win.getByLabel(FONT_COPY.terminalLabel, { exact: true });
+      // AC40: the labels are literal copy, not read back from the contract under test.
+      const ui = win.getByLabel('Interface', { exact: true });
+      const terminal = win.getByLabel('Terminal', { exact: true });
 
       await expect(ui).toHaveCount(1);
       await expect(terminal).toHaveCount(1);
+      await expect(ui).toHaveAttribute('role', 'combobox');
+      await expect(terminal).toHaveAttribute('role', 'combobox');
       await expect(fontInput(win, 'ui_font_family')).toHaveValue('');
       await expect(fontInput(win, 'terminal_font_family')).toHaveValue('');
+      await expect(ui).toHaveAttribute('placeholder', FONT_COPY.defaultValue);
 
       await ui.focus();
       await expect(ui).toBeFocused();
+      await expect(ui).toHaveAttribute('aria-expanded', 'true');
 
       await ui.fill('  Trimmed Ω Family  ');
+      await expect(fontOptions(win, 'ui_font_family').getByRole('option', { name: FONT_COPY.customOption('Trimmed Ω Family'), exact: true })).toBeVisible();
       await ui.press('Enter');
       await expect.poll(() => setting(win, 'ui_font_family')).toBe('Trimmed Ω Family');
       await expect(ui).toHaveValue('Trimmed Ω Family');
 
-      for (const invalid of ['   ', 'bad\u0000family', '😀'.repeat(257)]) {
+      for (const invalid of ['bad\u0000family', '😀'.repeat(257)]) {
         await ui.fill(invalid);
         await ui.press('Enter');
         await expect.poll(() => setting(win, 'ui_font_family')).toBe('Trimmed Ω Family');
@@ -428,20 +518,35 @@ test.describe.serial('configurable UI and terminal fonts', () => {
       expect(cssValue).toContain('quoted');
       expect(cssValue).toContain(UI_FONT_FALLBACK);
 
+      // The "System default" option replaces the old Reset button.
       await setFontThroughUi(win, 'terminal_font_family', 'Independent Terminal');
-      await fontReset(win, 'ui_font_family').focus();
-      await win.keyboard.press('Enter');
+      await ui.click();
+      await fontReset(win, 'ui_font_family').click();
       await expect.poll(() => setting(win, 'ui_font_family')).toBeNull();
       expect(await setting(win, 'terminal_font_family')).toBe('Independent Terminal');
-
       await expect(ui).toHaveValue('');
       await expect(terminal).toHaveValue('Independent Terminal');
+
+      // AC42: an empty or whitespace-only field saves System default. This
+      // replaces the fonts-spec AC3 rejection that the '   ' case used to assert.
+      await terminal.fill('   ');
+      await terminal.press('Enter');
+      await expect.poll(() => setting(win, 'terminal_font_family')).toBeNull();
+      await expect(terminal).toHaveValue('');
+      for (const blank of ['', '   ']) {
+        await setFontThroughUi(win, 'ui_font_family', 'Blank Probe');
+        await ui.fill(blank);
+        await ui.press('Enter');
+        await expect.poll(() => setting(win, 'ui_font_family'), { message: `${JSON.stringify(blank)} saves System default` }).toBeNull();
+        await expect(ui).toHaveValue('');
+        await expect(modal.getByRole('alert'), `${JSON.stringify(blank)} is not a validation error`).toHaveCount(0);
+      }
     } finally {
       await harness.close();
     }
   });
 
-  test('installed font pickers filter, preview, and independently persist keyboard selections without closing Settings', async () => {
+  test('installed font list filters, previews, and independently persists keyboard selections without closing Settings', async () => {
     const harness = await launchHarness();
     try {
       const { win } = harness;
@@ -453,91 +558,111 @@ test.describe.serial('configurable UI and terminal fonts', () => {
       const modal = win.getByTestId('settings-modal');
       await setFontThroughUi(win, 'ui_font_family', 'Missing UI Family');
       await setFontThroughUi(win, 'terminal_font_family', 'Missing Font Family');
-
-      const choose = modal.getByRole('button', { name: 'Choose installed font', exact: true });
-      await choose.first().focus();
-      await win.keyboard.press('Enter');
-      const uiSearch = modal.getByRole('searchbox', {
-        name: `Search installed fonts for ${FONT_COPY.uiLabel.toLowerCase()}`, exact: true,
-      });
-      const uiFamilies = installedFamilies(win, 'ui_font_family');
-      await expect(uiSearch).toBeVisible();
-      await expect(uiFamilies.getByRole('button')).toHaveCount(4);
-      for (const family of ['Alpha Font', 'Comma, Family', 'Éclair Mono', 'zeta Mono']) {
-        const row = uiFamilies.getByRole('button', { name: new RegExp(`^${family} `) });
-        await expect(row).toBeVisible();
-        await expect(row.getByText('Aa Bb 0O 1l — The quick brown fox', { exact: true }))
-          .toHaveCSS('font-family', new RegExp(family));
-      }
-      await expect(fontStatus(win, 'ui_font_family')).toContainText(FONT_COPY.unavailable);
-      await expect(fontStatus(win, 'terminal_font_family')).toContainText(FONT_COPY.unavailable);
+      await expect(fontStatus(win, 'ui_font_family')).toHaveText(FONT_COPY.unavailable);
+      await expect(fontStatus(win, 'terminal_font_family')).toHaveText(FONT_COPY.unavailable);
       const unavailablePreviewStack = await modal.getByLabel(`${FONT_COPY.terminalLabel} preview`)
         .evaluate((element) => getComputedStyle(element).fontFamily);
       expect(unavailablePreviewStack).toContain('Missing Font Family');
       expect(unavailablePreviewStack).toContain(TERMINAL_FONT_FALLBACK);
 
-      await uiSearch.fill('  ÉCL  ');
-      await expect(uiFamilies.getByRole('button')).toHaveCount(1);
-      await expect(uiFamilies.getByRole('button', { name: /^Éclair Mono / })).toBeVisible();
-      await expect(uiFamilies.getByRole('button', { name: /^Alpha Font / })).toHaveCount(0);
-      await uiSearch.fill('No such installed family');
-      await expect(uiFamilies.getByRole('button')).toHaveCount(0);
-      await expect(modal.getByText('No installed fonts match your search.', { exact: true })).toBeVisible();
+      // Opening the field lists System default plus every installed family, each in its own face.
+      const ui = fontInput(win, 'ui_font_family');
+      await ui.click();
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      await expect(uiOptions.getByRole('option')).toHaveCount(5);
+      // The row's text includes an aria-hidden ✓ glyph, so match the accessible name.
+      await expect(uiOptions.getByRole('option').first()).toHaveAccessibleName('System default');
+      for (const family of ['Alpha Font', 'Comma, Family', 'Éclair Mono', 'zeta Mono']) {
+        const row = uiOptions.getByRole('option', { name: family, exact: true });
+        await expect(row).toBeVisible();
+        await expect(row.getByText(family, { exact: true })).toHaveCSS('font-family', new RegExp(family));
+      }
+
+      // Typing filters case-insensitively and offers the typed name as a literal.
+      await ui.fill('  ÉCL  ');
+      await expect(uiOptions.getByRole('option', { name: 'Éclair Mono', exact: true })).toBeVisible();
+      await expect(uiOptions.getByRole('option', { name: 'Alpha Font', exact: true })).toHaveCount(0);
+      await expect(uiOptions.getByRole('option', { name: FONT_COPY.customOption('ÉCL'), exact: true })).toBeVisible();
+      await ui.fill('No such installed family');
+      await expect(uiOptions.getByRole('option')).toHaveCount(2);
       expect(await setting(win, 'ui_font_family')).toBe('Missing UI Family');
-      await uiSearch.fill('écl');
-      await expect(modal.getByText('No installed fonts match your search.', { exact: true })).toHaveCount(0);
-      await uiSearch.focus();
-      await win.keyboard.press('Tab');
-      await expect(uiFamilies.getByRole('button', { name: /^Éclair Mono / })).toBeFocused();
-      await win.keyboard.press('Enter');
+      await ui.fill('écl');
+      const eclairId = await uiOptions.getByRole('option', { name: 'Éclair Mono', exact: true }).getAttribute('id');
+      await expect(ui, 'typing highlights the first match').toHaveAttribute('aria-activedescendant', eclairId ?? '');
+      await ui.press('Enter');
       await expect.poll(() => setting(win, 'ui_font_family')).toBe('Éclair Mono');
-      await expect(fontInput(win, 'ui_font_family')).toHaveValue('Éclair Mono');
-      await expect(fontStatus(win, 'ui_font_family')).toHaveText('Font is installed on this computer.');
+      await expect(ui).toHaveValue('Éclair Mono');
+      await expect(fontStatus(win, 'ui_font_family')).toHaveText('');
+      await expect(uiOptions).toHaveCount(0);
       expect(await setting(win, 'terminal_font_family')).toBe('Missing Font Family');
 
-      await choose.click();
-      const terminalSearch = modal.getByRole('searchbox', {
-        name: `Search installed fonts for ${FONT_COPY.terminalLabel.toLowerCase()}`, exact: true,
-      });
-      const terminalFamilies = installedFamilies(win, 'terminal_font_family');
-      await terminalSearch.fill('ZETA');
-      await expect(terminalFamilies.getByRole('button')).toHaveCount(1);
-      await expect(uiSearch).toHaveValue('écl');
-      await terminalSearch.focus();
-      await win.keyboard.press('Tab');
-      await expect(terminalFamilies.getByRole('button', { name: /^zeta Mono / })).toBeFocused();
-      await win.keyboard.press('Space');
+      const terminal = fontInput(win, 'terminal_font_family');
+      await terminal.fill('ZETA');
+      const terminalOptions = fontOptions(win, 'terminal_font_family');
+      await expect(terminalOptions.getByRole('option', { name: 'zeta Mono', exact: true })).toBeVisible();
+      await terminal.press('Enter');
       await expect.poll(() => setting(win, 'terminal_font_family')).toBe('zeta Mono');
-      await expect(fontInput(win, 'terminal_font_family')).toHaveValue('zeta Mono');
-      await expect(fontStatus(win, 'terminal_font_family')).toHaveText('Font is installed on this computer.');
+      await expect(terminal).toHaveValue('zeta Mono');
+      await expect(fontStatus(win, 'terminal_font_family')).toHaveText('');
       expect(await setting(win, 'ui_font_family')).toBe('Éclair Mono');
 
-      await terminalSearch.focus();
-      await win.keyboard.press('Escape');
-      await expect(terminalSearch).toHaveCount(0);
-      await expect(terminalFamilies).toHaveCount(0);
-      await expect(fontInput(win, 'terminal_font_family')).toBeFocused();
-      await expect(uiSearch).toBeVisible();
+      // Arrow keys move through the list; Escape closes it, restores the saved name, and keeps Settings open.
+      await terminal.press('ArrowDown');
+      await expect(terminalOptions).toBeVisible();
+      await terminal.fill('Alpha');
+      await terminal.press('Escape');
+      await expect(terminalOptions).toHaveCount(0);
+      await expect(terminal).toHaveValue('zeta Mono');
+      await expect(terminal).toBeFocused();
       await expect(modal).toBeVisible();
-      await uiSearch.focus();
-      await win.keyboard.press('Escape');
-      await expect(uiSearch).toHaveCount(0);
-      await expect(fontInput(win, 'ui_font_family')).toBeFocused();
-      await expect(modal).toBeVisible();
-      await expect(choose).toHaveCount(2);
-      expect(await setting(win, 'ui_font_family')).toBe('Éclair Mono');
       expect(await setting(win, 'terminal_font_family')).toBe('zeta Mono');
+
+      // The same for the Interface list.
+      await ui.click();
+      await expect(uiOptions).toBeVisible();
+      await ui.fill('Comma');
+      await ui.press('Escape');
+      await expect(uiOptions).toHaveCount(0);
+      await expect(ui).toHaveValue('Éclair Mono');
+      await expect(ui).toBeFocused();
+      await expect(modal).toBeVisible();
+      expect(await setting(win, 'ui_font_family')).toBe('Éclair Mono');
 
       await win.getByTestId('settings-done').click();
       await openSettings(win);
       await expect(fontInput(win, 'ui_font_family')).toHaveValue('Éclair Mono');
       await expect(fontInput(win, 'terminal_font_family')).toHaveValue('zeta Mono');
+
+      // AC46: ArrowDown/ArrowUp move the highlight and Enter saves the highlighted option.
+      const terminalAgain = fontInput(win, 'terminal_font_family');
+      const reopened = fontOptions(win, 'terminal_font_family');
+      await terminalAgain.focus();
+      await expect(reopened.getByRole('option')).toHaveCount(5);
+      const start = await terminalAgain.getAttribute('aria-activedescendant');
+      expect(start, 'an open list has a highlight').toBeTruthy();
+      await terminalAgain.press('ArrowDown');
+      await expect(terminalAgain, 'ArrowDown moves the highlight').not.toHaveAttribute('aria-activedescendant', start ?? '');
+      const down = await terminalAgain.getAttribute('aria-activedescendant');
+      await terminalAgain.press('ArrowUp');
+      await expect(terminalAgain, 'ArrowUp moves it back').toHaveAttribute('aria-activedescendant', start ?? '');
+      await terminalAgain.press('ArrowDown');
+      await expect(terminalAgain).toHaveAttribute('aria-activedescendant', down ?? '');
+      let highlighted: string | undefined;
+      for (const name of ['System default', 'Alpha Font', 'Comma, Family', 'Éclair Mono', 'zeta Mono']) {
+        if (await reopened.getByRole('option', { name, exact: true }).getAttribute('id') === down) highlighted = name;
+      }
+      if (highlighted === undefined) throw new Error(`highlight ${down} is not one of the five options`);
+      expect(highlighted, 'input state: the highlight is not the saved font, so Enter must change it').not.toBe('zeta Mono');
+      await terminalAgain.press('Enter');
+      await expect.poll(() => setting(win, 'terminal_font_family'))
+        .toBe(highlighted === 'System default' ? null : highlighted);
+      expect(await setting(win, 'ui_font_family')).toBe('Éclair Mono');
     } finally {
       await harness.close();
     }
   });
 
-  test('denied font discovery retries successfully without leaving Settings and keeps manual entry and reset usable', async () => {
+  test('denied font discovery retries from the list without leaving Settings and keeps manual entry and System default usable', async () => {
     const harness = await launchHarness();
     try {
       const { win } = harness;
@@ -545,31 +670,170 @@ test.describe.serial('configurable UI and terminal fonts', () => {
       await openSettings(win);
       const modal = win.getByTestId('settings-modal');
       await setFontThroughUi(win, 'terminal_font_family', 'Manual While Denied');
-      await modal.getByRole('button', { name: 'Choose installed font', exact: true }).last().click();
-      await expect(modal.getByRole('status')).toHaveText('Access to installed fonts was denied.');
-      await expect(fontStatus(win, 'terminal_font_family')).toContainText(FONT_COPY.unknown);
-      await expect(fontStatus(win, 'terminal_font_family')).not.toContainText(FONT_COPY.unavailable);
-      await fontReset(win, 'terminal_font_family').focus();
-      await win.keyboard.press('Space');
+      const terminal = fontInput(win, 'terminal_font_family');
+      await terminal.click();
+      await expect(fontOptions(win, 'terminal_font_family').getByRole('status')).toHaveText(FONT_COPY.discoveryDenied);
+      await expect(fontStatus(win, 'terminal_font_family')).toHaveText(FONT_COPY.unknown);
+
+      // AC45: a failure shows Retry, and Retry requests discovery again.
+      const deniedRetry = fontOptions(win, 'terminal_font_family').getByRole('button', { name: 'Retry', exact: true });
+      await expect(deniedRetry).toBeVisible();
+      const deniedQueries = await fontQueryCount(win);
+      expect(deniedQueries, 'input state: the denied discovery was requested').toBeGreaterThan(0);
+      await deniedRetry.click();
+      await expect.poll(() => fontQueryCount(win), { message: 'Retry requests discovery again' }).toBeGreaterThan(deniedQueries);
+      await expect(fontOptions(win, 'terminal_font_family').getByRole('status')).toHaveText(FONT_COPY.discoveryDenied);
+      await fontReset(win, 'terminal_font_family').click();
       await expect.poll(() => setting(win, 'terminal_font_family')).toBeNull();
-      await setFontThroughUi(win, 'terminal_font_family', 'Retry Mono');
+      // The pointer still rests where System default was clicked, so the reopened
+      // list renders under it. AC43: the typed text, not the hovered row, decides.
+      await terminal.fill('Retry Mono');
+      const retryCustom = fontOptions(win, 'terminal_font_family').getByRole('option', { name: 'Use “Retry Mono”', exact: true });
+      await expect(retryCustom).toBeVisible();
+      await expect(terminal, 'typing highlights the custom option, not the row under a resting pointer')
+        .toHaveAttribute('aria-activedescendant', (await retryCustom.getAttribute('id')) ?? '');
+      await terminal.press('Enter');
+      await expect.poll(() => setting(win, 'terminal_font_family'), { timeout: E2E_TIMEOUT }).toBe('Retry Mono');
 
       await mockLocalFonts(win, { kind: 'success', families: ['Retry Mono', 'Another Family'] });
-      await modal.getByRole('button', { name: 'Retry loading installed fonts', exact: true }).last().click();
-      await expect(installedFamilies(win, 'terminal_font_family').getByRole('button')).toHaveCount(2);
-      await expect(fontStatus(win, 'terminal_font_family')).toHaveText('Font is installed on this computer.');
-      await expect(modal.getByRole('status')).toHaveCount(0);
+      await expect(terminal, 'input state: the list is closed before it is reopened').toHaveAttribute('aria-expanded', 'false');
+      const beforeReopen = await fontQueryCount(win);
+      await terminal.click();
+      const terminalOptions = fontOptions(win, 'terminal_font_family');
+      await expect(terminalOptions.getByRole('option')).toHaveCount(3);
+      expect(await fontQueryCount(win), 'AC45: reopening the list after a failure requests discovery again').toBeGreaterThan(beforeReopen);
+      await expect(fontStatus(win, 'terminal_font_family')).toHaveText('');
+      await expect(terminalOptions.getByRole('status')).toHaveCount(0);
       await expect(modal).toBeVisible();
-      await expect(fontInput(win, 'terminal_font_family')).toHaveValue('Retry Mono');
+      await expect(terminal).toHaveValue('Retry Mono');
+      await terminal.press('Escape');
 
       await win.getByTestId('settings-done').click();
       await mockLocalFonts(win, { kind: 'unsupported' });
       await openSettings(win);
       await setFontThroughUi(win, 'ui_font_family', 'Manual Unsupported');
-      await modal.getByRole('button', { name: 'Choose installed font', exact: true }).first().click();
-      await expect(modal.getByRole('status')).toHaveText('Installed font discovery is not supported.');
-      await expect(fontStatus(win, 'ui_font_family')).toContainText(FONT_COPY.unknown);
-      await expect(fontReset(win, 'ui_font_family')).toBeEnabled();
+      await fontInput(win, 'ui_font_family').click();
+      await expect(fontOptions(win, 'ui_font_family').getByRole('status')).toHaveText(FONT_COPY.discoveryUnsupported);
+      await expect(fontStatus(win, 'ui_font_family')).toHaveText(FONT_COPY.unknown);
+      await expect(fontReset(win, 'ui_font_family')).toBeVisible();
+
+      // The Retry button inside the list re-queries without closing it.
+      await mockLocalFonts(win, { kind: 'success', families: ['Manual Unsupported'] });
+      await fontOptions(win, 'ui_font_family').getByRole('button', { name: FONT_COPY.retry, exact: true }).click();
+      await expect(fontOptions(win, 'ui_font_family').getByRole('option', { name: 'Manual Unsupported', exact: true })).toBeVisible();
+      await expect(fontStatus(win, 'ui_font_family')).toHaveText('');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC45: discovery runs on the first focus or open of a list, once per Settings session after a success', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      await mockLocalFonts(win, { kind: 'success', families: ['Alpha Sans', 'Beta Sans', 'Gamma Mono'] });
+      await openSettings(win);
+      const ui = fontInput(win, 'ui_font_family');
+      const terminal = fontInput(win, 'terminal_font_family');
+      await expect(ui).toBeVisible();
+      expect(await fontQueryCount(win), 'opening Settings alone requests nothing').toBe(0);
+
+      // Focus alone, without a click or typing, requests discovery.
+      await ui.focus();
+      await expect.poll(() => fontQueryCount(win), { message: 'first focus requests discovery' }).toBe(1);
+      await expect(fontOptions(win, 'ui_font_family').getByRole('option')).toHaveCount(4);
+
+      // After a success neither list asks again in this session.
+      await ui.press('Escape');
+      await expect(fontOptions(win, 'ui_font_family')).toHaveCount(0);
+      await terminal.click();
+      await expect(fontOptions(win, 'terminal_font_family').getByRole('option'), 'the Terminal list shows the discovered families').toHaveCount(4);
+      await terminal.press('Escape');
+      await ui.click();
+      await expect(fontOptions(win, 'ui_font_family').getByRole('option')).toHaveCount(4);
+      expect(await fontQueryCount(win), 'no second request after a success').toBe(1);
+
+      // A new Settings session starts over; opening a list by click requests again.
+      await ui.press('Escape');
+      await win.getByTestId('settings-done').click();
+      await openSettings(win);
+      expect(await fontQueryCount(win)).toBe(1);
+      await fontInput(win, 'terminal_font_family').click();
+      await expect.poll(() => fontQueryCount(win), { message: 'a new session requests discovery again' }).toBe(2);
+      await expect(fontOptions(win, 'terminal_font_family').getByRole('option')).toHaveCount(4);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC43-AC44: Enter keeps the current font on an unmodified field after discovery lands, and saves exactly what was typed into a closed list', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      const families = ['Alpha Sans', 'Beta Sans', 'Gamma Mono'];
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+
+      // Save a family, then start a fresh Settings session so discovery is idle again.
+      await mockLocalFonts(win, { kind: 'deferred', families });
+      await openSettings(win);
+      await setFontThroughUi(win, 'ui_font_family', 'Gamma Mono');
+      await win.getByTestId('settings-done').click();
+
+      // AC44 (gate B2 trigger 2): focus starts discovery; it lands while the list is
+      // open; Enter on the untouched field must not fall back to System default.
+      await mockLocalFonts(win, { kind: 'deferred', families });
+      await openSettings(win);
+      await expect(ui).toHaveValue('Gamma Mono');
+      const queriesBefore = await fontQueryCount(win);
+      await ui.focus();
+      await expect(uiOptions).toBeVisible();
+      await expect.poll(() => fontQueryCount(win)).toBe(queriesBefore + 1);
+      await expect(uiOptions.getByRole('option', { name: 'Gamma Mono', exact: true }), 'input state: discovery is still pending').toHaveCount(0);
+      await releaseFontQuery(win);
+      await expect(uiOptions.getByRole('option')).toHaveCount(4);
+      await expect(uiOptions.getByRole('option', { name: 'Gamma Mono', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await ui.press('Enter');
+      // Ordering barrier: this save is issued after anything the Enter issued, so once
+      // it lands, a wrong save from the Enter would already be stored.
+      await setFontThroughUi(win, 'terminal_font_family', 'Barrier Terminal');
+      expect(await setting(win, 'ui_font_family'), 'Enter on an unmodified field keeps the current font').toBe('Gamma Mono');
+      await expect(ui).toHaveValue('Gamma Mono');
+
+      // AC43 (gate B2 trigger 1): one input event into a closed list opens it with the
+      // first matching family highlighted, and Enter saves that family. A stale
+      // highlight would land on "Use “sans”" (the saved font's old position).
+      await ui.click();
+      await expect(uiOptions).toBeVisible();
+      await ui.press('Escape');
+      await expect(ui, 'input state: the list is closed').toHaveAttribute('aria-expanded', 'false');
+      await expect(ui).toBeFocused();
+      await ui.fill('sans');
+      await expect(uiOptions).toBeVisible();
+      const alphaId = await uiOptions.getByRole('option', { name: 'Alpha Sans', exact: true }).getAttribute('id');
+      await expect(ui, 'typing highlights the first matching family').toHaveAttribute('aria-activedescendant', alphaId ?? '');
+      await ui.press('Enter');
+      await expect.poll(() => setting(win, 'ui_font_family')).toBe('Alpha Sans');
+      await expect(ui).toHaveValue('Alpha Sans');
+
+      // With System default saved, a name no family matches is saved exactly (trimmed).
+      // A stale highlight would land on System default and save nothing.
+      await ui.click();
+      await fontReset(win, 'ui_font_family').click();
+      await expect.poll(() => setting(win, 'ui_font_family')).toBeNull();
+      // The field is disabled while saving, which drops focus; refocus and close the list.
+      await ui.click();
+      await expect(uiOptions).toBeVisible();
+      await ui.press('Escape');
+      await expect(ui, 'input state: the list is closed').toHaveAttribute('aria-expanded', 'false');
+      await expect(ui).toBeFocused();
+      await ui.fill('  Brand New Ω  ');
+      const custom = uiOptions.getByRole('option', { name: 'Use “Brand New Ω”', exact: true });
+      await expect(custom).toBeVisible();
+      await expect(ui, 'typing highlights the custom option').toHaveAttribute('aria-activedescendant', (await custom.getAttribute('id')) ?? '');
+      await ui.press('Enter');
+      await expect.poll(() => setting(win, 'ui_font_family')).toBe('Brand New Ω');
+      expect(await setting(win, 'terminal_font_family'), 'the Interface saves never touched Terminal').toBe('Barrier Terminal');
     } finally {
       await harness.close();
     }
@@ -721,7 +985,7 @@ test.describe.serial('configurable UI and terminal fonts', () => {
         editor.locator('[aria-hidden]').first().evaluate((element) => getComputedStyle(element).fontFamily),
         win.getByTestId('file-preview').locator('.font-mono').first().evaluate((element) => getComputedStyle(element).fontFamily),
       ])).toEqual(monoBefore);
-      await expect(fontReset(win, 'ui_font_family')).toBeEnabled();
+      await expect(fontInput(win, 'ui_font_family')).toBeEnabled();
       await win.getByTestId('settings-done').click();
       await win.getByTestId('file-edit-toggle').click();
       const sourcePreviewFont = await win.getByTestId('file-preview').locator('pre.font-mono')
@@ -881,6 +1145,119 @@ test.describe.serial('configurable UI and terminal fonts', () => {
       expect(copy.copied).not.toContain('\uE0B0');
     } finally {
       await overrideFontReadiness(harness.win, 'restore').catch(() => {});
+      await harness.close();
+    }
+  });
+
+  test('AC43a: leaving a font field saves what Enter would, and ignores a highlight set only by the pointer', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win, app } = harness;
+      const families = ['Alpha Sans', 'Beta Sans', 'Gamma Mono'];
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      const row = (name: string) => uiOptions.getByRole('option', { name, exact: true });
+      await installSetFontRecorder(app);
+      await mockLocalFonts(win, { kind: 'success', families });
+      await openSettings(win);
+
+      // Typed text, then blur: the best match is saved. Catches blur saving nothing.
+      await ui.click();
+      await ui.fill('alp');
+      await expect(row('Alpha Sans')).toBeVisible();
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'blur saves the best match for typed text').toBe('Alpha Sans');
+      await expect(ui).toHaveValue('Alpha Sans');
+
+      // Typed text plus a pointer-only highlight on another row: blur still saves the
+      // best match. Catches blur honouring the pointer highlight (would save Beta Sans).
+      await setFontThroughUi(win, 'ui_font_family', 'Gamma Mono');
+      await ui.click();
+      await ui.fill('sans');
+      await expect(row('Alpha Sans')).toBeVisible();
+      await hoverRow(win, row('Beta Sans'));
+      await expect(ui, 'precondition: the hover highlighted Beta Sans').toHaveAttribute('aria-activedescendant', (await row('Beta Sans').getAttribute('id')) ?? '');
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'pointer highlight ignored; typed text resolves to its best match').toBe('Alpha Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC43a: a pointer-only hover on an unedited field is ignored on blur but saved by Enter', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      const families = ['Alpha Sans', 'Beta Sans', 'Gamma Mono'];
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      const beta = uiOptions.getByRole('option', { name: 'Beta Sans', exact: true });
+      await mockLocalFonts(win, { kind: 'success', families });
+      await openSettings(win);
+      await setFontThroughUi(win, 'ui_font_family', 'Gamma Mono');
+
+      // Negative: hover another row, leave. Catches blur honouring a pointer highlight.
+      await ui.click();
+      await expect(beta).toBeVisible();
+      await hoverRow(win, beta);
+      await expect(ui, 'precondition: the hover highlighted the row').toHaveAttribute('aria-activedescendant', (await beta.getAttribute('id')) ?? '');
+      await clickElsewhere(win);
+      await expect(ui, 'input state: the list is closed').toHaveAttribute('aria-expanded', 'false');
+      // Ordering barrier: a wrong save from the blur would already be stored.
+      await setFontThroughUi(win, 'terminal_font_family', 'Barrier Terminal');
+      expect(await setting(win, 'ui_font_family'), 'pointer-only highlight must not save on blur').toBe('Gamma Mono');
+      await expect(ui).toHaveValue('Gamma Mono');
+
+      // Positive control: same hover, Enter saves the hovered row.
+      await ui.click();
+      await expect(beta).toBeVisible();
+      await hoverRow(win, beta);
+      await ui.press('Enter');
+      await expect.poll(() => setting(win, 'ui_font_family'), 'Enter saves the hovered row').toBe('Beta Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC43a: a row chosen with ArrowDown is saved when the field is left', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      await mockLocalFonts(win, { kind: 'success', families: ['Alpha Sans', 'Beta Sans', 'Gamma Mono'] });
+      await openSettings(win);
+      await ui.click();
+      await expect(uiOptions.getByRole('option')).toHaveCount(4);
+      await ui.press('ArrowDown');
+      await ui.press('ArrowDown');
+      const beta = uiOptions.getByRole('option', { name: 'Beta Sans', exact: true });
+      await expect(ui, 'two ArrowDowns from System default highlight Beta Sans').toHaveAttribute('aria-activedescendant', (await beta.getAttribute('id')) ?? '');
+      expect(await setting(win, 'ui_font_family'), 'nothing saved before leaving').toBeNull();
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'keyboard highlight saved on blur').toBe('Beta Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('gate L1: clicking an option row issues exactly one save', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win, app } = harness;
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      await installSetFontRecorder(app);
+      await mockLocalFonts(win, { kind: 'success', families: ['Alpha Sans', 'Beta Sans', 'Gamma Mono'] });
+      await openSettings(win);
+      await ui.click();
+      await uiOptions.getByRole('option', { name: 'Beta Sans', exact: true }).click();
+      await expect.poll(() => setting(win, 'ui_font_family')).toBe('Beta Sans');
+      // Ordering barrier: any second UI save from the click or its blur is issued before this lands.
+      await setFontThroughUi(win, 'terminal_font_family', 'Barrier Terminal');
+      expect(await setFontCalls(app, 'ui_font_family'), 'one click, one save (catches click plus blur double save)').toBe(1);
+      expect(await setFontCalls(app, 'terminal_font_family')).toBe(1);
+    } finally {
       await harness.close();
     }
   });
