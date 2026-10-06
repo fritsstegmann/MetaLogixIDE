@@ -8,6 +8,7 @@ import {
   moveHighlight,
   optionKey,
   pointerMoved,
+  resolveBlur,
   resolveEnter,
   selectedOptionIndex,
   validateFontEntry,
@@ -232,5 +233,64 @@ describe('pointerMoved (F1: a still pointer must not steal the highlight)', () =
 
   it('is false for the first event, so a list opening under the pointer keeps the typed highlight', () => {
     expect(pointerMoved(null, { x: 10, y: 20 })).toBe(false);
+  });
+});
+
+describe('best match prefers exact, then prefix (gate C1)', () => {
+  const families = ['Apple Symbols', 'Symbol', 'Symbola', 'Noto Sans Symbols'];
+  const typed = (text: string) => {
+    const state = run(null, [{ type: 'type', text }]);
+    const options = buildFontOptions({ families, query: text, value: null });
+    return { state, options, index: activeOptionIndex(options, state, null) };
+  };
+
+  it('highlights and saves the exact family name over earlier substring matches', () => {
+    const { state, options, index } = typed('Symbol');
+    expect(options[index]).toEqual(family('Symbol'));
+    expect(resolveEnter(state, options, null)).toEqual({ kind: 'choose', option: family('Symbol') });
+  });
+
+  it('matches the exact name ignoring case', () => {
+    const { options, index } = typed('symbol');
+    expect(options[index]).toEqual(family('Symbol'));
+  });
+
+  it('prefers a family that starts with the text over one that only contains it', () => {
+    const { options, index } = typed('Symbo');
+    expect(options[index]).toEqual(family('Symbol'));
+  });
+
+  it('falls back to the first containing family when nothing starts with the text', () => {
+    const { options, index } = typed('ymbols');
+    expect(options[index]).toEqual(family('Apple Symbols'));
+  });
+});
+
+describe('resolveBlur matches Enter (gate C2)', () => {
+  const families = ['Alpha Sans', 'Beta Mono'];
+
+  it('saves the highlighted best match, not the raw typed text', () => {
+    const state = run('Beta Mono', [{ type: 'type', text: 'sans' }]);
+    const options = buildFontOptions({ families, query: 'sans', value: 'Beta Mono' });
+    expect(resolveBlur(state, options, 'Beta Mono')).toEqual({ kind: 'choose', option: family('Alpha Sans') });
+    expect(resolveBlur(state, options, 'Beta Mono')).toEqual(resolveEnter(state, options, 'Beta Mono'));
+  });
+
+  it('saves nothing for an unedited field', () => {
+    const state = run('Beta Mono', [{ type: 'open' }]);
+    const options = buildFontOptions({ families, query: 'Beta Mono', value: 'Beta Mono' });
+    expect(resolveBlur(state, options, 'Beta Mono')).toEqual({ kind: 'none' });
+  });
+
+  it('saves an explicitly highlighted option', () => {
+    const state = run(null, [{ type: 'open' }, { type: 'highlight', key: optionKey(family('Beta Mono')) }]);
+    const options = buildFontOptions({ families, query: '', value: null });
+    expect(resolveBlur(state, options, null)).toEqual({ kind: 'choose', option: family('Beta Mono') });
+  });
+
+  it('saves the custom option when typed text matches no family', () => {
+    const state = run(null, [{ type: 'type', text: 'Zed Mono' }]);
+    const options = buildFontOptions({ families, query: 'Zed Mono', value: null });
+    expect(resolveBlur(state, options, null)).toEqual({ kind: 'choose', option: custom('Zed Mono') });
   });
 });

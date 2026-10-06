@@ -23,9 +23,11 @@ import {
   moveHighlight,
   optionKey,
   pointerMoved,
+  resolveBlur,
   resolveEnter,
   selectedOptionIndex,
   validateFontEntry,
+  type EnterAction,
   type FontOption,
   type FontPickerEvent,
   type FontPickerState,
@@ -80,7 +82,7 @@ interface FontPicker {
   readonly step: (step: 1 | -1) => void;
   readonly enter: () => void;
   readonly escape: () => void;
-  readonly blur: (text: string) => void;
+  readonly blur: () => void;
 }
 
 type KeyHandler = (event: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -186,6 +188,12 @@ function useFontPicker({ value, discovery, onSave, onLoadInstalledFonts }: Props
   };
   const restore = (): void => dispatch({ type: 'reset', query: value ?? '' });
   const lastPointer = useRef<PointerPosition | null>(null);
+  const apply = (action: EnterAction): void => {
+    dispatch({ type: 'close' });
+    if (action.kind === 'choose') void commit.choose(action.option);
+    else if (action.kind === 'commit') void commit.commitTyped(action.text);
+    else restore();
+  };
   const highlight = (index: number): void => { const option = options[index]; if (option) dispatch({ type: 'highlight', key: optionKey(option) }); };
   return {
     state, options, activeIndex, commit,
@@ -195,15 +203,9 @@ function useFontPicker({ value, discovery, onSave, onLoadInstalledFonts }: Props
     highlight,
     hover: (index, at) => { const moved = pointerMoved(lastPointer.current, at); lastPointer.current = at; if (moved) highlight(index); },
     step: (step) => dispatch({ type: 'highlight', key: moveHighlight(options, activeIndex, step) }),
-    enter: () => {
-      const action = resolveEnter(state, options, value);
-      dispatch({ type: 'close' });
-      if (action.kind === 'choose') void commit.choose(action.option);
-      else if (action.kind === 'commit') void commit.commitTyped(action.text);
-      else restore();
-    },
+    enter: () => apply(resolveEnter(state, options, value)),
     escape: () => { dispatch({ type: 'close' }); restore(); },
-    blur: (text) => { dispatch({ type: 'close' }); if (text.trim() !== (value ?? '')) void commit.commitTyped(text); },
+    blur: () => apply(resolveBlur(state, options, value)),
   };
 }
 
@@ -260,7 +262,7 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         onFocus={picker.open}
         onClick={picker.open}
         onChange={(event) => picker.type(event.target.value)}
-        onBlur={(event) => picker.blur(event.currentTarget.value)}
+        onBlur={picker.blur}
         onKeyDown={(event) => handlers[event.key]?.(event)}
         className="min-h-11 w-full rounded-lg bg-[--surface-field] py-2 pl-3 pr-9 text-[15px] text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
         style={{ fontFamily: buildFontFamilyStack(value, fallback) }}

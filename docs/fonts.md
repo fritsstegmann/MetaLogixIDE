@@ -21,10 +21,10 @@ Each preference is one field: **Interface** for application text and **Terminal*
 1. Open **Settings → General → Fonts**.
 2. Click the **Interface** or **Terminal** field. A list opens with **System default** first, then every installed family drawn in its own face.
 3. Allow font access if requested.
-4. Type to filter the list. If the text does not match an installed family exactly, the list also offers **Use “…”** to save the typed name as an exact family.
+4. Type to filter the list. If the text does not match an installed family exactly, the list also offers **Use “…”** to save the typed name as an exact family. While you type, the highlight goes to the family whose name matches exactly, then to one that starts with the text, then to the first that contains it.
 5. Click an entry, or use the arrow keys and Enter. The preview line under the field updates.
 
-The field shows the saved family in that font. Enter on a field you have not changed saves nothing. Escape closes the list, restores the saved name, and keeps Settings open. Leaving the field saves a changed name, the same as Enter.
+The field shows the saved family in that font. Enter on a field you have not changed saves nothing. Escape closes the list, restores the saved name, and keeps Settings open. Leaving the field saves exactly what Enter would.
 
 Font discovery runs the first time a list opens in a Settings session; focusing a field opens its list. The app keeps only family names in memory and does not read font files (`src/renderer/fonts/local-font-access.ts:49-60`).
 

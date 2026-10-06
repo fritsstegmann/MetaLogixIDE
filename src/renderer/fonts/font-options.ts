@@ -109,10 +109,16 @@ export function fontPickerReducer(state: FontPickerState, event: FontPickerEvent
   }
 }
 
+/** Best option for typed text: an exact name (ignoring case), then a prefix match, then the first match. */
 function bestMatchIndex(options: readonly FontOption[], query: string, value: FontFamilyPreference): number {
   if (query.trim().length === 0) return 0;
-  if (isFiltering(query, value)) return Math.max(0, options.findIndex((o) => o.kind !== 'default'));
-  return Math.max(0, selectedOptionIndex(options, value));
+  if (!isFiltering(query, value)) return Math.max(0, selectedOptionIndex(options, value));
+  const needle = query.trim().toLowerCase();
+  const name = (o: FontOption): string | null => (o.kind === 'family' ? o.family.toLowerCase() : null);
+  const exact = options.findIndex((o) => name(o) === needle);
+  if (exact >= 0) return exact;
+  const prefix = options.findIndex((o) => name(o)?.startsWith(needle) === true);
+  return prefix >= 0 ? prefix : Math.max(0, options.findIndex((o) => o.kind !== 'default'));
 }
 
 /** Index of the highlighted option: the explicit highlight if still listed, else the best match. */
@@ -157,4 +163,9 @@ export interface PointerPosition {
  */
 export function pointerMoved(previous: PointerPosition | null, next: PointerPosition): boolean {
   return previous !== null && (previous.x !== next.x || previous.y !== next.y);
+}
+
+/** Leaving the field saves exactly what Enter would (see `resolveEnter`). */
+export function resolveBlur(state: FontPickerState, options: readonly FontOption[], value: FontFamilyPreference): EnterAction {
+  return resolveEnter(state, options, value);
 }
