@@ -94,6 +94,30 @@ Mermaid diagrams render again on palette changes, including changes between
 palettes with the same light/dark appearance. Explicit diagram themes remain independent.
 The Command Palette also provides commands for all three palettes.
 
+### App chrome
+
+The chrome around the content (title bar, activity bar, sidebar columns and
+status bar) is one continuous surface, `--surface-chrome`, painted once on the
+window root. Regions are separated by tone and spacing, not borders. The main
+area and the popout's content are rounded sheets (`--surface-sheet`) inset on
+that surface. Dialogs and popovers keep their edges because they float.
+
+`src/renderer/styles.css` ("Chrome surfaces and semantic hues") derives every
+chrome token from the palette tokens above, so all palettes and both
+appearances inherit it:
+
+| Token | Use |
+|---|---|
+| `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
+| `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
+| `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
+| `--hue-orange-text`, `--badge-ink` | Contrast helpers for small coloured text and text on a hue fill. |
+
+Each sidebar root shows a folder glyph in a stable hue.
+`src/renderer/root-hue.ts` hashes the root path (FNV-1a, trailing separators
+ignored) to one of five hue tokens, so a root keeps its colour across launches
+and palettes.
+
 ### Markdown preview pipeline
 
 The Files tab shows a rendered preview for `.md`, `.markdown` and `.mdx`
@@ -130,7 +154,7 @@ preference preserves the compatibility stack (`src/shared/font-settings.ts:1-10`
 | IO | `src/main/ipc/register.ts` | Validates dedicated font writes, blocks the generic setter, and broadcasts keyed changes after a successful write. |
 | Renderer state | `src/renderer/fonts/font-settings-context.tsx` | Loads both preferences once per renderer and refreshes the changed key. |
 | Platform adapter | `src/renderer/fonts/local-font-access.ts` | Requests installed-family metadata after a user action. It does not read font blobs. |
-| Presentation | `src/renderer/components/FontControl.tsx` | Provides manual entry, installed-family selection, preview, status, and reset. |
+| Presentation | `src/renderer/components/FontControl.tsx` | One combobox per preference: installed-family search, exact-name entry, System default, preview, and status. |
 | Style adapter | `src/renderer/fonts/use-apply-ui-font.ts` | Sets the UI font through one CSS custom property. |
 | Terminal adapter | `src/renderer/terminal-font-update.ts` | Updates xterm in place, waits for readiness, and synchronizes terminal geometry. |
 
@@ -661,11 +685,12 @@ the whole side falls back to escaped plain text.
   is blocked. The renderer build excludes font files from asset inlining
   (`electron.vite.config.ts:63`). The KaTeX stylesheet is imported in
   `src/renderer/main.tsx:5`.
-- **Font discovery is explicit and optional.** Chromium Local Font Access is
-  permission-sensitive. Settings calls it only after the user selects
-  **Load installed fonts**. Manual exact-name entry and Reset remain
+- **Font discovery is user-initiated and optional.** Chromium Local Font
+  Access is permission-sensitive. Settings calls it only when the user opens
+  a font list, at most once per successful Settings session, and again from
+  **Retry** after a failure. Exact-name entry and System default remain
   available when discovery is unsupported or denied
-  (`src/renderer/components/Settings.tsx:277-333`).
+  (`src/renderer/components/FontControl.tsx`, `src/renderer/components/Settings.tsx:30-53`).
 - **A selected family is one literal CSS family.** The serializer validates
   the value, escapes quotes and backslashes, and places it before the exact
   compatibility fallback. It sets one CSSOM property and never creates

@@ -22,7 +22,7 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
     void api.invoke('app:get-version', undefined as never).then(({ version }) => setVersion(version)).catch(() => {});
   }, []);
   return (
-    <div className="h-7 shrink-0 border-t border-[--border] bg-[--panel]/70 backdrop-blur-xl px-3 text-[11px] text-[--text-muted] flex items-center gap-4 font-mono">
+    <div className="h-7 shrink-0 px-3 text-[11px] text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
       <span className="flex items-center gap-1.5">
         <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[--accent]' : 'bg-[--text-muted]/50'}`} />
         {project ? project.name : 'no project'}
@@ -31,11 +31,11 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
         <span className="flex items-center gap-1" title={
           `${git.branch ?? 'detached'}${git.ahead ? ` · ahead ${git.ahead}` : ''}${git.behind ? ` · behind ${git.behind}` : ''}${git.dirty ? ` · ${Object.keys(git.files).length} changed` : ''}`
         }>
-          <BranchIcon />
+          <span className="text-[--hue-pink] flex"><BranchIcon /></span>
           <span className="text-[--text]">{git.branch ?? 'HEAD'}</span>
-          {git.dirty && <span className="text-amber-400">●</span>}
-          {git.ahead > 0 && <span className="text-emerald-400">↑{git.ahead}</span>}
-          {git.behind > 0 && <span className="text-rose-400">↓{git.behind}</span>}
+          {git.dirty && <span className="text-[--hue-yellow]">●</span>}
+          {git.ahead > 0 && <span className="text-[--hue-cyan]">↑{git.ahead}</span>}
+          {git.behind > 0 && <span className="text-[--hue-pink]">↓{git.behind}</span>}
         </span>
       )}
       <ShellsChip aliveCount={aliveCount} />
@@ -46,7 +46,7 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
             <button
               key={p}
               onClick={() => { void api.invoke('app:open-external', { url: `http://localhost:${p}` }); }}
-              className="px-1.5 py-0 rounded-md border border-[color:var(--accent)]/40 text-[color:var(--accent)] hover:bg-[color:var(--accent)]/10 font-mono"
+              className="px-1.5 py-0 rounded-md bg-[--accent-soft] text-[--accent-soft-text] hover:brightness-125 font-mono"
               title={`Open http://localhost:${p}`}
               data-testid={`port-chip-${p}`}
             >
@@ -136,10 +136,10 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
     <div ref={anchorRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 px-1.5 py-0 rounded-md border ${
-          anyHanging ? 'border-[--danger]/60 text-[--danger]'
-          : anyHot ? 'border-amber-500/60 text-amber-400'
-          : 'border-transparent hover:border-[--border] text-[--text-muted] hover:text-[--text]'
+        className={`flex items-center gap-1.5 px-1.5 py-0 rounded-md ${
+          anyHanging ? 'bg-[--danger]/15 text-[--danger]'
+          : anyHot ? 'bg-[--hue-yellow]/15 text-[--hue-yellow]'
+          : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
         }`}
         title="Alive shells — click to see details / kill"
         data-testid="shells-chip"

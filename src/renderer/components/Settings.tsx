@@ -14,12 +14,19 @@ import {
   FontControl,
   type FontDiscoveryState,
 } from '@renderer/components/FontControl';
-import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
+import { FONT_COPY } from '@renderer/fonts/font-contract';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
 import { PERMISSION_MODE_COPY, PERMISSION_MODE_TEST_IDS } from '@renderer/permission-mode-copy';
 import type { ClaudePermissionMode } from '@shared/claude-permission-mode';
 type Section = 'general' | 'roots' | 'launch' | 'metaproject';
+
+/** Palette picker cards; swatches are each palette's own dark colours so every card previews itself. */
+const PALETTE_CHOICES = [
+  { id: 'default', label: 'Default', swatches: ['#1c2028', '#3b82f6', '#22c55e', '#fbbf24'] },
+  { id: 'catppuccin', label: 'Catppuccin', swatches: ['#1e1e2e', '#89b4fa', '#a6e3a1', '#f5c2e7'] },
+  { id: 'rose-pine', label: 'Rosé Pine', swatches: ['#191724', '#c4a7e7', '#9ccfd8', '#f6c177'] },
+] as const;
 
 /** Renders application settings and owns installed-font discovery for one open session. */
 export function Settings({ open, onClose }: { open: boolean; onClose: () => void }): React.JSX.Element | null {
@@ -55,16 +62,16 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
       data-testid="settings-modal"
     >
       <div
-        className="modal-panel relative flex h-[600px] max-h-[92vh] w-[760px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-[--border] bg-[--panel-strong] shadow-2xl"
+        className="modal-panel relative flex h-[600px] max-h-[92vh] w-[760px] max-w-[92vw] flex-col overflow-hidden rounded-2xl bg-[--panel-strong] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="drag h-11 flex items-center justify-between border-b border-[--border] pl-4 pr-2 shrink-0 bg-[--panel]/60">
+        <div className="drag h-12 flex items-center justify-between pl-5 pr-2 shrink-0">
           <span className="text-sm font-semibold">Settings</span>
           <button
             type="button"
             onClick={onClose}
-            className="no-drag flex min-h-11 min-w-11 items-center justify-center rounded-md text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text]"
+            className="no-drag flex min-h-11 min-w-11 items-center justify-center rounded-md text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text]"
             title="Close (Esc)"
             data-testid="settings-close"
             aria-label="Close settings"
@@ -75,7 +82,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
 
         {/* Body: nav + panel */}
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <nav aria-label="Settings sections" className="flex w-full shrink-0 gap-2 overflow-x-auto border-b border-[--border] bg-[--panel]/40 p-3 sm:w-48 sm:flex-col sm:gap-1 sm:overflow-visible sm:border-b-0 sm:border-r">
+          <nav aria-label="Settings sections" className="flex w-full shrink-0 gap-2 overflow-x-auto px-3 pb-3 sm:w-48 sm:flex-col sm:gap-1 sm:overflow-visible sm:pt-1">
             <SectionButton active={section === 'general'} onClick={() => setSection('general')}>General</SectionButton>
             <SectionButton active={section === 'roots'} onClick={() => setSection('roots')}>Root directories</SectionButton>
             <SectionButton active={section === 'launch'} onClick={() => setSection('launch')}>Launch commands</SectionButton>
@@ -84,7 +91,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
               MetaLogix IDE · Phase 1
             </div>
           </nav>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6 sm:pt-1">
             {section === 'general' && (
               <GeneralPanel
                 fontDiscovery={fontDiscovery}
@@ -98,11 +105,11 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
         </div>
 
         {/* Footer */}
-        <div className="h-12 flex items-center justify-end gap-2 border-t border-[--border] px-4 bg-[--panel]/60">
+        <div className="h-14 flex items-center justify-end gap-2 px-4 shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="pressable min-h-11 rounded-md bg-[--accent] px-4 text-sm text-[--accent-text] hover:brightness-110"
+            className="pressable min-h-10 rounded-lg bg-[--accent-soft] px-5 text-sm font-medium text-[--accent-soft-text] hover:brightness-125"
             data-testid="settings-done"
           >
             Done
@@ -127,8 +134,8 @@ function SectionButton({ active, onClick, children }: { active: boolean; onClick
     <button
       type="button"
       onClick={onClick}
-      className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-left text-sm sm:w-full sm:px-2 ${
-        active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel-strong] text-[--text]'
+      className={`min-h-10 shrink-0 rounded-lg px-3 py-2 text-left text-sm sm:w-full sm:px-2.5 ${
+        active ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'hover:bg-[--surface-hover] text-[--text-muted] hover:text-[--text]'
       }`}
     >
       {children}
@@ -188,22 +195,21 @@ function GeneralPanel({
 
       <Field label="Theme" hint="Choose the IDE palette. Catppuccin uses Mocha/Latte; Rosé Pine uses Rosé Pine/Dawn.">
         <div className="flex flex-wrap gap-2">
-          {([
-            { id: 'default', label: 'Default' },
-            { id: 'catppuccin', label: 'Catppuccin' },
-            { id: 'rose-pine', label: 'Rosé Pine' },
-          ] as const).map((theme) => (
+          {PALETTE_CHOICES.map((theme) => (
             <button
               key={theme.id}
               type="button"
               aria-pressed={palette === theme.id}
               onClick={() => setPalette(theme.id)}
-              className={`px-3 py-1.5 rounded-md text-sm border ${
+              className={`pressable flex w-36 flex-col gap-2 rounded-xl p-2.5 text-left text-sm transition-colors ${
                 palette === theme.id
-                  ? 'bg-[--accent] text-[--accent-text] border-transparent'
-                  : 'bg-[--panel] border-[--border] hover:bg-[--panel-strong]'
+                  ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium ring-1 ring-[color:var(--accent)]'
+                  : 'bg-[--surface-field] hover:bg-[--surface-active]'
               }`}
             >
+              <span aria-hidden className="flex h-6 overflow-hidden rounded-md">
+                {theme.swatches.map((c) => <span key={c} className="flex-1" style={{ background: c }} />)}
+              </span>
               {theme.label}
             </button>
           ))}
@@ -211,16 +217,16 @@ function GeneralPanel({
       </Field>
 
       <Field label="Appearance" hint="Switch how the app renders. System follows your OS.">
-        <div className="flex gap-2">
+        <div className="inline-flex gap-1 rounded-xl bg-[--surface-field] p-1">
           {(['system', 'light', 'dark'] as ThemeMode[]).map((t) => (
             <button
               key={t}
               aria-pressed={mode === t}
               onClick={() => setMode(t)}
-              className={`px-3 py-1.5 rounded-md text-sm border ${
+              className={`min-h-9 px-3.5 rounded-lg text-sm transition-colors ${
                 mode === t
-                  ? 'bg-[--accent] text-[--accent-text] border-transparent'
-                  : 'bg-[--panel] border-[--border] hover:bg-[--panel-strong]'
+                  ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium'
+                  : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
               }`}
             >
               {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -291,17 +297,6 @@ function GeneralPanel({
   );
 }
 
-function fontDiscoverySummary(discovery: FontDiscoveryState): string {
-  if (discovery.status === 'idle') return 'Installed fonts are loaded only when you request them.';
-  if (discovery.status === 'loading') return 'Loading installed fonts…';
-  if (discovery.status === 'success') {
-    return `${discovery.families.length} installed font ${discovery.families.length === 1 ? 'family' : 'families'} loaded.`;
-  }
-  if (discovery.status === 'unsupported') return 'Installed font discovery is not supported. Exact family names still work.';
-  if (discovery.status === 'denied') return 'Access to installed fonts was denied. Exact family names still work.';
-  return 'Installed fonts could not be loaded. Exact family names still work.';
-}
-
 function FontSettingsControls({
   discovery,
   onLoadInstalledFonts,
@@ -310,7 +305,6 @@ function FontSettingsControls({
   readonly onLoadInstalledFonts: () => Promise<void>;
 }) {
   const { uiFontFamily, terminalFontFamily } = useFontSettings();
-  const discoveryStatusId = 'font-discovery-status';
 
   async function saveFont(
     key: 'ui_font_family' | 'terminal_font_family',
@@ -321,28 +315,10 @@ function FontSettingsControls({
 
   return (
     <section className="space-y-3" aria-labelledby="font-settings-heading">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-1">
-          <h3 id="font-settings-heading" className="text-sm font-medium">{FONT_COPY.sectionLabel}</h3>
-          <p className="text-xs text-[--text-muted]">
-            Choose independent fonts for application text and terminal glyphs.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void onLoadInstalledFonts()}
-          disabled={discovery.status === 'loading'}
-          aria-describedby={discoveryStatusId}
-          className="pressable min-h-11 shrink-0 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] disabled:cursor-not-allowed disabled:opacity-50"
-          data-testid={FONT_TEST_IDS.loadInstalled}
-        >
-          {discovery.status === 'denied' || discovery.status === 'error' || discovery.status === 'unsupported'
-            ? 'Retry loading installed fonts' : FONT_COPY.loadInstalled}
-        </button>
+      <div className="space-y-1">
+        <h3 id="font-settings-heading" className="text-sm font-medium">{FONT_COPY.sectionLabel}</h3>
+        <p className="text-xs text-[--text-muted]">Pick an installed font or type an exact family name.</p>
       </div>
-      <p id={discoveryStatusId} aria-live="polite" className="text-xs text-[--text-muted]">
-        {fontDiscoverySummary(discovery)}
-      </p>
       <FontControl
         settingKey="ui_font_family"
         label={FONT_COPY.uiLabel}
@@ -397,17 +373,17 @@ function RootsPanel() {
       <Header title="Root directories" subtitle="Folders scanned for projects. Add each parent folder where your projects live." />
       <button
         onClick={add}
-        className="w-full text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-[--accent-text] rounded-md py-2"
+        className="w-full text-sm font-medium pressable bg-[--accent-soft] hover:brightness-125 text-[--accent-soft-text] rounded-lg py-2"
       >
         + Add root
       </button>
       <ul className="space-y-2">
         {roots.length === 0 && <li className="text-sm text-[--text-muted]">No roots yet.</li>}
         {roots.map((r) => (
-          <li key={r.id} className="flex items-center gap-2 border border-[--border] rounded-md px-3 py-2 bg-[--panel]/60">
+          <li key={r.id} className="flex items-center gap-2 rounded-lg px-3 py-2 bg-[--surface-field]">
             <span className="flex-1 text-sm truncate font-mono" title={r.path}>{r.path}</span>
-            <button onClick={() => rescan(r.id)} className="text-xs text-[--text-muted] hover:text-[--text] px-2 py-1 rounded hover:bg-[--panel-strong]">Rescan</button>
-            <button onClick={() => remove(r.id)} className="text-xs text-[--danger] hover:brightness-110 px-2 py-1 rounded hover:bg-[--panel-strong]">Remove</button>
+            <button onClick={() => rescan(r.id)} className="text-xs text-[--text-muted] hover:text-[--text] px-2 py-1 rounded hover:bg-[--surface-hover]">Rescan</button>
+            <button onClick={() => remove(r.id)} className="text-xs text-[--danger] hover:brightness-110 px-2 py-1 rounded hover:bg-[--surface-hover]">Remove</button>
           </li>
         ))}
       </ul>
@@ -500,7 +476,7 @@ function LaunchEditor({ label, value, onChange, testId }: { label: string; value
         onChange={(e) => setArgvText(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } }}
-        className="w-full font-mono text-sm bg-[--input-bg] text-[--text] border border-[--input-border] rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+        className="w-full font-mono text-sm bg-[--surface-field] text-[--text] rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
         placeholder='e.g. claude --permission-mode auto'
         aria-label={label}
         data-testid={testId}
@@ -548,7 +524,7 @@ function MetaprojectPanel() {
             onBlur={save}
             onKeyDown={(e) => { if (e.key === 'Enter') { void save(); (e.target as HTMLInputElement).blur(); } }}
             placeholder="https://projects.metalogix.solutions"
-            className="flex-1 bg-[--input-bg] text-[--text] border border-[--input-border] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+            className="flex-1 bg-[--surface-field] text-[--text] rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
             data-testid="metaproject-base-url"
           />
         </div>
@@ -595,7 +571,7 @@ function NumberInput({ value, min, max, step = 1, onChange }: { value: number | 
         const n = Number(e.target.value);
         if (Number.isFinite(n)) onChange(Math.max(min, Math.min(max, n)));
       }}
-      className="w-32 bg-[--panel-strong] text-[--text] border border-[--border] rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+      className="w-32 bg-[--surface-field] text-[--text] rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[--accent]/60"
     />
   );
 }

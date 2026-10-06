@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { rootHueVar } from '@renderer/root-hue';
 import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
@@ -99,22 +100,22 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
   return (
     <aside
       data-view="projects"
-      className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
+      className="section-panel h-full flex flex-col shrink-0"
       style={{ width: width ?? 288 }}
     >
-      <div className="p-3 border-b border-[--border] space-y-2">
+      <div className="px-3 pt-2 pb-3 space-y-2">
         <div className="flex items-center gap-1">
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter…"
-            className="flex-1 min-w-0 bg-[--panel-strong] text-sm px-2.5 py-1.5 rounded-md border border-[--border] focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
+            className="flex-1 min-w-0 bg-[--surface-field] text-sm px-2.5 py-1.5 rounded-lg placeholder:text-[--text-muted] focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
           />
           <button
             onClick={rescanAll}
             title={rescanning ? 'Rescanning…' : 'Rescan every root — pick up newly-added folders on disk'}
             disabled={rescanning}
-            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-md border border-[--border] bg-[--panel-strong] hover:bg-[--panel] text-[--text-muted] hover:text-[--text] disabled:opacity-50"
+            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[--surface-field] hover:bg-[--surface-active] text-[--text-muted] hover:text-[--text] disabled:opacity-50"
             data-testid="sidebar-rescan"
           >
             <RescanIcon spinning={rescanning} />
@@ -123,14 +124,14 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
         <div className="flex gap-1">
           <button
             onClick={addRoot}
-            className="flex-1 text-xs font-medium bg-[--panel-strong] border border-[--border] hover:bg-[--panel] pressable rounded-md py-1.5"
+            className="flex-1 text-xs font-medium text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover] pressable rounded-lg py-1.5"
             title="Add a root directory"
           >
             + Root
           </button>
           <button
             onClick={onNewProject}
-            className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 active:brightness-95 pressable rounded-md py-1.5"
+            className="flex-1 text-xs font-medium bg-[--accent-soft] text-[--accent-soft-text] hover:brightness-125 active:brightness-95 pressable rounded-lg py-1.5"
             title="Create a new project (⌘⇧N)"
             data-testid="new-project-btn"
             disabled={!onNewProject}
@@ -232,12 +233,12 @@ function Section({
     });
   }
   return (
-    <div className="mb-2" data-testid={testId}>
+    <div className="mb-3" data-testid={testId}>
       <button
         onClick={toggle}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className="w-full px-3 pt-2 pb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-[--text] hover:text-[--text] hover:bg-[--panel]/60"
+        className="w-full px-3 pt-2 pb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium text-[--text] hover:bg-[--surface-hover]"
       >
         <span className="inline-block w-3 transition-transform text-[--text-muted]" style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}>▾</span>
         {accent && <StatusDot state={dotState ?? 'idle'} />}
@@ -301,7 +302,7 @@ function ProjectRow({
       onContextMenu={onContextMenu}
       title={`${project.path}\n(right-click for options)`}
       className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition-colors ${
-        selected ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel-strong]'
+        selected ? 'bg-[--accent-soft] text-[--text] font-medium' : 'hover:bg-[--surface-hover]'
       }`}
     >
       <button
@@ -317,7 +318,7 @@ function ProjectRow({
           <span
             aria-hidden
             className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
-              selected ? 'bg-white/70' : 'bg-transparent border border-[--border]'
+              selected ? 'bg-[color:var(--accent)]' : 'bg-[--surface-active]'
             }`}
           />
         )}
@@ -329,8 +330,8 @@ function ProjectRow({
           data-testid="row-unload"
           className={`w-4 h-4 flex items-center justify-center rounded transition-colors ${
             selected
-              ? 'text-[--accent-text]/80 hover:text-[--accent-text] hover:bg-white/15 opacity-100'
-              : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--panel] opacity-0 group-hover:opacity-100 focus:opacity-100'
+              ? 'text-[--text-muted] hover:text-[--danger] hover:bg-[--surface-hover] opacity-100'
+              : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--surface-hover] opacity-0 group-hover:opacity-100 focus:opacity-100'
           }`}
           title="Unload session (close shell)"
         >
@@ -415,9 +416,10 @@ function RootBlock({
         onClick={toggle}
         aria-expanded={open}
         data-testid="root-toggle"
-        className="w-full text-left px-3 py-1 text-xs text-[--text-muted] hover:text-[--text] flex items-center gap-1"
+        className="w-full text-left px-3 py-1 text-xs text-[--text-muted] hover:text-[--text] flex items-center gap-1.5"
       >
         <span className="inline-block w-3 transition-transform" style={{ transform: open ? 'none' : 'rotate(-90deg)' }}>▾</span>
+        <RootFolderGlyph color={rootHueVar(root.path)} />
         <span className="truncate flex-1" title={root.path}>{shortenPath(root.path)}</span>
         <span className="text-[10px] opacity-70">
           {aliveInRoot > 0 ? `${aliveInRoot}/${projects.length}` : projects.length}
@@ -538,4 +540,13 @@ function shortenPath(p: string): string {
     if (slash > 0) return `~/${rest.slice(slash + 1)}`;
   }
   return p;
+}
+
+/** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
+function RootFolderGlyph({ color }: { color: string }) {
+  return (
+    <svg aria-hidden data-testid="root-hue" width="13" height="13" viewBox="0 0 24 24" fill={color} fillOpacity={0.25} stroke={color} strokeWidth="1.8" strokeLinejoin="round" className="shrink-0">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
 }

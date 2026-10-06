@@ -767,18 +767,6 @@ input::placeholder, textarea::placeholder {
 .section-panel[data-view="projects"] { --section-tint: color-mix(in oklab, var(--accent) 3%, transparent); }
 .section-panel[data-view="chat"]     { --section-tint: color-mix(in oklab, #22d3ee     3%, transparent); }
 .section-panel[data-view="git"]      { --section-tint: color-mix(in oklab, #ef4444     3%, transparent); }
-/* Thin colored strip on the left edge — 2px, low opacity, just a wink. */
-.section-panel::after {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0; width: 1px;
-  pointer-events: none;
-  background: var(--section-stripe, transparent);
-  transition: background 220ms ease;
-}
-.section-panel[data-view="projects"] { --section-stripe: color-mix(in oklab, var(--accent) 35%, transparent); }
-.section-panel[data-view="chat"]     { --section-stripe: color-mix(in oklab, #22d3ee     40%, transparent); }
-.section-panel[data-view="git"]      { --section-stripe: color-mix(in oklab, #ef4444     40%, transparent); }
 
 /* Compact ring spinner — inherits currentColor so it fits any panel. */
 @keyframes mp-spin {
@@ -889,3 +877,59 @@ kbd {
   border-radius: 4px;
   box-shadow: 0 1px 0 var(--border);
 }
+
+/* ── Chrome surfaces and semantic hues ──
+ * The chrome (title bar, activity bar, sidebars, status bar) is one
+ * continuous surface; panes are separated by tone and spacing, not borders.
+ * The main area sits on it as a rounded sheet. Every token is derived from
+ * the palette variables above, so all palettes and both themes inherit it.
+ * The hue tokens use a palette's terminal colours when it defines them and
+ * fall back to the `-default` values below.
+ */
+:root {
+  --surface-chrome: var(--panel);
+  --surface-sheet: color-mix(in oklab, var(--panel-strong) 55%, transparent);
+  --surface-hover: color-mix(in oklab, var(--text) 7%, transparent);
+  --surface-active: color-mix(in oklab, var(--text) 10%, transparent);
+  --surface-field: color-mix(in oklab, var(--text) 6%, transparent);
+  --accent-soft: color-mix(in oklab, var(--accent) 22%, transparent);
+  --accent-soft-text: color-mix(in oklab, var(--accent) 65%, var(--text));
+
+  --hue-yellow: var(--term-yellow, var(--hue-yellow-default));
+  --hue-purple: var(--term-magenta, var(--hue-purple-default));
+  --hue-cyan: var(--term-cyan, var(--hue-cyan-default));
+  --hue-pink: var(--term-red, var(--hue-pink-default));
+  --hue-orange: var(--hue-orange-default);
+  /* Hue pulled toward --text so small coloured text keeps its contrast. */
+  --hue-orange-text: color-mix(in oklab, var(--hue-orange) 75%, var(--text));
+  /* Text drawn on a solid hue fill (badges). */
+  --badge-ink: #11131a;
+
+  --hue-yellow-default: #e0af68;
+  --hue-purple-default: #bb9af7;
+  --hue-cyan-default: #7dcfff;
+  --hue-pink-default: #f7768e;
+  --hue-orange-default: #ff9e64;
+}
+:root[data-theme="light"] {
+  --badge-ink: #fff;
+  --hue-yellow-default: #b45309;
+  --hue-purple-default: #7c3aed;
+  --hue-cyan-default: #0e7490;
+  --hue-pink-default: #be185d;
+  --hue-orange-default: #c2410c;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --badge-ink: #fff;
+    --hue-yellow-default: #b45309;
+    --hue-purple-default: #7c3aed;
+    --hue-cyan-default: #0e7490;
+    --hue-pink-default: #be185d;
+    --hue-orange-default: #c2410c;
+  }
+}
+:root[data-palette="catppuccin"] { --hue-orange-default: #fab387; }
+:root[data-palette="catppuccin"][data-theme="light"] { --hue-orange-default: #fe640b; }
+:root[data-palette="rose-pine"] { --hue-orange-default: #ebbcba; }
+:root[data-palette="rose-pine"][data-theme="light"] { --hue-orange-default: #d7827e; }

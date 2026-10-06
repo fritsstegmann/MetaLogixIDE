@@ -18,7 +18,7 @@ interface Props {
 export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
   return (
     <nav
-      className="w-11 shrink-0 h-full border-r border-[--border] bg-[--panel]/40 backdrop-blur-md flex flex-col items-center py-1 gap-0.5"
+      className="w-11 shrink-0 h-full flex flex-col items-center py-1 gap-1"
       data-testid="activity-bar"
     >
       <ABButton
@@ -29,7 +29,7 @@ export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, ch
       >
         <SidebarIcon open={sidebarOpen} />
       </ABButton>
-      <Separator />
+      <div aria-hidden className="h-1" />
       <ABButton
         label="Projects"
         active={active === 'projects'}
@@ -62,6 +62,7 @@ export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, ch
         onClick={() => onSelect('tasks')}
         data-testid="ab-tasks"
         badge={active === 'tasks' ? 0 : taskCount}
+        badgeTone="orange"
       >
         <TasksIcon />
       </ABButton>
@@ -81,13 +82,15 @@ export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, ch
 }
 
 function ABButton({
-  children, label, onClick, active, badge, ...rest
+  children, label, onClick, active, badge, badgeTone = 'accent', ...rest
 }: {
   children: ReactNode;
   label: string;
   onClick: () => void;
   active: boolean;
   badge?: number;
+  /** Fill colour of the count badge; tasks use orange so they read apart from git. */
+  badgeTone?: 'accent' | 'orange';
 } & Record<string, unknown>) {
   return (
     <button
@@ -97,17 +100,18 @@ function ABButton({
       {...rest}
       className={`relative w-8 h-8 flex items-center justify-center rounded-md pressable ${
         active
-          ? 'bg-[--panel-strong] text-[--text]'
-          : 'text-[--text-muted] hover:text-[--text] hover:bg-[--panel-strong]'
+          ? 'bg-[--accent-soft] text-[--accent-soft-text]'
+          : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
       }`}
     >
-      {/* Active-indicator strip on the left, VS Code style */}
-      {active && (
-        <span className="absolute left-[-6px] top-1 bottom-1 w-[2px] rounded-full bg-[color:var(--accent)]" />
-      )}
       {children}
       {badge != null && badge > 0 && (
-        <span className="absolute -bottom-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[color:var(--accent)] text-[--accent-text] text-[9px] font-semibold flex items-center justify-center leading-none">
+        <span
+          data-tone={badgeTone}
+          className={`absolute -bottom-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full text-[9px] font-semibold flex items-center justify-center leading-none ${
+            badgeTone === 'orange' ? 'bg-[--hue-orange] text-[--badge-ink]' : 'bg-[color:var(--accent)] text-[--accent-text]'
+          }`}
+        >
           {badge > 99 ? '99+' : badge}
         </span>
       )}
@@ -115,9 +119,6 @@ function ABButton({
   );
 }
 
-function Separator() {
-  return <div className="w-6 h-px my-1 bg-[--border]" />;
-}
 
 function SidebarIcon({ open }: { open: boolean }) {
   return (

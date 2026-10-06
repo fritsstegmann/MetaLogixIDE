@@ -1,8 +1,10 @@
 /**
- * Accessible font preference control with manual entry, installed-family search, preview, and reset.
+ * Font preference combobox: one field that searches installed families,
+ * accepts an exact family name, and offers "System default" in place of a
+ * separate Reset button. Installed fonts load the first time the list opens.
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type {
   FontFamilyPreference,
   FontSettingKey,
@@ -27,8 +29,13 @@ interface Props {
   readonly onLoadInstalledFonts: () => Promise<void>;
 }
 
-const AVAILABLE_COPY = 'Font is installed on this computer.';
-const DEFAULT_COPY = 'Using the default font stack.';
+/** Longest list rendered at once; typing narrows it further. */
+const MAX_VISIBLE_FAMILIES = 200;
+
+type Option =
+  | { readonly kind: 'default' }
+  | { readonly kind: 'family'; readonly family: string }
+  | { readonly kind: 'custom'; readonly family: string };
 
 function testIds(settingKey: FontSettingKey): {
   readonly input: string;
@@ -36,16 +43,8 @@ function testIds(settingKey: FontSettingKey): {
   readonly status: string;
 } {
   return settingKey === 'ui_font_family'
-    ? {
-        input: FONT_TEST_IDS.uiInput,
-        reset: FONT_TEST_IDS.uiReset,
-        status: FONT_TEST_IDS.uiStatus,
-      }
-    : {
-        input: FONT_TEST_IDS.terminalInput,
-        reset: FONT_TEST_IDS.terminalReset,
-        status: FONT_TEST_IDS.terminalStatus,
-      };
+    ? { input: FONT_TEST_IDS.uiInput, reset: FONT_TEST_IDS.uiReset, status: FONT_TEST_IDS.uiStatus }
+    : { input: FONT_TEST_IDS.terminalInput, reset: FONT_TEST_IDS.terminalReset, status: FONT_TEST_IDS.terminalStatus };
 }
 
 function includesFamily(families: readonly string[], family: string): boolean {
@@ -53,26 +52,21 @@ function includesFamily(families: readonly string[], family: string): boolean {
   return families.some((candidate) => candidate.toLowerCase() === folded);
 }
 
-function availabilityText(
-  value: FontFamilyPreference,
-  discovery: FontDiscoveryState,
-): string {
-  if (discovery.status === 'idle') {
-    return value === null ? DEFAULT_COPY : 'Load installed fonts to check availability.';
-  }
-  if (discovery.status === 'loading') return 'Loading installed fonts…';
-  if (discovery.status === 'success') {
-    if (value === null) return DEFAULT_COPY;
-    return includesFamily(discovery.families, value) ? AVAILABLE_COPY : FONT_COPY.unavailable;
-  }
-  const reason = discovery.status === 'unsupported'
-    ? 'Installed font discovery is not supported.'
-    : discovery.status === 'denied'
-      ? 'Access to installed fonts was denied.'
-      : 'Installed fonts could not be loaded.';
-  return value === null ? reason : `${reason} ${FONT_COPY.unknown}`;
+function discoveryFailure(discovery: FontDiscoveryState): string | null {
+  if (discovery.status === 'unsupported') return FONT_COPY.discoveryUnsupported;
+  if (discovery.status === 'denied') return FONT_COPY.discoveryDenied;
+  if (discovery.status === 'error') return FONT_COPY.discoveryError;
+  return null;
 }
 
+/** Status shown under the field — empty unless something needs attention. */
+function statusText(value: FontFamilyPreference, discovery: FontDiscoveryState): string {
+  if (value === null) return '';
+  if (discovery.status === 'success') {
+    return includesFamily(discovery.families, value) ? '' : FONT_COPY.unavailable;
+  }
+  return discoveryFailure(discovery) === null ? '' : FONT_COPY.unknown;
+}
 
 /** Renders and commits one independent UI or terminal font preference. */
 export function FontControl({
@@ -86,236 +80,245 @@ export function FontControl({
 }: Props): React.JSX.Element {
   const reactId = useId();
   const inputId = `${reactId}-input`;
-  const pickerId = `${reactId}-picker`;
-  const hintId = `${reactId}-hint`;
+  const listId = `${reactId}-list`;
   const statusId = `${reactId}-status`;
   const errorId = `${reactId}-error`;
-  const [input, setInput] = useState(value ?? '');
+  const ids = testIds(settingKey);
+  const [query, setQuery] = useState(value ?? '');
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const savingRef = useRef(false);
-  const pendingValueRef = useRef<FontFamilyPreference | undefined>(undefined);
-  const ids = testIds(settingKey);
-  const families = discovery.status === 'success' ? discovery.families : [];
-  const previewStack = buildFontFamilyStack(value, fallback);
-  const matchingFamilies = families.filter((family) =>
-    family.toLowerCase().includes(search.trim().toLowerCase()),
+  const inputRef = useRef<HTMLInputElement>(null);
+  const families = useMemo<readonly string[]>(
+    () => (discovery.status === 'success' ? discovery.families : []),
+    [discovery],
   );
+  const failure = discoveryFailure(discovery);
 
   useEffect(() => {
-    pendingValueRef.current = undefined;
-    setInput(value ?? '');
+    setQuery(value ?? '');
   }, [value]);
 
-  async function commit(candidate: string): Promise<void> {
-    if (savingRef.current) return;
-    const parsed = parseFontFamilyPreference(candidate);
+  const options = useMemo<Option[]>(() => {
+    const needle = query.trim().toLowerCase();
+    // While the field still shows the saved family, list everything.
+    const filtering = needle.length > 0 && needle !== (value ?? '').toLowerCase();
+    const matches = filtering ? families.filter((f) => f.toLowerCase().includes(needle)) : families;
+    const list: Option[] = [{ kind: 'default' }];
+    for (const family of matches.slice(0, MAX_VISIBLE_FAMILIES)) list.push({ kind: 'family', family });
+    const typed = query.trim();
+    if (filtering && !includesFamily(families, typed)) list.push({ kind: 'custom', family: typed });
+    return list;
+  }, [families, query, value]);
+
+  const selectedIndex = options.findIndex((o) =>
+    value === null ? o.kind === 'default' : o.kind !== 'default' && o.family.toLowerCase() === value.toLowerCase());
+
+  function openList(): void {
+    if (open) return;
+    setOpen(true);
+    setActiveIndex(Math.max(0, selectedIndex));
+    if (discovery.status === 'idle' || failure !== null) void onLoadInstalledFonts();
+  }
+
+  function closeList(restore: boolean): void {
+    setOpen(false);
+    if (restore) setQuery(value ?? '');
+  }
+
+  async function save(next: FontFamilyPreference): Promise<void> {
+    if (savingRef.current || next === value) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(next);
+    } catch {
+      setSaveError(FONT_COPY.saveFailed);
+      setQuery(value ?? '');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  /** Validates and saves typed text; empty text means the system default. */
+  async function commitTyped(text: string): Promise<void> {
+    if (text.trim().length === 0) {
+      setValidationError(null);
+      setQuery('');
+      await save(null);
+      return;
+    }
+    const parsed = parseFontFamilyPreference(text);
     if (!parsed.ok || parsed.value === null) {
-      setValidationError(parsed.ok ? 'Enter a font family or use Reset.' : parsed.error);
+      setValidationError(parsed.ok ? FONT_COPY.emptyName : parsed.error);
       return;
     }
     setValidationError(null);
-    setInput(parsed.value);
-    if (parsed.value === value || pendingValueRef.current === parsed.value) return;
-    pendingValueRef.current = parsed.value;
-    savingRef.current = true;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      await onSave(parsed.value);
-    } catch {
-      setSaveError('Could not save this font. Your previous font remains active.');
-      pendingValueRef.current = undefined;
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
+    setQuery(parsed.value);
+    await save(parsed.value);
+  }
+
+  async function choose(option: Option): Promise<void> {
+    setValidationError(null);
+    closeList(false);
+    if (option.kind === 'default') {
+      setQuery('');
+      await save(null);
+    } else {
+      await commitTyped(option.family);
     }
   }
 
-  async function reset(): Promise<void> {
-    if (savingRef.current || value === null || pendingValueRef.current === null) return;
-    pendingValueRef.current = null;
-    savingRef.current = true;
-    setSaving(true);
-    setValidationError(null);
-    setSaveError(null);
-    try {
-      await onSave(null);
-    } catch {
-      setSaveError('Could not save this font. Your previous font remains active.');
-      pendingValueRef.current = undefined;
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }
+  const activeOption = Math.min(activeIndex, options.length - 1);
+  const optionId = (index: number): string => `${listId}-${index}`;
+  const describedBy = [statusId, validationError || saveError ? errorId : null].filter(Boolean).join(' ');
+  const status = saving ? FONT_COPY.saving : statusText(value, discovery);
 
   return (
-    <div className="space-y-2 rounded-lg border border-[--border] bg-[--panel]/40 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <label htmlFor={inputId} className="text-sm font-medium">{label}</label>
-        <button
-          type="button"
-          onClick={() => void reset()}
-          disabled={saving || value === null}
-          className="pressable min-h-11 rounded-md px-3 text-sm text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text] disabled:cursor-not-allowed disabled:opacity-50"
-          data-testid={ids.reset}
-        >
-          {FONT_COPY.reset}
-        </button>
-      </div>
-      <p id={hintId} className="text-xs text-[--text-muted]">
-        Choose a font installed on this computer, or enter an exact family name.
-      </p>
-      <input
-        id={inputId}
-        name={settingKey}
-        type="text"
-        value={input}
-        placeholder={FONT_COPY.defaultValue}
-        autoComplete="off"
-        enterKeyHint="done"
-        disabled={saving}
-        aria-invalid={validationError !== null}
-        aria-describedby={`${hintId} ${statusId}${validationError || saveError ? ` ${errorId}` : ''}`}
-        onChange={(event) => {
-          const next = event.target.value;
-          setInput(next);
-          setValidationError(null);
-          setSaveError(null);
-          if (includesFamily(families, next)) void commit(next);
-        }}
-        onBlur={(event) => {
-          if (event.currentTarget.value.length > 0 || value !== null) {
-            void commit(event.currentTarget.value);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key !== 'Enter') return;
-          event.preventDefault();
-          void commit(event.currentTarget.value);
-        }}
-        className="min-h-11 w-full rounded-md border border-[--input-border] bg-[--input-bg] px-3.5 py-3 text-base text-[--text] transition-colors hover:border-[--text-muted] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
-        data-testid={ids.input}
-      />
-      <button
-        type="button"
-        aria-expanded={pickerOpen}
-        aria-controls={pickerId}
-        disabled={saving}
-        onClick={() => {
-          setPickerOpen(!pickerOpen);
-          if (!pickerOpen && discovery.status !== 'success' && discovery.status !== 'loading') {
-            void onLoadInstalledFonts();
-          }
-        }}
-        className="pressable min-h-11 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:opacity-50"
-      >
-        {pickerOpen ? 'Close installed fonts' : 'Choose installed font'}
-      </button>
-      {pickerOpen && (
-        <div
-          id={pickerId}
-          className="space-y-2 rounded-md border border-[--border] bg-[--panel-strong] p-3"
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.stopPropagation();
-              setPickerOpen(false);
-              document.getElementById(inputId)?.focus();
-            }
-          }}
-        >
-          {discovery.status === 'success' ? (
-            <>
-              <label className="block text-xs text-[--text-muted]" htmlFor={`${pickerId}-search`}>
-                Search installed fonts for {label.toLowerCase()}
-              </label>
-              <input
-                id={`${pickerId}-search`}
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                className="min-h-11 w-full rounded-md border border-[--input-border] bg-[--input-bg] px-3 text-base focus-visible:ring-2 focus-visible:ring-[--accent]/70"
-              />
-              <p className="text-xs text-[--text-muted]" aria-live="polite">
-                {families.length === 0 ? 'No installed font families were found.'
-                  : matchingFamilies.length === 0 ? 'No installed fonts match your search.'
-                    : `${matchingFamilies.length} font ${matchingFamilies.length === 1 ? 'family' : 'families'}`}
-              </p>
-              <ul className="max-h-56 space-y-1 overflow-y-auto" aria-label={`Installed fonts for ${label.toLowerCase()}`}>
-                {matchingFamilies.map((family) => (
-                  <li key={family}>
-                    <button
-                      type="button"
-                      disabled={saving}
-                      aria-pressed={value !== null && family.toLowerCase() === value.toLowerCase()}
-                      onClick={() => {
-                        void commit(family);
-                      }}
-                      className="pressable min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-[--panel] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:opacity-50"
-                    >
-                      <span className="block truncate text-sm">{family}</span>
-                      <span
-                        className="block truncate text-lg text-[--text-muted]"
-                        style={{ fontFamily: buildFontFamilyStack(family, fallback) }}
-                      >
-                        Aa Bb 0O 1l — The quick brown fox
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <div className="space-y-2">
-              <p role="status" className="text-sm text-[--text-muted]">
-                {availabilityText(null, discovery)}
-              </p>
-              {discovery.status !== 'loading' && (
+    <div className="grid items-start gap-x-4 gap-y-1.5 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
+      <label htmlFor={inputId} className="pt-2 text-sm text-[--text]">{label}</label>
+      <div className="relative min-w-0 space-y-1.5">
+        <div className="relative">
+          <input
+            ref={inputRef}
+            id={inputId}
+            name={settingKey}
+            type="text"
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={open ? optionId(activeOption) : undefined}
+            aria-invalid={validationError !== null}
+            aria-describedby={describedBy}
+            value={query}
+            placeholder={FONT_COPY.defaultValue}
+            autoComplete="off"
+            spellCheck={false}
+            enterKeyHint="done"
+            disabled={saving}
+            onFocus={openList}
+            onClick={openList}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setValidationError(null);
+              setSaveError(null);
+              // Typing highlights the first match (or "Use …"), never System default.
+              setActiveIndex(event.target.value.trim().length > 0 ? 1 : 0);
+              if (!open) openList();
+            }}
+            onBlur={(event) => {
+              const text = event.currentTarget.value;
+              closeList(false);
+              if (text.trim() !== (value ?? '')) void commitTyped(text);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (!open) { openList(); return; }
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                setActiveIndex((i) => (i + step + options.length) % options.length);
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                const option = open ? options[activeOption] : undefined;
+                if (option) {
+                  void choose(option);
+                } else {
+                  closeList(false);
+                  void commitTyped(event.currentTarget.value);
+                }
+              } else if (event.key === 'Escape' && open) {
+                event.preventDefault();
+                event.stopPropagation();
+                closeList(true);
+              }
+            }}
+            className="min-h-11 w-full rounded-lg bg-[--surface-field] py-2 pl-3 pr-9 text-[15px] text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ fontFamily: buildFontFamilyStack(value, fallback) }}
+            data-testid={ids.input}
+          />
+          <span aria-hidden className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[--text-muted]">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+          </span>
+        </div>
+
+        {open && (
+          <ul
+            id={listId}
+            role="listbox"
+            aria-label={`${label} options`}
+            className="popover absolute left-0 right-0 top-12 z-20 max-h-64 overflow-y-auto rounded-lg bg-[--panel-strong] p-1 shadow-xl ring-1 ring-black/10"
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            {options.map((option, index) => {
+              const selected = index === selectedIndex;
+              const active = index === activeOption;
+              const family = option.kind === 'default' ? null : option.family;
+              return (
+                <li
+                  key={option.kind === 'default' ? '__default' : `${option.kind}:${option.family}`}
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected={selected}
+                  data-testid={option.kind === 'default' ? ids.reset : undefined}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => void choose(option)}
+                  className={`flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm ${
+                    active ? 'bg-[--surface-active]' : ''
+                  }`}
+                >
+                  <span aria-hidden className={`w-4 shrink-0 text-[--accent] ${selected ? '' : 'invisible'}`}>✓</span>
+                  {option.kind === 'custom' ? (
+                    <span className="truncate">{FONT_COPY.customOption(option.family)}</span>
+                  ) : (
+                    <span className="truncate" style={{ fontFamily: buildFontFamilyStack(family, fallback) }}>
+                      {family ?? FONT_COPY.defaultValue}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+            {discovery.status === 'loading' && (
+              <li role="presentation" className="px-2.5 py-2 text-xs text-[--text-muted]">{FONT_COPY.loading}</li>
+            )}
+            {failure !== null && (
+              <li role="presentation" className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs text-[--text-muted]">
+                <span role="status">{failure}</span>
                 <button
                   type="button"
                   onClick={() => void onLoadInstalledFonts()}
-                  className="pressable min-h-11 rounded-md border border-[--input-border] px-3 text-sm focus-visible:ring-2 focus-visible:ring-[--accent]/70"
+                  className="pressable shrink-0 rounded-md px-2 py-1 text-[--accent-soft-text] hover:bg-[--surface-hover]"
                 >
-                  Retry loading installed fonts
+                  {FONT_COPY.retry}
                 </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      <div
-        className="min-w-0 overflow-hidden rounded-md border border-[--border] bg-[--panel-strong] px-3 py-2"
-        style={{ fontFamily: previewStack }}
-        aria-label={`${label} preview`}
-      >
-        <div className="truncate text-base">
+              </li>
+            )}
+          </ul>
+        )}
+
+        <div
+          className="truncate px-1 text-[13px] text-[--text-muted]"
+          style={{ fontFamily: buildFontFamilyStack(value, fallback) }}
+          aria-label={`${label} preview`}
+        >
           {settingKey === 'ui_font_family'
             ? 'The quick brown fox jumps over the lazy dog.'
-            : 'Terminal preview: Aa 0O 1l → ~/project'}
+            : <>Aa 0O 1l → ~/project <span aria-label="private-use glyph sample">󰆍</span></>}
         </div>
-        {settingKey === 'terminal_font_family' && (
-          <div className="truncate text-sm text-[--text-muted]">
-            Nerd Font private-use sample: <span aria-label="private-use glyph sample"> 󰆍</span>
-          </div>
+        <p id={statusId} aria-live="polite" className="px-1 text-xs text-[--text-muted] empty:hidden" data-testid={ids.status}>
+          {status}
+        </p>
+        {(validationError || saveError) && (
+          <p id={errorId} role="alert" className="px-1 text-xs text-[--danger]">
+            {validationError ?? saveError}
+          </p>
         )}
       </div>
-      <p
-        id={statusId}
-        aria-live="polite"
-        className="text-xs text-[--text-muted]"
-        data-testid={ids.status}
-      >
-        {saving ? 'Saving…' : availabilityText(value, discovery)}
-      </p>
-      {(validationError || saveError) && (
-        <p id={errorId} role="alert" className="text-xs text-[--danger]">
-          {validationError ?? saveError}
-        </p>
-      )}
     </div>
   );
 }
