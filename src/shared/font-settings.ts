@@ -4,7 +4,8 @@ export type FontFamilyPreference = string | null;
 
 export const MAX_FONT_FAMILY_CODE_POINTS = 256;
 export const UI_FONT_FALLBACK = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
-export const TERMINAL_FONT_FALLBACK = '"SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace';
+export const TERMINAL_SYMBOL_FONT = 'Symbols Nerd Font Mono';
+export const TERMINAL_FONT_FALLBACK = `"SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, "${TERMINAL_SYMBOL_FONT}", monospace`;
 
 export type FontFamilyParseResult =
   | { readonly ok: true; readonly value: FontFamilyPreference }

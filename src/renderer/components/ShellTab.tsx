@@ -179,7 +179,7 @@ export function ShellTab({
     const fontUpdater = createTerminalFontUpdater({
       terminal: term,
       synchronize: synchronizeGeometry,
-      loadFont: (specification) => document.fonts.load(specification),
+      loadFont: (specification, text) => document.fonts.load(specification, text),
       timeoutMs: TERMINAL_FONT_READY_TIMEOUT_MS,
     });
     fontUpdaterRef.current = fontUpdater;

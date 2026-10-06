@@ -41,7 +41,10 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
     const generation = fontDiscoveryGeneration.current;
     setFontDiscovery({ status: 'loading' });
     const result = await discoverLocalFonts(window);
-    if (fontDiscoveryGeneration.current === generation) setFontDiscovery(result);
+    if (fontDiscoveryGeneration.current === generation) {
+      fontDiscoveryAttempted.current = false;
+      setFontDiscovery(result);
+    }
   }, []);
 
   if (!open) return null;
@@ -303,12 +306,13 @@ function FontSettingsControls({
         <button
           type="button"
           onClick={() => void onLoadInstalledFonts()}
-          disabled={discovery.status !== 'idle'}
+          disabled={discovery.status === 'loading'}
           aria-describedby={discoveryStatusId}
           className="pressable min-h-11 shrink-0 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] disabled:cursor-not-allowed disabled:opacity-50"
           data-testid={FONT_TEST_IDS.loadInstalled}
         >
-          {FONT_COPY.loadInstalled}
+          {discovery.status === 'denied' || discovery.status === 'error' || discovery.status === 'unsupported'
+            ? 'Retry loading installed fonts' : FONT_COPY.loadInstalled}
         </button>
       </div>
       <p id={discoveryStatusId} aria-live="polite" className="text-xs text-[--text-muted]">
@@ -346,6 +350,7 @@ function RootsPanel() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+        onLoadInstalledFonts={onLoadInstalledFonts}
   async function add() {
     const picked = await api.invoke('dialogs:pick-directory', undefined as never);
     if (!picked.path) return;
@@ -354,6 +359,7 @@ function RootsPanel() {
   }
   async function remove(id: number) {
     if (!window.confirm('Remove this root? Projects underneath are un-registered.')) return;
+        onLoadInstalledFonts={onLoadInstalledFonts}
     await api.invoke('roots:remove', { id });
     await refresh();
   }
