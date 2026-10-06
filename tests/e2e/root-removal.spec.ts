@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-test('removing a root in Settings drops it from the sidebar "All projects" list', async () => {
+test('removing a root in Settings drops it from the sidebar "Projects" list', async () => {
   const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-rootrm-home-'));
   const keptRoot     = mkdtempSync(join(tmpdir(), 'metaide-rootrm-kept-'));
   const goneRoot     = mkdtempSync(join(tmpdir(), 'metaide-rootrm-gone-'));

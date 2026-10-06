@@ -88,7 +88,7 @@ test('root folders carry a hue glyph', async () => {
 });
 
 test('chrome tokens resolve in every palette and theme', async () => {
-  const tokens = ['--surface-chrome', '--surface-sheet', '--accent-soft', '--hue-yellow', '--hue-purple', '--hue-cyan', '--hue-pink', '--hue-orange', '--badge-ink'];
+  const tokens = ['--surface-chrome', '--surface-sheet', '--accent-soft', '--hue-yellow', '--hue-purple', '--hue-cyan', '--hue-pink', '--hue-orange', '--hue-orange-soft', '--hue-orange-soft-text', '--badge-accent-text', '--badge-ink'];
   for (const palette of ['default', 'catppuccin', 'rose-pine']) {
     for (const theme of ['dark', 'light']) {
       const resolved = await win.evaluate(({ palette, theme, tokens }) => {
