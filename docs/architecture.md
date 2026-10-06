@@ -12,6 +12,28 @@ preview pipeline, terminal focus, Claude notifications and the Claude status
 dots. The product design is in
 `docs/superpowers/specs/2026-07-18-metaide-design.md`.
 
+### Main-process startup invariant
+
+After services are constructed, `src/main/index.ts` registers every generic
+IPC handler before creating the initial `BrowserWindow`. Renderer providers
+may invoke settings channels while the first document is still loading, so
+window creation must not move ahead of `registerIpc`.
+
+On macOS, startup resolves PATH from the user's interactive login shell before
+constructing services or creating a renderer (`src/main/index.ts:374-386,508-510`).
+The resolver reads only NUL-framed PATH output, ignoring shell startup banners.
+It limits execution to 10 seconds and output to 1 MiB
+(`src/main/domain/login-shell-path.ts:10-33`).
+If resolution fails, startup logs a warning and retains the inherited PATH.
+Managed runtimes such as mise-provided Bun are available when the shell exposes
+them in PATH. CLI profile commands still launch directly, not through shell text.
+
+`buildServices()` clears the `shells` table before constructing the fresh PTY
+runtime (`src/main/services.ts:77-96`). These records belong to the previous
+runtime, not resumable terminals. Cleanup removes pinned and unpinned records
+but preserves projects and settings. Previous-run records cannot consume the
+keep-alive cap or block the first terminal after restart.
+
 ## Components
 
 ### Markdown preview pipeline

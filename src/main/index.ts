@@ -11,6 +11,7 @@ import { installClaudeNotifications } from './notifications/install';
 import { installClaudeStatus } from './claude-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
+import { resolveLoginShellPath } from './domain/login-shell-path';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -24,44 +25,6 @@ log.transports.console.level = 'debug';
 Object.assign(console, log.functions);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// macOS: when the app launches from Finder / Dock, PATH is the pared-down
-// GUI default (`/usr/bin:/bin:/usr/sbin:/sbin`). That's missing Homebrew,
-// nvm, cargo, and every npm-global install location — so `claude`, `git`,
-// `pnpm`, etc. spawn as "command not found" and the PTY exits immediately
-// with the dreaded `[shell exited]`. Prepend the well-known user paths so
-// spawned shells inherit a workable PATH. Order matters: user-scoped
-// installers first, then Homebrew, then system.
-function augmentPathForGuiLaunch(): void {
-  if (process.platform !== 'darwin') return;
-  const home = homedir();
-  const candidates = [
-    `${home}/.local/bin`,
-    `${home}/.cargo/bin`,
-    `${home}/.volta/bin`,
-    `${home}/.npm-global/bin`,
-    `${home}/.nvm/current/bin`,
-    `${home}/.bun/bin`,
-    '/opt/homebrew/bin',
-    '/opt/homebrew/sbin',
-    '/usr/local/bin',
-    '/usr/local/sbin',
-  ];
-  const existing = (process.env.PATH ?? '').split(':').filter(Boolean);
-  const seen = new Set(existing);
-  const extras: string[] = [];
-  for (const p of candidates) {
-    if (existsSync(p) && !seen.has(p)) {
-      extras.push(p);
-      seen.add(p);
-    }
-  }
-  process.env.PATH = [...extras, ...existing].join(':');
-  if (extras.length > 0) {
-    console.log('[metaide] PATH augmented for GUI launch: prepended', extras.join(':'));
-  }
-}
-augmentPathForGuiLaunch();
 
 let mainWindow: BrowserWindow | null = null;
 const popoutWindows = new Map<string, BrowserWindow>(); // key = `${projectId}:${shellIndex}`
@@ -408,7 +371,19 @@ ipcMain.handle('app:renderer-ready-for-files', () => {
   return { ok: true } as const;
 });
 
-app.whenReady().then(async () => {
+const startupReady = app.whenReady().then(async () => {
+  if (process.platform === 'darwin') {
+    const loginShell = process.env.SHELL || '/bin/zsh';
+    try {
+      process.env.PATH = await resolveLoginShellPath(loginShell, homedir(), process.env);
+    } catch (err) {
+      log.warn(
+        '[metaide] Could not resolve interactive login-shell PATH; retaining inherited PATH. Check your shell startup files and runtime PATH configuration.',
+        loginShell,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
   // Cold-launch argv scan (Windows/Linux + packaged mac when invoked with
   // args). Runs after ready so `existsSync` sees the app-relative CWD.
   scanArgvForFiles(process.argv);
@@ -437,13 +412,13 @@ app.whenReady().then(async () => {
   }
   // New windows read the current opacity setting when they are created.
   readWindowOpacity = () => services.settings.get('window_opacity');
-  mainWindow = await createMainWindow();
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
     listPopped: () => listPopped(),
     tileAll: () => tileAllOurWindows(),
   });
+  mainWindow = await createMainWindow();
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
   installClaudeNotifications({
     hooks: services.claudeState,
@@ -530,4 +505,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('activate', async () => { if (BrowserWindow.getAllWindows().length === 0) mainWindow = await createMainWindow(); });
+app.on('activate', async () => {
+  if (process.platform === 'darwin') await startupReady;
+  if (BrowserWindow.getAllWindows().length === 0) mainWindow = await createMainWindow();
+});
