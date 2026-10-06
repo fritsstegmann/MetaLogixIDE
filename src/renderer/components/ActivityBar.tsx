@@ -18,7 +18,7 @@ interface Props {
 export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
   return (
     <nav
-      className="w-11 shrink-0 h-full flex flex-col items-center py-1 gap-1"
+      className="w-14 shrink-0 h-full flex flex-col items-center pt-1 pb-3 gap-1.5"
       data-testid="activity-bar"
     >
       <ABButton
@@ -98,7 +98,7 @@ function ABButton({
       title={label}
       aria-label={label}
       {...rest}
-      className={`relative w-8 h-8 flex items-center justify-center rounded-md pressable ${
+      className={`relative w-9 h-9 flex items-center justify-center rounded-[10px] pressable ${
         active
           ? 'bg-[--accent-soft] text-[--accent-soft-text]'
           : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
@@ -108,8 +108,8 @@ function ABButton({
       {badge != null && badge > 0 && (
         <span
           data-tone={badgeTone}
-          className={`absolute -bottom-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full text-[9px] font-semibold flex items-center justify-center leading-none ${
-            badgeTone === 'orange' ? 'bg-[--hue-orange] text-[--badge-ink]' : 'bg-[color:var(--accent)] text-[--accent-text]'
+          className={`absolute top-[3px] right-[1px] min-w-4 h-4 px-1 rounded-lg text-[10px] font-semibold flex items-center justify-center leading-none ${
+            badgeTone === 'orange' ? 'bg-[--hue-orange-soft] text-[--hue-orange-soft-text]' : 'bg-[--accent-soft] text-[--accent-soft-text]'
           }`}
         >
           {badge > 99 ? '99+' : badge}
@@ -122,7 +122,7 @@ function ABButton({
 
 function SidebarIcon({ open }: { open: boolean }) {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <line x1={open ? '9' : '9'} y1="3" x2="9" y2="21" />
     </svg>
@@ -131,7 +131,7 @@ function SidebarIcon({ open }: { open: boolean }) {
 
 function GitBranchIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="2.5" />
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
@@ -141,7 +141,7 @@ function GitBranchIcon() {
 
 function ChatIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
   );
@@ -149,7 +149,7 @@ function ChatIcon() {
 
 function ProjectsIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </svg>
   );
@@ -157,9 +157,9 @@ function ProjectsIcon() {
 
 
 function TasksIcon() {
-  // Play triangle inside a rounded square — reads as "runnable" at 15px.
+  // Play triangle inside a rounded square — reads as "runnable" at 17px.
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="3" />
       <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
     </svg>
@@ -168,7 +168,7 @@ function TasksIcon() {
 
 function GearIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
     </svg>

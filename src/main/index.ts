@@ -131,7 +131,8 @@ function darwinChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
   return process.platform === 'darwin'
     ? {
         titleBarStyle: 'hiddenInset',
-        trafficLightPosition: { x: 12, y: 10 },
+        // y centres the lights on the 44px title bar shared by the main and popout windows.
+        trafficLightPosition: { x: 12, y: 14 },
         vibrancy: 'sidebar',
         visualEffectState: 'active',
         roundedCorners: true,

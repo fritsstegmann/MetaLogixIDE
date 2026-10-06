@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
+import { TitleGroup } from './components/TitleGroup';
+import { CHROME_TESTIDS } from './chrome-testids';
+import { SIDEBAR_WIDTH, useSidebarWidth } from './sidebar-width';
 import { ShellTab } from './components/ShellTab';
 import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
@@ -223,7 +226,7 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
-  const [sidebarWidth, setSidebarWidth] = usePersistedNumber('metaide.sidebarWidth', 288, 200, 560);
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
   const [chatPanelWidth, setChatPanelWidth] = usePersistedNumber('metaide.chatPanelWidth', 400, 300, 640);
@@ -680,17 +683,17 @@ function MainApp() {
   return (
     <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
       {/* Native-feeling drag region for hidden-inset title bar */}
-      <div className="drag h-9 flex items-center pl-[76px] pr-2 shrink-0">
-        <span className="text-xs opacity-70 ml-1 font-medium">MetaLogix IDE</span>
-        {selected && (
-          <span className="text-[11px] text-[--text-muted] ml-3 truncate max-w-[360px]" title={selected.path}>
-            <span className="opacity-60">▸ </span>{selected.name}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1 no-drag">
+      <div className="drag relative h-11 flex items-center pl-[76px] pr-4 shrink-0">
+        <div className="absolute inset-y-0 left-[124px] right-[124px] flex items-center justify-center min-w-0 pointer-events-none">
+          <TitleGroup
+            projectName={selected?.name ?? null}
+            branch={git.isRepo ? (git.branch ?? 'HEAD') : null}
+          />
+        </div>
+        <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
           <button
             onClick={cycleTheme}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title={`Theme: ${themeMode}${themeMode === 'system' ? ` (following OS — currently ${effectiveTheme})` : ''}. Click to toggle.`}
             data-testid="theme-toggle"
             data-theme-mode={themeMode}
@@ -704,7 +707,7 @@ function MainApp() {
                 toast(`Tiled ${arranged} window${arranged === 1 ? '' : 's'}`, { kind: 'success', timeoutMs: 1200 });
               } catch (e) { toast('Tile failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') }); }
             }}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Tile all our windows on the screen"
             data-testid="tile-windows"
           >
@@ -712,7 +715,7 @@ function MainApp() {
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Settings (⌘,)"
             data-testid="settings-open"
           >
@@ -755,9 +758,9 @@ function MainApp() {
           <ResizeHandle
             value={sidebarWidth}
             onChange={setSidebarWidth}
-            onReset={() => setSidebarWidth(288)}
-            min={200}
-            max={560}
+            onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+            min={SIDEBAR_WIDTH.min}
+            max={SIDEBAR_WIDTH.max}
             side="left"
           />
           {activeView === 'chat' && (
@@ -825,7 +828,7 @@ function MainApp() {
             </>
           )}
         </Reveal>
-        <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-xl mr-2">
+        <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
           <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
@@ -1043,7 +1046,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   }, [projectName, shellIndex]);
   return (
     <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
-      <div className="drag h-9 flex items-center gap-2 pl-[76px] pr-3 shrink-0 min-w-0">
+      <div className="drag h-11 flex items-center gap-2 pl-[76px] pr-3 shrink-0 min-w-0">
         {/* Prominent project name — the whole reason a user pops shells out
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
@@ -1110,7 +1113,7 @@ function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonPr
       data-testid={testId}
       aria-label={ariaLabel}
       aria-current={active ? 'page' : undefined}
-      className={`px-3 py-1 rounded-md transition-colors ${
+      className={`h-8 px-3 rounded-lg transition-colors ${
         active
           ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium'
           : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'

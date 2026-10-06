@@ -12,6 +12,9 @@ import { toast } from '@renderer/hooks/useToasts';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { StatusDot } from './StatusDot';
 import { ENV_COPY } from '@renderer/project-env-copy';
+import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
+import { SIDEBAR_WIDTH } from '@renderer/sidebar-width';
+import { SidebarHeader } from './SidebarHeader';
 
 interface Props {
   selectedProjectId: number | null;
@@ -70,78 +73,25 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
     return byRoot;
   }, [projects, filter]);
 
-  const [rescanning, setRescanning] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const askRename = useCallback((p: Project) => setRenameTarget(p), []);
-  async function rescanAll() {
-    setRescanning(true);
-    let total = 0;
-    try {
-      for (const r of roots) {
-        const { discovered } = await api.invoke('roots:rescan', { id: r.id });
-        total += discovered;
-      }
-      await refreshProjects();
-      toast(`Rescanned ${roots.length} root${roots.length === 1 ? '' : 's'}`, { kind: 'success', detail: `${total} project folder${total === 1 ? '' : 's'} on disk` });
-    } catch (e) {
-      toast('Rescan failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-    } finally {
-      setRescanning(false);
-    }
-  }
-  async function addRoot() {
-    const picked = await api.invoke('dialogs:pick-directory', undefined as never);
-    if (!picked.path) return;
-    await api.invoke('roots:add', { path: picked.path });
-    await refreshRoots();
-    await refreshProjects();
-  }
 
   return (
     <aside
       data-view="projects"
-      className="section-panel h-full flex flex-col shrink-0"
-      style={{ width: width ?? 288 }}
+      className="section-panel h-full flex flex-col gap-7 shrink-0 pt-1 pr-4 pb-5 pl-2"
+      style={{ width: width ?? SIDEBAR_WIDTH.default }}
     >
-      <div className="px-3 pt-2 pb-3 space-y-2">
-        <div className="flex items-center gap-1">
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter…"
-            className="flex-1 min-w-0 bg-[--surface-field] text-sm px-2.5 py-1.5 rounded-lg placeholder:text-[--text-muted] focus:outline-none focus:ring-1 focus:ring-[--accent]/60"
-          />
-          <button
-            onClick={rescanAll}
-            title={rescanning ? 'Rescanning…' : 'Rescan every root — pick up newly-added folders on disk'}
-            disabled={rescanning}
-            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg bg-[--surface-field] hover:bg-[--surface-active] text-[--text-muted] hover:text-[--text] disabled:opacity-50"
-            data-testid="sidebar-rescan"
-          >
-            <RescanIcon spinning={rescanning} />
-          </button>
-        </div>
-        <div className="flex gap-1">
-          <button
-            onClick={addRoot}
-            className="flex-1 text-xs font-medium text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover] pressable rounded-lg py-1.5"
-            title="Add a root directory"
-          >
-            + Root
-          </button>
-          <button
-            onClick={onNewProject}
-            className="flex-1 text-xs font-medium bg-[--accent-soft] text-[--accent-soft-text] hover:brightness-125 active:brightness-95 pressable rounded-lg py-1.5"
-            title="Create a new project (⌘⇧N)"
-            data-testid="new-project-btn"
-            disabled={!onNewProject}
-          >
-            + Project
-          </button>
-        </div>
-      </div>
+      <SidebarHeader
+        filter={filter}
+        onFilterChange={setFilter}
+        onNewProject={onNewProject}
+        roots={roots}
+        refreshRoots={refreshRoots}
+        refreshProjects={refreshProjects}
+      />
 
-      <div className="flex-1 min-h-0 overflow-y-auto py-1">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-7">
         {inUse.length > 0 && (
           <Section title="In use" testId="section-in-use" accent dotState={overallClaudeState}>
             {inUse.map((p) => (
@@ -174,7 +124,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
           </Section>
         )}
 
-        <Section title="All projects" testId="section-all">
+        <Section title={SIDEBAR_COPY.projectsHeading} persistKey={SECTION_PERSIST_KEYS.projects} testId={SIDEBAR_TESTIDS.sectionAll}>
           {roots.map((r) => (
             <RootBlock
               key={r.id}
@@ -212,9 +162,11 @@ function writeCollapsedSections(set: Set<string>): void {
 }
 
 function Section({
-  title, testId, accent = false, dotState, children,
+  title, persistKey = title, testId, accent = false, dotState, children,
 }: {
   title: string;
+  /** Collapse-state key; defaults to `title`, so a renamed section can keep its stored state. */
+  persistKey?: string;
   testId: string;
   accent?: boolean;
   /** Worst Claude state across the section's shells (D4); only meaningful when `accent` is set. */
@@ -222,23 +174,23 @@ function Section({
   children: React.ReactNode;
 }) {
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(readCollapsedSections);
-  const collapsed = collapsedSet.has(title);
+  const collapsed = collapsedSet.has(persistKey);
   function toggle() {
     setCollapsedSet((prev) => {
       const next = new Set(prev);
-      if (next.has(title)) next.delete(title);
-      else next.add(title);
+      if (next.has(persistKey)) next.delete(persistKey);
+      else next.add(persistKey);
       writeCollapsedSections(next);
       return next;
     });
   }
   return (
-    <div className="mb-3" data-testid={testId}>
+    <div data-testid={testId}>
       <button
         onClick={toggle}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className="w-full px-3 pt-2 pb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium text-[--text] hover:bg-[--surface-hover]"
+        className="w-full px-3 pt-2 pb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.06em] font-medium text-[--text] hover:bg-[--surface-hover]"
       >
         <span className="inline-block w-3 transition-transform text-[--text-muted]" style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}>▾</span>
         {accent && <StatusDot state={dotState ?? 'idle'} />}
@@ -342,20 +294,6 @@ function ProjectRow({
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
     </div>
-  );
-}
-
-function RescanIcon({ spinning }: { spinning: boolean }) {
-  return (
-    <svg
-      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      style={spinning ? { animation: 'mp-spin 0.7s linear infinite' } : undefined}
-    >
-      <polyline points="23 4 23 10 17 10" />
-      <polyline points="1 20 1 14 7 14" />
-      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-    </svg>
   );
 }
 

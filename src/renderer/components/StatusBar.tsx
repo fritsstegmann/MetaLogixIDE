@@ -22,7 +22,7 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
     void api.invoke('app:get-version', undefined as never).then(({ version }) => setVersion(version)).catch(() => {});
   }, []);
   return (
-    <div className="h-7 shrink-0 px-3 text-[11px] text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
+    <div className="h-[34px] shrink-0 px-3 text-xs text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
       <span className="flex items-center gap-1.5">
         <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[--accent]' : 'bg-[--text-muted]/50'}`} />
         {project ? project.name : 'no project'}
@@ -55,7 +55,7 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
           ))}
         </span>
       )}
-      <span className="ml-auto flex items-center gap-3 opacity-70">
+      <span className="ml-auto min-w-0 overflow-hidden flex items-center gap-3 opacity-70 whitespace-nowrap">
         <span className="flex items-center gap-1"><kbd>⌘K</kbd> project</span>
         <span className="flex items-center gap-1"><kbd>⌘P</kbd> file</span>
         <span className="flex items-center gap-1"><kbd>⌘⇧F</kbd> search</span>

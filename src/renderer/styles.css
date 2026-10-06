@@ -902,6 +902,8 @@ kbd {
   --hue-orange: var(--hue-orange-default);
   /* Hue pulled toward --text so small coloured text keeps its contrast. */
   --hue-orange-text: color-mix(in oklab, var(--hue-orange) 75%, var(--text));
+  --hue-orange-soft: color-mix(in oklab, var(--hue-orange) 22%, transparent);
+  --hue-orange-soft-text: var(--hue-orange-text);
   /* Text drawn on a solid hue fill (badges). */
   --badge-ink: #11131a;
 
