@@ -424,6 +424,54 @@ function latestCallsByShell(calls: ResizeCall[]): Map<number, ResizeCall> {
   return latest;
 }
 
+type SetFontGlobals = typeof globalThis & { __fontSetCalls: string[] };
+
+/** Records the key of every `settings:set-font` call the renderer makes. */
+async function installSetFontRecorder(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ ipcMain }) => {
+    const ipcMainWithHandlers = ipcMain as unknown as IpcMainWithHandlers;
+    const original = ipcMainWithHandlers._invokeHandlers?.get('settings:set-font');
+    if (!original) throw new Error('settings:set-font handler unavailable');
+    const globals = globalThis as SetFontGlobals;
+    globals.__fontSetCalls = [];
+    ipcMain.removeHandler('settings:set-font');
+    ipcMain.handle('settings:set-font', (event, request: { key?: string }) => {
+      globals.__fontSetCalls.push(String(request.key));
+      return original(event, request);
+    });
+  });
+}
+
+async function setFontCalls(app: ElectronApplication, key: FontSettingKey): Promise<number> {
+  return app.evaluate((_electron, settingKey) => (globalThis as SetFontGlobals).__fontSetCalls.filter((k) => k === settingKey).length, key);
+}
+
+/** Moves the real mouse over a row twice, so the second event is a genuine change of position. */
+async function hoverRow(win: Page, row: Locator): Promise<void> {
+  await expect(row).toBeVisible();
+  // mouse.move does not scroll: a row under the modal footer would receive no events.
+  await row.scrollIntoViewIfNeeded();
+  let box = await row.boundingBox();
+  // The list animates in; wait for the row to stop moving before aiming at it.
+  await expect.poll(async () => {
+    const next = await row.boundingBox();
+    const settled = next !== null && box !== null && next.x === box.x && next.y === box.y;
+    box = next;
+    return settled;
+  }).toBe(true);
+  if (!box) throw new Error('option row has no bounding box');
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await win.mouse.move(x - 20, y);
+  await win.mouse.move(x, y);
+  await win.mouse.move(x + 6, y + 1);
+}
+
+/** Clicks the Fonts heading: neutral Settings content outside both font lists. */
+async function clickElsewhere(win: Page): Promise<void> {
+  await win.getByTestId('settings-modal').getByRole('heading', { name: FONT_COPY.sectionLabel, exact: true }).click();
+}
+
 test.describe.serial('configurable UI and terminal fonts', () => {
   test('AC40-AC42 (fonts spec AC2, AC4-AC7, AC9-AC10): independent Interface and Terminal comboboxes support manual keyboard entry, validation, System default, and safe literal names', async () => {
     const harness = await launchHarness();
@@ -1097,6 +1145,119 @@ test.describe.serial('configurable UI and terminal fonts', () => {
       expect(copy.copied).not.toContain('\uE0B0');
     } finally {
       await overrideFontReadiness(harness.win, 'restore').catch(() => {});
+      await harness.close();
+    }
+  });
+
+  test('AC43a: leaving a font field saves what Enter would, and ignores a highlight set only by the pointer', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win, app } = harness;
+      const families = ['Alpha Sans', 'Beta Sans', 'Gamma Mono'];
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      const row = (name: string) => uiOptions.getByRole('option', { name, exact: true });
+      await installSetFontRecorder(app);
+      await mockLocalFonts(win, { kind: 'success', families });
+      await openSettings(win);
+
+      // Typed text, then blur: the best match is saved. Catches blur saving nothing.
+      await ui.click();
+      await ui.fill('alp');
+      await expect(row('Alpha Sans')).toBeVisible();
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'blur saves the best match for typed text').toBe('Alpha Sans');
+      await expect(ui).toHaveValue('Alpha Sans');
+
+      // Typed text plus a pointer-only highlight on another row: blur still saves the
+      // best match. Catches blur honouring the pointer highlight (would save Beta Sans).
+      await setFontThroughUi(win, 'ui_font_family', 'Gamma Mono');
+      await ui.click();
+      await ui.fill('sans');
+      await expect(row('Alpha Sans')).toBeVisible();
+      await hoverRow(win, row('Beta Sans'));
+      await expect(ui, 'precondition: the hover highlighted Beta Sans').toHaveAttribute('aria-activedescendant', (await row('Beta Sans').getAttribute('id')) ?? '');
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'pointer highlight ignored; typed text resolves to its best match').toBe('Alpha Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC43a: a pointer-only hover on an unedited field is ignored on blur but saved by Enter', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      const families = ['Alpha Sans', 'Beta Sans', 'Gamma Mono'];
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      const beta = uiOptions.getByRole('option', { name: 'Beta Sans', exact: true });
+      await mockLocalFonts(win, { kind: 'success', families });
+      await openSettings(win);
+      await setFontThroughUi(win, 'ui_font_family', 'Gamma Mono');
+
+      // Negative: hover another row, leave. Catches blur honouring a pointer highlight.
+      await ui.click();
+      await expect(beta).toBeVisible();
+      await hoverRow(win, beta);
+      await expect(ui, 'precondition: the hover highlighted the row').toHaveAttribute('aria-activedescendant', (await beta.getAttribute('id')) ?? '');
+      await clickElsewhere(win);
+      await expect(ui, 'input state: the list is closed').toHaveAttribute('aria-expanded', 'false');
+      // Ordering barrier: a wrong save from the blur would already be stored.
+      await setFontThroughUi(win, 'terminal_font_family', 'Barrier Terminal');
+      expect(await setting(win, 'ui_font_family'), 'pointer-only highlight must not save on blur').toBe('Gamma Mono');
+      await expect(ui).toHaveValue('Gamma Mono');
+
+      // Positive control: same hover, Enter saves the hovered row.
+      await ui.click();
+      await expect(beta).toBeVisible();
+      await hoverRow(win, beta);
+      await ui.press('Enter');
+      await expect.poll(() => setting(win, 'ui_font_family'), 'Enter saves the hovered row').toBe('Beta Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('AC43a: a row chosen with ArrowDown is saved when the field is left', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win } = harness;
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      await mockLocalFonts(win, { kind: 'success', families: ['Alpha Sans', 'Beta Sans', 'Gamma Mono'] });
+      await openSettings(win);
+      await ui.click();
+      await expect(uiOptions.getByRole('option')).toHaveCount(4);
+      await ui.press('ArrowDown');
+      await ui.press('ArrowDown');
+      const beta = uiOptions.getByRole('option', { name: 'Beta Sans', exact: true });
+      await expect(ui, 'two ArrowDowns from System default highlight Beta Sans').toHaveAttribute('aria-activedescendant', (await beta.getAttribute('id')) ?? '');
+      expect(await setting(win, 'ui_font_family'), 'nothing saved before leaving').toBeNull();
+      await clickElsewhere(win);
+      await expect.poll(() => setting(win, 'ui_font_family'), 'keyboard highlight saved on blur').toBe('Beta Sans');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('gate L1: clicking an option row issues exactly one save', async () => {
+    const harness = await launchHarness();
+    try {
+      const { win, app } = harness;
+      const ui = fontInput(win, 'ui_font_family');
+      const uiOptions = fontOptions(win, 'ui_font_family');
+      await installSetFontRecorder(app);
+      await mockLocalFonts(win, { kind: 'success', families: ['Alpha Sans', 'Beta Sans', 'Gamma Mono'] });
+      await openSettings(win);
+      await ui.click();
+      await uiOptions.getByRole('option', { name: 'Beta Sans', exact: true }).click();
+      await expect.poll(() => setting(win, 'ui_font_family')).toBe('Beta Sans');
+      // Ordering barrier: any second UI save from the click or its blur is issued before this lands.
+      await setFontThroughUi(win, 'terminal_font_family', 'Barrier Terminal');
+      expect(await setFontCalls(app, 'ui_font_family'), 'one click, one save (catches click plus blur double save)').toBe(1);
+      expect(await setFontCalls(app, 'terminal_font_family')).toBe(1);
+    } finally {
       await harness.close();
     }
   });
