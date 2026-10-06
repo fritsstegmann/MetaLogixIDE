@@ -46,6 +46,9 @@ import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeSta
 import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { useApplyUiFont } from './fonts/use-apply-ui-font';
 
+const piIconUrl = new URL('./assets/cli-icons/pi.svg', import.meta.url).href;
+const ompIconUrl = new URL('./assets/cli-icons/omp.svg', import.meta.url).href;
+
 interface PopoutInfo {
   projectId: number;
   shellIndex: number;
@@ -1298,7 +1301,27 @@ function NewShellMenu({
               onClick={() => onLaunchProfile(p.name)}
               title={p.argv.join(' ')}
             >
-              <span className="w-5 text-center text-base leading-none">{p.icon ?? '▸'}</span>
+              <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
+                {p.icon === 'builtin:pi' ? (
+                  <span
+                    className="w-5 h-5 bg-current"
+                    style={{
+                      maskImage: `url("${piIconUrl}")`,
+                      maskSize: 'contain',
+                      maskRepeat: 'no-repeat',
+                      maskPosition: 'center',
+                      WebkitMaskImage: `url("${piIconUrl}")`,
+                      WebkitMaskSize: 'contain',
+                      WebkitMaskRepeat: 'no-repeat',
+                      WebkitMaskPosition: 'center',
+                    }}
+                  />
+                ) : p.icon === 'builtin:omp' ? (
+                  <img src={ompIconUrl} alt="" className="w-5 h-5" />
+                ) : (
+                  p.icon ?? '▸'
+                )}
+              </span>
               <span className="flex-1 truncate font-medium">{p.name}</span>
               {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
               {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
