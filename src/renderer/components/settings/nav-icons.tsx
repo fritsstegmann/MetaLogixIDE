@@ -72,14 +72,14 @@ export function SectionButton({
       type="button"
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
-      className={`flex h-[38px] shrink-0 items-center gap-2.5 rounded-[10px] px-3 text-left text-sm focus-visible:rounded-[10px] sm:w-full ${
+      className={`flex h-[38px] shrink-0 items-center gap-2.5 rounded-[10px] whitespace-nowrap px-3 text-left text-[13px] focus-visible:rounded-[10px] sm:w-full ${
         active
           ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium'
           : 'hover:bg-[--surface-hover] text-[--text-muted] hover:text-[--text]'
       }`}
     >
       <NavIcon section={section} />
-      {children}
+      <span className="min-w-0 truncate">{children}</span>
     </button>
   );
 }

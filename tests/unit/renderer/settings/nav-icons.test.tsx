@@ -89,6 +89,21 @@ describe('SectionButton', () => {
     expect(html.indexOf('<svg')).toBeLessThan(html.indexOf('Launch commands'));
   });
 
+  it.each([true, false])(
+    'sets the label at 13px on one line, truncating rather than wrapping (active=%s)',
+    (active) => {
+      const html = renderItem('launch', active, 'Launch commands');
+      const button = /^<button[^>]*class="([^"]*)"/.exec(html)?.[1]?.split(/\s+/) ?? [];
+      expect(button).toContain('text-[13px]');
+      expect(button).not.toContain('text-sm');
+      expect(button).toContain('whitespace-nowrap');
+      const label =
+        /<span class="([^"]*)">Launch commands<\/span>/.exec(html)?.[1]?.split(/\s+/) ?? [];
+      expect(label).toContain('truncate');
+      expect(label).toContain('min-w-0');
+    },
+  );
+
   it('is a plain button so it never submits a form', () => {
     expect(renderItem('general', false, 'General')).toMatch(/^<button[^>]*type="button"/);
   });

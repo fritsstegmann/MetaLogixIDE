@@ -10,7 +10,7 @@ interface Props {
 
 const PALETTES = Object.keys(PALETTE_SWATCHES) as ThemePalette[];
 
-const CARD = 'pressable flex w-[152px] flex-col gap-[9px] rounded-xl p-2.5 text-left text-[13px] transition-colors focus-visible:rounded-xl';
+const CARD = 'pressable flex w-[152px] flex-col items-stretch gap-[9px] rounded-xl p-2.5 text-left text-[13px] transition-colors focus-visible:rounded-xl';
 const SELECTED = 'bg-[--accent-soft] shadow-[inset_0_0_0_1.5px_var(--accent)]';
 const UNSELECTED = 'bg-[--surface-field] hover:bg-[--surface-active]';
 

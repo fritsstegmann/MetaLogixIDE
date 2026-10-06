@@ -128,7 +128,7 @@ function SettingsDialog({
 
 function SettingsFooter({ onClose }: { readonly onClose: () => void }): React.JSX.Element {
   return (
-    <div className="flex h-[60px] shrink-0 items-center justify-end gap-2 px-5">
+    <div className="flex h-[60px] shrink-0 items-center justify-end gap-2 bg-[color-mix(in_oklab,var(--surface-chrome)_25%,var(--panel-strong))] px-5">
       <button
         type="button"
         onClick={onClose}
