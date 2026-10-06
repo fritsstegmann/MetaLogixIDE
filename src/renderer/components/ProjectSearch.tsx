@@ -132,10 +132,10 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
                     onClick={() => openMatch(m)}
                     onMouseEnter={() => setActiveIdx(flatIdx)}
                     className={`w-full text-left flex gap-3 px-3 py-1 text-[12px] font-mono ${
-                      active ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel]'
+                      active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel]'
                     }`}
                   >
-                    <span className={`w-10 text-right shrink-0 ${active ? 'text-white/70' : 'text-[--text-muted]'}`}>{m.line}</span>
+                    <span className={`w-10 text-right shrink-0 ${active ? 'text-[--accent-text]/70' : 'text-[--text-muted]'}`}>{m.line}</span>
                     <PreviewLine text={m.preview} query={query} regex={regex} caseSensitive={caseSensitive} active={active} />
                   </button>
                 );
@@ -199,7 +199,7 @@ function ToolbarToggle({ title, active, onClick, children }: { title: string; ac
       title={title}
       className={`h-6 w-8 flex items-center justify-center rounded text-[11px] font-mono border ${
         active
-          ? 'bg-[color:var(--accent)] text-white border-transparent'
+          ? 'bg-[color:var(--accent)] text-[--accent-text] border-transparent'
           : 'bg-[--panel] text-[--text-muted] border-[--border] hover:text-[--text]'
       }`}
     >

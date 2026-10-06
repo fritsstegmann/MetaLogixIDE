@@ -606,7 +606,7 @@ function ChannelGroup({ label, channels, activeId, onPick, projectNames, unread 
             key={c.id}
             onClick={() => onPick(c)}
             className={`w-full text-left px-3 py-1 rounded-md flex items-center gap-1.5 mx-1 ${
-              isActive ? 'bg-[color:var(--accent)] text-white' : (u > 0 ? 'font-semibold text-[--text] hover:bg-[--panel-strong]' : 'hover:bg-[--panel-strong]')
+              isActive ? 'bg-[color:var(--accent)] text-[--accent-text]' : (u > 0 ? 'font-semibold text-[--text] hover:bg-[--panel-strong]' : 'hover:bg-[--panel-strong]')
             }`}
             title={parent ? `${parent} · #${c.name}${u ? ` · ${u} unread` : ''}` : `#${c.name}${u ? ` · ${u} unread` : ''}`}
           >
@@ -694,7 +694,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
                 <button
                   onClick={openPicker}
                   disabled={busy}
-                  className="text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+                  className="text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-50"
                 >
                   {busy ? 'Loading…' : 'Link existing'}
                 </button>
@@ -767,7 +767,7 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
               <button
                 onClick={createAndLink}
                 disabled={busy || !newName.trim()}
-                className="flex-1 text-xs font-medium pressable bg-[color:var(--accent)] text-white rounded-md py-1.5 hover:brightness-110 disabled:opacity-50"
+                className="flex-1 text-xs font-medium pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md py-1.5 hover:brightness-110 disabled:opacity-50"
               >
                 {busy ? 'Creating…' : 'Create + link'}
               </button>
@@ -898,7 +898,7 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
         <button
           onClick={submit}
           disabled={busy || !username || !password}
-          className="w-full pressable bg-[color:var(--accent)] text-white rounded-md py-2 text-sm font-medium hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
+          className="w-full pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md py-2 text-sm font-medium hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
           data-testid="mp-login-submit"
         >
           {busy && <span className="mp-spinner" aria-hidden />}

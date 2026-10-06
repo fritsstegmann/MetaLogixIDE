@@ -122,12 +122,12 @@ export function FileFinder({ open, projectId, onClose, onPick }: Props) {
                   onClick={() => { onPick(f.relPath); onClose(); }}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`w-full flex items-center gap-3 text-left px-3 py-1.5 mx-1 rounded-md ${
-                    active ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel]'
+                    active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel]'
                   }`}
                 >
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm truncate">{f.name}</span>
-                    <span className={`block text-xs truncate ${active ? 'text-white/70' : 'text-[--text-muted]'}`}>
+                    <span className={`block text-xs truncate ${active ? 'text-[--accent-text]/70' : 'text-[--text-muted]'}`}>
                       {f.relPath}
                     </span>
                   </span>

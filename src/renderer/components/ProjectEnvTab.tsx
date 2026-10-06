@@ -246,7 +246,7 @@ function EnvActions({ saveDisabled, onDiscard, onSave }: ActionsProps) {
         type="button"
         onClick={onSave}
         disabled={saveDisabled}
-        className={`text-sm px-4 py-1.5 rounded-md font-medium pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING} focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]`}
+        className={`text-sm px-4 py-1.5 rounded-md font-medium pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed ${FOCUS_RING} focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]`}
         data-testid={ENV_TESTIDS.save}
       >
         {ENV_COPY.save}

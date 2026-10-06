@@ -68,6 +68,32 @@ They do not receive Claude-specific permission flags or hooks.
 Upstream CLI references: [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
 and [oh-my-pi](https://github.com/can1357/oh-my-pi/blob/main/docs/cli-reference.md).
 
+### IDE themes
+
+Settings → General provides **Default**, **Catppuccin**, and **Rosé Pine** palettes.
+Appearance remains independent: **Light**, **Dark**, or **System**.
+Default preserves the original IDE colors and starts in dark mode.
+Catppuccin uses Mocha in dark mode and Latte in light mode.
+Rosé Pine uses Rosé Pine in dark mode and Dawn in light mode.
+System appearance follows the operating system for each palette.
+
+`src/renderer/hooks/useTheme.ts` shares preferences between controls through
+`useSyncExternalStore`. It stores appearance in `metaide.theme.v2` and palette
+in `metaide.theme.palette`. Existing appearance choices remain valid.
+Local events synchronize controls within a window; storage events synchronize
+other renderer windows. `App` initializes the preferences for main and popout windows.
+The hook applies `data-theme` and `data-palette` before paint and synchronizes
+Electron native chrome with the appearance mode.
+
+`src/renderer/styles.css` defines the palette tokens. Chrome, inputs, status icons,
+syntax highlighting, and terminal colors use those tokens.
+Accent-filled controls use `--accent-text` rather than a fixed white foreground.
+Existing terminals refresh their foreground, cursor, selection, and ANSI colors
+when either document theme attribute changes.
+Mermaid diagrams render again on palette changes, including changes between
+palettes with the same light/dark appearance. Explicit diagram themes remain independent.
+The Command Palette also provides commands for all three palettes.
+
 ### Markdown preview pipeline
 
 The Files tab shows a rendered preview for `.md`, `.markdown` and `.mdx`

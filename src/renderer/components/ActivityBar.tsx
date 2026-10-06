@@ -107,7 +107,7 @@ function ABButton({
       )}
       {children}
       {badge != null && badge > 0 && (
-        <span className="absolute -bottom-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[color:var(--accent)] text-white text-[9px] font-semibold flex items-center justify-center leading-none">
+        <span className="absolute -bottom-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[color:var(--accent)] text-[--accent-text] text-[9px] font-semibold flex items-center justify-center leading-none">
           {badge > 99 ? '99+' : badge}
         </span>
       )}

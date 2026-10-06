@@ -494,14 +494,14 @@ function FileTreePane({
                 }}
                 data-testid="file-entry"
                 className={`w-full flex items-center gap-2 text-left px-2 py-1 rounded-md ${
-                  selected ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong]'
+                  selected ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel-strong]'
                 }`}
               >
                 <FileIcon isDir={e.isDir} name={e.name} />
                 <span className={`truncate flex-1 ${status && !selected ? gitTextClass(status) : ''}`}>{e.name}</span>
                 {status && (
                   <span
-                    className={`text-[10px] font-mono ${selected ? 'text-white/80' : gitTextClass(status)}`}
+                    className={`text-[10px] font-mono ${selected ? 'text-[--accent-text]/80' : gitTextClass(status)}`}
                     title={GIT_LABEL[status]}
                     data-testid="git-badge"
                   >
@@ -565,7 +565,7 @@ function FilePreview({
               onClick={onSave}
               disabled={!dirty}
               className={`text-[11px] px-2 py-0.5 rounded ${
-                dirty ? 'pressable bg-[color:var(--accent)] text-white hover:brightness-110' : 'bg-[--panel] text-[--text-muted] cursor-not-allowed'
+                dirty ? 'pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110' : 'bg-[--panel] text-[--text-muted] cursor-not-allowed'
               }`}
               title="Save (⌘S)"
               data-testid="file-save"

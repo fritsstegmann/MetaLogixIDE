@@ -1,9 +1,4 @@
-/**
- * Effective light/dark theme as the stylesheet sees it: `<html data-theme>`
- * when set, otherwise the OS `prefers-color-scheme`. Reads the DOM rather than
- * `useTheme` because each `useTheme` caller holds its own state, so a change
- * made in Settings would not reach a value threaded from App.
- */
+/** Effective light/dark appearance read from the document, shared by every theme control. */
 import { useEffect, useState } from 'react';
 import type { EffectiveTheme } from '@renderer/markdown/contract';
 

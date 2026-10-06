@@ -920,6 +920,18 @@ test.describe('markdown preview: diagram theme', () => {
     const systemLight = await expectTheme('light');
     expect(systemLight.plain).toBe(light.plain);
     expect(systemLight.forest).toBe(dark.forest);
+    await settings.getByRole('button', { name: 'Dark', exact: true }).click();
+    await expectTheme('dark');
+    let previousFill = dark.plain;
+    for (const name of ['Catppuccin', 'Rosé Pine']) {
+      await settings.getByRole('button', { name, exact: true }).click();
+      await expect(settings.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect.poll(() => nodeFill(plain), { timeout: 15000 }).not.toBe(previousFill);
+      previousFill = (await expectTheme('dark')).plain;
+      expect(await nodeFill(forest)).toBe(dark.forest);
+    }
+    await settings.getByRole('button', { name: 'Default', exact: true }).click();
+    await expect.poll(() => nodeFill(plain), { timeout: 15000 }).toBe(dark.plain);
     await win.getByTestId('settings-done').click();
   });
 });

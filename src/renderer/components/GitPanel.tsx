@@ -159,7 +159,7 @@ export function GitPanel({ projectId }: { projectId: number | null }) {
           <button
             onClick={commit}
             disabled={!message.trim() || status.staged.length === 0 || !!busy}
-            className="flex-1 text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+            className="flex-1 text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-50"
             data-testid="git-commit"
           >
             {busy === 'commit' ? 'Committing…' : `Commit${status.staged.length ? ` (${status.staged.length})` : ''}`}

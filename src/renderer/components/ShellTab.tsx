@@ -37,6 +37,22 @@ function buildTheme(): ITheme {
     foreground: readVar('--term-fg',        '#e6edf3'),
     cursor:     readVar('--term-cursor',    '#e6edf3'),
     selectionBackground: readVar('--term-selection', 'rgba(255,255,255,0.2)'),
+    black: readVar('--term-black', '#000000'),
+    red: readVar('--term-red', '#cd0000'),
+    green: readVar('--term-green', '#00cd00'),
+    yellow: readVar('--term-yellow', '#cdcd00'),
+    blue: readVar('--term-blue', '#0000ee'),
+    magenta: readVar('--term-magenta', '#cd00cd'),
+    cyan: readVar('--term-cyan', '#00cdcd'),
+    white: readVar('--term-white', '#e5e5e5'),
+    brightBlack: readVar('--term-bright-black', '#7f7f7f'),
+    brightRed: readVar('--term-bright-red', '#ff0000'),
+    brightGreen: readVar('--term-bright-green', '#00ff00'),
+    brightYellow: readVar('--term-bright-yellow', '#ffff00'),
+    brightBlue: readVar('--term-bright-blue', '#5c5cff'),
+    brightMagenta: readVar('--term-bright-magenta', '#ff00ff'),
+    brightCyan: readVar('--term-bright-cyan', '#00ffff'),
+    brightWhite: readVar('--term-bright-white', '#ffffff'),
   };
 }
 
@@ -295,11 +311,9 @@ export function ShellTab({
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onScheme = () => { term.options.theme = buildTheme(); };
     media.addEventListener('change', onScheme);
-    // Also fire when the in-app theme toggle flips `data-theme` on <html>:
-    // the media query only tracks the OS, so without this the terminal keeps
-    // its old palette after Settings → Appearance → Light/Dark.
+    // Both appearance and palette changes must refresh existing terminals.
     const themeObserver = new MutationObserver(() => { term.options.theme = buildTheme(); });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
 
     return () => {
       fontUpdater.dispose();
