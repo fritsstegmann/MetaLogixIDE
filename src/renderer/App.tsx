@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
+import { TitleGroup } from './components/TitleGroup';
+import { CHROME_TESTIDS } from './chrome-testids';
+import { SIDEBAR_WIDTH, useSidebarWidth } from './sidebar-width';
 import { ShellTab } from './components/ShellTab';
 import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
@@ -17,6 +20,15 @@ import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { ToastStack } from './components/ToastStack';
+import { PermissionModeDialog } from './components/PermissionModeDialog';
+import { ProjectEnvTab } from './components/ProjectEnvTab';
+import { DiffTab } from './components/DiffTab';
+import { ENV_COPY, ENV_TESTIDS } from './project-env-copy';
+import { DIFF_COPY, DIFF_TESTIDS } from './diff-tab-copy';
+import { diffTabCount } from './diff/diff-selection';
+import { isMainTab, type MainTab } from './main-tab';
+import { useEnvDrafts } from './hooks/useEnvDrafts';
+import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
@@ -27,8 +39,18 @@ import { usePersistedState } from './hooks/usePersistedState';
 import { usePoppedShells } from './hooks/usePoppedShells';
 import { useProjectShells } from './hooks/useProjectShells';
 import { useGitStatus } from './hooks/useGitStatus';
+import { terminalFocus, useWindowTerminalFocus } from './hooks/useWindowTerminalFocus';
+import { useReportViewedShells } from './hooks/useReportViewedShells';
 import { Tooltip } from './components/Tooltip';
+import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { StatusDot } from './components/StatusDot';
+import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
+import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
+import { useApplyUiFont } from './fonts/use-apply-ui-font';
+
+const piIconUrl = new URL('./assets/cli-icons/pi.svg', import.meta.url).href;
+const ompIconUrl = new URL('./assets/cli-icons/omp.svg', import.meta.url).href;
 
 interface PopoutInfo {
   projectId: number;
@@ -51,7 +73,10 @@ function readPopout(): PopoutInfo | null {
   return { projectId, shellIndex };
 }
 
+/** Selects the renderer shell and applies synchronized application typography. */
 export function App() {
+  useApplyUiFont();
+  useTheme();
   const popout = useMemo(readPopout, []);
   // ErrorBoundary catches render/lifecycle errors so an unhandled throw in
   // any descendant doesn't unmount the whole tree and leave the user with
@@ -97,17 +122,17 @@ function MainApp() {
     return () => { cancelled = true; };
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
+  // -1 never matches a real project id, so this reads idle when nothing is selected.
+  const selectedClaudeState = useProjectClaudeState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
   // useEffect with an empty dep list) always reads the current project.
   const selectedRef = useRef<Project | null>(null);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [aliveCount, setAliveCount] = useState(0);
-  const [mainTab, setMainTab] = usePersistedState<'shell' | 'files'>(
-    'metaide.mainTab',
-    'shell',
-    (v): v is 'shell' | 'files' => v === 'shell' || v === 'files',
-  );
+  const [mainTab, setMainTab] = usePersistedState<MainTab>('metaide.mainTab', 'shell', isMainTab);
+  const mainTabRef = useRef(mainTab);
+  mainTabRef.current = mainTab;
   // Unread chat count for the sidebar badge. Increments on every incoming
   // metaproject `channel_message` that arrives while the user isn't looking
   // at the chat pane. Clears the moment they switch to chat. Persists in
@@ -121,7 +146,7 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'settings',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks',
   );
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
@@ -180,13 +205,28 @@ function MainApp() {
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
+  /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
+  const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
+    const key = String(projectId);
+    setProjectStates((prev) => ({
+      ...prev,
+      [key]: { rightShellIndex: null, splitRatio: 0.5, ...prev[key], activeShellIndex: idx },
+    }));
+  }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
     true,
     (v): v is boolean => typeof v === 'boolean',
   );
-  const [sidebarWidth, setSidebarWidth] = usePersistedNumber('metaide.sidebarWidth', 288, 200, 560);
+  // Mouse toggles animate the sidebar; ⌘B, ⌘\ and the palette stay instant
+  // because they're used far too often for motion to be anything but lag.
+  const [sidebarAnimate, setSidebarAnimate] = useState(false);
+  const toggleSidebar = useCallback((animate: boolean, open?: boolean) => {
+    setSidebarAnimate(animate);
+    setSidebarOpen((v) => open ?? !v);
+  }, [setSidebarOpen]);
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
   const [chatPanelWidth, setChatPanelWidth] = usePersistedNumber('metaide.chatPanelWidth', 400, 300, 640);
@@ -199,11 +239,22 @@ function MainApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
+  const envDrafts = useEnvDrafts();
+  const envDirty = selected != null && envDrafts.isDirty(selected.id);
   const [taskCount, setTaskCount] = useState(0);
-  const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
+  const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
+  const permissionMode = useClaudePermissionMode();
+  const shortcutsBlockedRef = useRef(true);
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
+  const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
+    || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
+    || permissionMode.status === 'unchosen';
+  useWindowTerminalFocus(overlayOpen);
+  useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const { status: git } = useGitStatus(selected?.id ?? null);
+  const diffCount = diffTabCount(git);
   // Once a NON-primary shell (idx > 0) is popped out into its own window,
   // hide it from the tab strip — the window is now its home. Closing the
   // window returns the shell to the tab strip. Killing from the strip
@@ -230,9 +281,11 @@ function MainApp() {
     { id: 'nav.scrollback-search', category: 'Go', title: 'Search all shells…',              hint: '⌘⇧O',  run: () => setScrollbackOpen(true) },
     { id: 'shell.prompts',   category: 'Shell',    title: 'Open prompt library',             hint: '⌘⇧K',  run: () => setPromptsOpen(true) },
     { id: 'view.tasks',      category: 'View',     title: 'Show tasks panel',                              run: () => setActiveView('tasks') },
-    { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => setSidebarOpen((v) => !v) },
+    { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
     { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
     { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
+    { id: 'view.diff',       category: 'View',     title: DIFF_COPY.paletteTitle,                          run: () => setMainTab('diff') },
+    { id: 'view.env',        category: 'View',     title: 'Switch to Env tab',                             run: () => setMainTab('env') },
     { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
     { id: 'proj.new',        category: 'Project',  title: 'New project…',                    hint: '⌘⇧N',  run: () => setNewProjectOpen(true) },
     { id: 'shell.unload',    category: 'Shell',    title: 'Unload current session',                        run: async () => { if (selected) { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 }); toast('Session unloaded', { kind: 'success' }); } } },
@@ -244,8 +297,11 @@ function MainApp() {
     { id: 'theme.system',    category: 'Theme',    title: 'Follow system theme',                          run: () => setThemeMode('system') },
     { id: 'theme.light',     category: 'Theme',    title: 'Use light theme',                              run: () => setThemeMode('light') },
     { id: 'theme.dark',      category: 'Theme',    title: 'Use dark theme',                               run: () => setThemeMode('dark') },
+    { id: 'theme.default',   category: 'Theme',    title: 'Use Default palette',                           run: () => setThemePalette('default') },
+    { id: 'theme.catppuccin', category: 'Theme',   title: 'Use Catppuccin palette',                        run: () => setThemePalette('catppuccin') },
+    { id: 'theme.rose-pine', category: 'Theme',    title: 'Use Rosé Pine palette',                         run: () => setThemePalette('rose-pine') },
     { id: 'app.settings',    category: 'App',      title: 'Open Settings',                    hint: '⌘,',  run: () => setSettingsOpen(true) },
-  ], [selected, sidebarOpen, setThemeMode]);
+  ], [selected, sidebarOpen, setThemeMode, setThemePalette]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -304,11 +360,15 @@ function MainApp() {
   // the file opens in that project's Files tab. If no root contains the
   // file, prompt to add its directory as a new root (one confirm — the
   // user just asked to open it, so a friction-free path matters).
+  // Main buffers file opens until this signal, so holding it until a
+  // permission mode is chosen defers the file's shell launch (spec AC5).
+  const permissionChosen = permissionMode.status === 'chosen';
   useEffect(() => {
-    // Tell main we're ready to receive buffered events (files the user
-    // double-clicked to launch the app in the first place). One-shot per
-    // mount; main ignores repeat signals.
+    if (!permissionChosen) return;
     void api.invoke('app:renderer-ready-for-files', undefined as never).catch(() => {});
+  }, [permissionChosen]);
+
+  useEffect(() => {
     const off = api.on('app:open-file-request', async ({ path }) => {
       try {
         const { projects } = await api.invoke('projects:list', undefined as never);
@@ -342,6 +402,7 @@ function MainApp() {
   // switch to that shell tab.
   useEffect(() => {
     const off = api.on('shell:focus-request', async ({ projectId, shellIndex }) => {
+      terminalFocus.requestFocus({ projectId, shellIndex });
       try {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
@@ -349,22 +410,21 @@ function MainApp() {
           setSelected(project);
         }
         setMainTab('shell');
-        // Use requestAnimationFrame so we apply the shell index after the
-        // per-project state has picked up the new selection.
-        requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+        requestAnimationFrame(() => setActiveShellIndexFor(projectId, shellIndex));
       } catch (e) {
         toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
       }
     });
     return () => { off(); };
-  }, [setActiveShellIndex, setMainTab]);
+  }, [setActiveShellIndexFor, setMainTab]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (shortcutsBlockedRef.current) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === 'k')                          { e.preventDefault(); setSwitcherOpen(true); }
-      if (mod && e.key === '\\')                         { e.preventDefault(); setSidebarOpen((v) => !v); }
-      if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); setSidebarOpen((v) => !v); }
+      if (mod && e.key === '\\')                         { e.preventDefault(); toggleSidebar(false); }
+      if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); toggleSidebar(false); }
       if (mod && e.key === ',')                          { e.preventDefault(); setSettingsOpen(true); }
       if (mod && e.key === 'p' && !e.shiftKey)           { e.preventDefault(); setFinderOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); setNewProjectOpen(true); }
@@ -434,9 +494,11 @@ function MainApp() {
   const lastPickIdRef = useRef<number | null>(null);
   async function pick(p: Project) {
     lastPickIdRef.current = p.id;
+    terminalFocus.cancelRequest();
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
       if (lastPickIdRef.current !== p.id) return;    // superseded by a newer click
+      if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
       await api.invoke('shells:launch', { projectId: project.id });
     } catch (e) {
@@ -446,6 +508,58 @@ function MainApp() {
         toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
       }
       console.error(e);
+    }
+  }
+
+  function editEnv(p: Project) {
+    // Set synchronously so pick() sees 'env' and queues no terminal focus for a later Env -> Shell switch.
+    mainTabRef.current = 'env';
+    setMainTab('env');
+    void pick(p);
+  }
+
+  function mainBody(project: Project) {
+    switch (mainTab) {
+      case 'shell':
+        return (
+          <ShellSplit
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            leftIndex={activeShellIndex}
+            rightIndex={rightShellIndex}
+            ratio={splitRatio}
+            onRatioChange={setSplitRatio}
+            isPoppedLeft={isPopped(project.id, activeShellIndex)}
+            isPoppedRight={rightShellIndex != null && isPopped(project.id, rightShellIndex)}
+            onCloseSplit={closeSplit}
+            onOpenFile={(relPath, line) => {
+              setMainTab('files');
+              setOpenInFiles({ relPath, line });
+            }}
+          />
+        );
+      case 'files':
+        return (
+          <FilesTab
+            key={project.id}
+            projectId={project.id}
+            openRelPath={openInFiles?.relPath ?? null}
+            openLine={openInFiles?.line ?? null}
+            onOpenRelPathConsumed={() => setOpenInFiles(null)}
+          />
+        );
+      case 'diff':
+        return <DiffTab key={project.id} projectId={project.id} />;
+      case 'env':
+        return (
+          <ProjectEnvTab
+            key={project.id}
+            projectId={project.id}
+            projectName={project.name}
+            drafts={envDrafts}
+          />
+        );
     }
   }
 
@@ -551,6 +665,9 @@ function MainApp() {
     if (!selected || rightShellIndex == null) return;
     const idx = rightShellIndex;
     setRightShellIndex(null);
+    // Let the pane fold away with its shell still live, rather than showing
+    // an exited terminal on the way out.
+    await new Promise((r) => setTimeout(r, REVEAL_OUT_MS));
     try { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: idx }); }
     catch { /* fine — the shell may already be gone */ }
   }
@@ -564,19 +681,20 @@ function MainApp() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-transparent">
-      {/* Native-feeling drag region for hidden-inset title bar */}
-      <div className="drag h-9 flex items-center pl-[76px] pr-2 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border]">
-        <span className="text-xs opacity-70 ml-1 font-medium">MetaLogix IDE</span>
-        {selected && (
-          <span className="text-[11px] text-[--text-muted] ml-3 truncate max-w-[360px]" title={selected.path}>
-            <span className="opacity-60">▸ </span>{selected.name}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1 no-drag">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+      {/* Native-feeling drag region for hidden-inset title bar. pr-[3px] puts the
+          last button's 14px glyph 12px from the right edge, mirroring the traffic lights' inset. */}
+      <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
+        <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
+          <TitleGroup
+            projectName={selected?.name ?? null}
+            branch={git.isRepo ? (git.branch ?? 'HEAD') : null}
+          />
+        </div>
+        <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
           <button
             onClick={cycleTheme}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title={`Theme: ${themeMode}${themeMode === 'system' ? ` (following OS — currently ${effectiveTheme})` : ''}. Click to toggle.`}
             data-testid="theme-toggle"
             data-theme-mode={themeMode}
@@ -590,7 +708,7 @@ function MainApp() {
                 toast(`Tiled ${arranged} window${arranged === 1 ? '' : 's'}`, { kind: 'success', timeoutMs: 1200 });
               } catch (e) { toast('Tile failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') }); }
             }}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Tile all our windows on the screen"
             data-testid="tile-windows"
           >
@@ -598,7 +716,7 @@ function MainApp() {
           </button>
           <button
             onClick={() => setSettingsOpen(true)}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
+            className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
             title="Settings (⌘,)"
             data-testid="settings-open"
           >
@@ -611,116 +729,136 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            if (v === 'settings') { setSettingsOpen(true); return; }
-            if (v === 'chat' || v === 'projects' || v === 'git' || v === 'tasks') {
-              // Toggle if the same view is clicked twice — quality-of-life.
-              setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
-              if (!sidebarOpen) setSidebarOpen(true);
-              return;
-            }
-            setActiveView(v);
+            // Toggle if the same view is clicked twice — quality-of-life.
+            setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
+            if (!sidebarOpen) toggleSidebar(true, true);
           }}
-          onToggleSidebar={() => setSidebarOpen((s) => !s)}
+          onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}
           chatUnread={chatUnread}
           gitDirty={git.dirty ? Object.keys(git.files).length : undefined}
           taskCount={taskCount || undefined}
         />
-        {sidebarOpen && (
-          <>
-            {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-                sits alongside it in its own resizable column instead of
-                replacing it, so the user never has to swap views just to pick
-                a different project. */}
-            <Sidebar
-              selectedProjectId={selected?.id ?? null}
-              onSelect={pick}
-              onNewProject={() => setNewProjectOpen(true)}
-              width={sidebarWidth}
-            />
-            <ResizeHandle
-              value={sidebarWidth}
-              onChange={setSidebarWidth}
-              onReset={() => setSidebarWidth(288)}
-              min={200}
-              max={560}
-              side="left"
-            />
-            {activeView === 'chat' && (
-              <>
-                <div
-                  data-view="chat"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <ChatTab
-                    projectId={selected?.id ?? 0}
-                    metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                    compact
-                  />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={300}
-                  max={640}
-                  side="left"
+        <Reveal show={sidebarOpen} animate={sidebarAnimate} className="flex h-full min-h-0 shrink-0">
+          {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
+              sits alongside it in its own resizable column instead of
+              replacing it, so the user never has to swap views just to pick
+              a different project. */}
+          <Sidebar
+            selectedProjectId={selected?.id ?? null}
+            onSelect={pick}
+            onNewProject={() => setNewProjectOpen(true)}
+            onEditEnv={editEnv}
+            width={sidebarWidth}
+          />
+          <ResizeHandle
+            value={sidebarWidth}
+            onChange={setSidebarWidth}
+            onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+            min={SIDEBAR_WIDTH.min}
+            max={SIDEBAR_WIDTH.max}
+            side="left"
+          />
+          {activeView === 'chat' && (
+            <>
+              <div
+                data-view="chat"
+                className="section-panel h-full flex flex-col shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <ChatTab
+                  projectId={selected?.id ?? 0}
+                  metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                  compact
                 />
-              </>
-            )}
-            {activeView === 'git' && (
-              <>
-                <div
-                  data-view="git"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <GitPanel projectId={selected?.id ?? null} />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={280}
-                  max={640}
-                  side="left"
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={300}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+          {activeView === 'git' && (
+            <>
+              <div
+                data-view="git"
+                className="section-panel h-full flex flex-col shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <GitPanel projectId={selected?.id ?? null} />
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={280}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+          {activeView === 'tasks' && (
+            <>
+              <div
+                data-view="tasks"
+                className="section-panel h-full flex flex-col shrink-0"
+                style={{ width: chatPanelWidth }}
+              >
+                <TasksPanel
+                  projectId={selected?.id ?? null}
+                  onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
                 />
-              </>
-            )}
-            {activeView === 'tasks' && (
-              <>
-                <div
-                  data-view="tasks"
-                  className="section-panel h-full bg-[--panel] border-r border-[--border] flex flex-col backdrop-blur-md shrink-0"
-                  style={{ width: chatPanelWidth }}
-                >
-                  <TasksPanel
-                    projectId={selected?.id ?? null}
-                    onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                  />
-                </div>
-                <ResizeHandle
-                  value={chatPanelWidth}
-                  onChange={setChatPanelWidth}
-                  onReset={() => setChatPanelWidth(400)}
-                  min={280}
-                  max={640}
-                  side="left"
-                />
-              </>
-            )}
-          </>
-        )}
-        <main className="flex-1 flex flex-col min-h-0 bg-[--panel-strong]/40">
-          <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
+              </div>
+              <ResizeHandle
+                value={chatPanelWidth}
+                onChange={setChatPanelWidth}
+                onReset={() => setChatPanelWidth(400)}
+                min={280}
+                max={640}
+                side="left"
+              />
+            </>
+          )}
+        </Reveal>
+        <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
+          <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
+            <TabButton
+              active={mainTab === 'diff'}
+              onClick={() => setMainTab('diff')}
+              testId={DIFF_TESTIDS.tab}
+              ariaLabel={diffCount !== null ? DIFF_COPY.tabCountLabel(diffCount) : undefined}
+            >
+              {DIFF_COPY.tabLabel}
+              {diffCount !== null && (
+                <span aria-hidden className="ml-1.5 font-mono text-[10px] text-[--hue-orange-text]" data-testid={DIFF_TESTIDS.tabCount}>
+                  {diffCount}
+                </span>
+              )}
+            </TabButton>
+            <TabButton
+              active={mainTab === 'env'}
+              onClick={() => setMainTab('env')}
+              testId={ENV_TESTIDS.tab}
+              ariaLabel={envDirty ? ENV_COPY.tabUnsavedLabel : undefined}
+            >
+              {ENV_COPY.tabLabel}
+              {envDirty && (
+                <span aria-hidden className="ml-1 text-[--accent]" data-testid={ENV_TESTIDS.unsaved}>
+                  {ENV_COPY.tabUnsavedMarker}
+                </span>
+              )}
+            </TabButton>
             <div className="ml-auto flex items-center gap-1.5 pr-2">
               {selected && (
                 <>
-                  <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--panel-strong] border border-[--border] text-[11px] max-w-[280px]" title={selected.path}>
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 live-dot" />
+                  <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
+                    <StatusDot state={selectedClaudeState} />
                     <span className="truncate font-medium">{selected.name}</span>
                     <button
                       onClick={unloadCurrent}
@@ -802,43 +940,7 @@ function MainApp() {
                 onToggleSplit={() => (rightShellIndex != null ? void closeSplit() : void openSplit())}
               />
             )}
-            {selected ? (
-              mainTab === 'shell'
-                ? (rightShellIndex != null
-                    ? <ShellSplit
-                        projectId={selected.id}
-                        projectName={selected.name}
-                        leftIndex={activeShellIndex}
-                        rightIndex={rightShellIndex}
-                        ratio={splitRatio}
-                        onRatioChange={setSplitRatio}
-                        isPoppedLeft={isPopped(selected.id, activeShellIndex)}
-                        isPoppedRight={isPopped(selected.id, rightShellIndex)}
-                        onCloseSplit={closeSplit}
-                        onOpenFile={(relPath, line) => {
-                          setMainTab('files');
-                          setOpenInFiles({ relPath, line });
-                        }}
-                      />
-                    : (isPopped(selected.id, activeShellIndex)
-                        ? <PoppedPlaceholder projectId={selected.id} shellIndex={activeShellIndex} name={selected.name} />
-                        : <ShellTab
-                            key={`${selected.id}:${activeShellIndex}`}
-                            projectId={selected.id}
-                            shellIndex={activeShellIndex}
-                            onOpenFile={(relPath, line) => {
-                              setMainTab('files');
-                              setOpenInFiles({ relPath, line });
-                            }}
-                          />))
-                : <FilesTab
-                    key={selected.id}
-                    projectId={selected.id}
-                    openRelPath={openInFiles?.relPath ?? null}
-                    openLine={openInFiles?.line ?? null}
-                    onOpenRelPathConsumed={() => setOpenInFiles(null)}
-                  />
-            ) : <EmptyState />}
+            {selected ? mainBody(selected) : <EmptyState />}
           </div>
         </main>
       </div>
@@ -889,6 +991,7 @@ function MainApp() {
         open={scrollbackOpen}
         onClose={() => setScrollbackOpen(false)}
         onFocus={async (projectId, shellIndex) => {
+          terminalFocus.cancelRequest();
           try {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
@@ -896,20 +999,31 @@ function MainApp() {
               setSelected(project);
             }
             setMainTab('shell');
-            requestAnimationFrame(() => setActiveShellIndex(shellIndex));
+            requestAnimationFrame(() => {
+              setActiveShellIndexFor(projectId, shellIndex);
+              terminalFocus.requestFocus({ projectId, shellIndex });
+            });
           } catch (e) {
             toast('Could not focus shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
           }
         }}
       />
+      {permissionMode.status === 'unchosen' && (
+        <PermissionModeDialog onConfirm={permissionMode.choose} error={permissionMode.error} />
+      )}
     </div>
   );
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
+  const claudeState = useShellClaudeState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
   const [projectName, setProjectName] = useState<string>('');
+  useWindowTerminalFocus(false);
+  useEffect(() => {
+    terminalFocus.requestFocus({ projectId, shellIndex });
+  }, [projectId, shellIndex]);
   useEffect(() => {
     (async () => {
       try {
@@ -927,13 +1041,13 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
       : `MetaLogix IDE · shell`;
   }, [projectName, shellIndex]);
   return (
-    <div className="h-screen w-screen flex flex-col bg-transparent">
-      <div className="drag h-9 flex items-center gap-2 pl-[76px] pr-3 shrink-0 bg-[--panel]/70 backdrop-blur-xl border-b border-[--border] min-w-0">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+      <div className="drag h-11 flex items-center gap-2 pl-[76px] pr-3 shrink-0 min-w-0">
         {/* Prominent project name — the whole reason a user pops shells out
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
             shortened + hidden first when space runs out. */}
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 live-dot shrink-0" aria-hidden />
+        <StatusDot state={claudeState} className="shrink-0" />
         <span className="text-sm font-semibold text-[--text] truncate min-w-0" title={projectName}>
           {projectName || 'MetaLogix IDE'}
         </span>
@@ -944,21 +1058,22 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
           MetaLogix IDE
         </span>
       </div>
-      <div className="flex items-stretch border-b border-[--border] text-xs shrink-0 bg-[--panel]/60">
+      <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0">
         <button
           onClick={() => setTab('shell')}
-          className={`px-3 py-1.5 border-b-2 transition ${tab === 'shell' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1 rounded-md transition-colors ${tab === 'shell' ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'}`}
         >Shell</button>
         <button
           onClick={() => setTab('files')}
-          className={`px-3 py-1.5 border-b-2 transition ${tab === 'files' ? 'border-[--accent] text-[--text]' : 'border-transparent text-[--text-muted] hover:text-[--text]'}`}
+          className={`px-3 py-1 rounded-md transition-colors ${tab === 'files' ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'}`}
         >Files</button>
       </div>
-      <div className="flex-1 min-h-0 bg-[--panel-strong]/40">
+      <div className="flex-1 min-h-0 bg-[--surface-sheet] rounded-xl mx-2 mb-2">
         {tab === 'shell' ? (
           <ShellTab
             projectId={projectId}
             shellIndex={shellIndex}
+            primary
             onOpenFile={(relPath, line) => {
               // Open the editor inline in this popout window instead of
               // dropping the user back to Finder.
@@ -979,14 +1094,25 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+interface TabButtonProps {
+  active: boolean;
+  onClick: () => void;
+  testId?: string;
+  ariaLabel?: string;
+  children: React.ReactNode;
+}
+
+function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 border-b-2 transition ${
+      data-testid={testId}
+      aria-label={ariaLabel}
+      aria-current={active ? 'page' : undefined}
+      className={`h-8 px-3 rounded-lg transition-colors ${
         active
-          ? 'border-[--accent] text-[--text]'
-          : 'border-transparent text-[--text-muted] hover:text-[--text]'
+          ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium'
+          : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
       }`}
     >
       {children}
@@ -1137,7 +1263,7 @@ function NewShellMenu({
         </label>
         <div className="flex gap-2">
           <button
-            className="flex-1 px-2 py-1.5 rounded bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-40"
+            className="flex-1 px-2 py-1.5 rounded pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-40"
             disabled={!customCmd.trim()}
             onClick={() => onLaunchCustom(customName.trim(), customCmd.trim(), customSave && !!customName.trim())}
           >
@@ -1179,14 +1305,34 @@ function NewShellMenu({
               onClick={() => onLaunchProfile(p.name)}
               title={p.argv.join(' ')}
             >
-              <span className="w-5 text-center text-base leading-none">{p.icon ?? '▸'}</span>
+              <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
+                {p.icon === 'builtin:pi' ? (
+                  <span
+                    className="w-5 h-5 bg-current"
+                    style={{
+                      maskImage: `url("${piIconUrl}")`,
+                      maskSize: 'contain',
+                      maskRepeat: 'no-repeat',
+                      maskPosition: 'center',
+                      WebkitMaskImage: `url("${piIconUrl}")`,
+                      WebkitMaskSize: 'contain',
+                      WebkitMaskRepeat: 'no-repeat',
+                      WebkitMaskPosition: 'center',
+                    }}
+                  />
+                ) : p.icon === 'builtin:omp' ? (
+                  <img src={ompIconUrl} alt="" className="w-5 h-5" />
+                ) : (
+                  p.icon ?? '▸'
+                )}
+              </span>
               <span className="flex-1 truncate font-medium">{p.name}</span>
               {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
               {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
             </button>
             {/* Star: pin as this folder's auto-launch. Click again to clear. */}
             <button
-              className={`px-2 flex items-center transition ${isDefault
+              className={`px-2 flex items-center transition-colors ${isDefault
                 ? 'text-[color:var(--accent)] opacity-100'
                 : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
               onClick={async () => {
@@ -1273,7 +1419,7 @@ function ShellTabsBar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="flex items-center gap-1 px-2 py-1 border-b border-[--border] bg-[--panel]/40 text-xs shrink-0 overflow-visible">
+    <div className="flex items-center gap-1 px-2 py-1 text-xs shrink-0 overflow-visible">
       <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
@@ -1285,11 +1431,13 @@ function ShellTabsBar({
           return (
             <div
               key={s.shellIndex}
+              data-testid={SHELL_TAB_TEST_ID}
+              data-shell-index={s.shellIndex}
               className={`group flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md cursor-pointer whitespace-nowrap
-                ${isActive ? 'bg-[--panel-strong] border border-[--border]' : 'hover:bg-[--panel-strong]/60 border border-transparent'}`}
+                ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}
               onClick={() => onSelect(s.shellIndex)}
             >
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${isActive ? 'bg-green-500 live-dot' : 'bg-[--text-muted]'}`} />
+              <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />
               <span className={`${isActive ? 'text-[--text] font-medium' : 'text-[--text-muted]'}`}>{label}</span>
               {s.shellIndex !== 0 && (
                 <button
@@ -1349,6 +1497,12 @@ function ShellTabsBar({
   );
 }
 
+/** One tab strip dot. Its own component so the per-shell state hook has a stable call site across a `.map()` whose length varies (D1: grey static when idle and inactive). */
+function ShellTabDot({ projectId, shellIndex, isActive }: { projectId: number; shellIndex: number; isActive: boolean }) {
+  const state = useShellClaudeState(projectId, shellIndex);
+  return <StatusDot state={state} inactiveWhenIdle={!isActive} />;
+}
+
 function ShellSplit({
   projectId, projectName,
   leftIndex, rightIndex,
@@ -1359,7 +1513,7 @@ function ShellSplit({
   projectId: number;
   projectName: string;
   leftIndex: number;
-  rightIndex: number;
+  rightIndex: number | null;           // null = single shell, no split
   ratio: number;                       // 0..1, share of horizontal space for LEFT
   onRatioChange: (r: number) => void;
   isPoppedLeft: boolean;
@@ -1369,6 +1523,11 @@ function ShellSplit({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+  // Keep rendering the last right shell while its pane animates out.
+  const lastRight = useRef(rightIndex);
+  if (rightIndex != null) lastRight.current = rightIndex;
+  const shownRight = rightIndex ?? lastRight.current;
+
   useEffect(() => {
     if (!dragging) return;
     function onMove(e: MouseEvent) {
@@ -1389,44 +1548,53 @@ function ShellSplit({
   }, [dragging, onRatioChange]);
 
   const leftPercent = `${(ratio * 100).toFixed(2)}%`;
+  // The left pane is always the same element with the same ShellTab key, so
+  // opening or closing the split never remounts its terminal. It only takes
+  // `--split-left` while the right pane is present (see .split-left in CSS).
   return (
     <div ref={wrapRef} className="h-full w-full flex min-h-0">
-      <div className="min-h-0 min-w-0 relative" style={{ width: leftPercent }}>
+      <div className="split-left min-h-0 min-w-0 relative" style={{ '--split-left': leftPercent } as React.CSSProperties}>
         {isPoppedLeft
           ? <PoppedPlaceholder projectId={projectId} shellIndex={leftIndex} name={projectName} />
           : <ShellTab
-              key={`${projectId}:${leftIndex}:left`}
+              key={`${projectId}:${leftIndex}`}
               projectId={projectId}
               shellIndex={leftIndex}
+              primary
               onOpenFile={onOpenFile}
             />
         }
       </div>
-      {/* Draggable divider — 4 px hit target, 1 px visible line. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        onMouseDown={() => setDragging(true)}
-        className={`shrink-0 w-1 cursor-col-resize bg-transparent hover:bg-[color:var(--accent)]/40 border-l border-[--border] ${dragging ? 'bg-[color:var(--accent)]/60' : ''}`}
-      />
-      <div className="flex-1 min-h-0 min-w-0 relative">
-        <button
-          onClick={onCloseSplit}
-          title="Close split (returns to single shell view)"
-          className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--danger] hover:bg-[--panel-strong]"
-        >
-          <XIcon />
-        </button>
-        {isPoppedRight
-          ? <PoppedPlaceholder projectId={projectId} shellIndex={rightIndex} name={projectName} />
-          : <ShellTab
-              key={`${projectId}:${rightIndex}:right`}
-              projectId={projectId}
-              shellIndex={rightIndex}
-              onOpenFile={onOpenFile}
-            />
-        }
-      </div>
+      {/* Split toggles are click-only, so they always animate. */}
+      <Reveal show={rightIndex != null} animate className="flex-1 flex min-h-0 min-w-0">
+        {/* Draggable divider — 4 px hit target, 1 px visible line. */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={() => setDragging(true)}
+          className={`shrink-0 w-1 cursor-col-resize ${dragging ? 'bg-[color:var(--accent)]/60' : 'bg-[--surface-hover] hover:bg-[color:var(--accent)]/40'}`}
+        />
+        {shownRight != null && (
+          <div className="flex-1 min-h-0 min-w-0 relative" data-testid="split-right">
+            <button
+              onClick={onCloseSplit}
+              title="Close split (returns to single shell view)"
+              className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--danger] hover:bg-[--panel-strong]"
+            >
+              <XIcon />
+            </button>
+            {isPoppedRight
+              ? <PoppedPlaceholder projectId={projectId} shellIndex={shownRight} name={projectName} />
+              : <ShellTab
+                  key={`${projectId}:${shownRight}:right`}
+                  projectId={projectId}
+                  shellIndex={shownRight}
+                  onOpenFile={onOpenFile}
+                />
+            }
+          </div>
+        )}
+      </Reveal>
     </div>
   );
 }
@@ -1439,7 +1607,7 @@ function PoppedPlaceholder({ projectId, shellIndex, name }: { projectId: number;
         <div className="text-lg font-semibold">{name}</div>
         <button
           onClick={async () => { await api.invoke('windows:return-shell', { projectId, shellIndex }); }}
-          className="text-sm px-4 py-1.5 rounded-md bg-[color:var(--accent)] text-white hover:brightness-110"
+          className="text-sm px-4 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110"
           data-testid="return-popout"
         >
           Bring back to this window
@@ -1489,7 +1657,7 @@ function WelcomeOnboarding() {
         <div className="flex gap-2 justify-center pt-2">
           <button
             onClick={addRoot}
-            className="bg-[color:var(--accent)] text-white text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
+            className="pressable bg-[color:var(--accent)] text-[--accent-text] text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
             data-testid="welcome-add-root"
           >
             + Add a root folder
@@ -1627,13 +1795,13 @@ function MetaprojectBoardButton({ project, onRequestLink }: { project: Project; 
           toast('Could not open the board', { kind: 'error', detail: `${String(e).replace(/^Error:\s*/, '')} — URL: ${url}` });
         }
       }}
-      className={`text-[11px] px-2 py-0.5 rounded-md border border-[--border] flex items-center gap-1 ${
+      className={`text-[11px] px-2 py-0.5 rounded-md flex items-center gap-1.5 ${
         isLinked ? 'hover:bg-[--panel-strong] text-[--text]' : 'text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text]'
       }`}
       title={isLinked ? `Open ${linked} on the metaproject board` : 'Not linked to a metaproject board — click to link or create one'}
       data-testid="metaproject-board"
     >
-      <BoardIcon />
+      <span className="text-[--hue-purple]"><BoardIcon /></span>
       <span>{isLinked ? 'Board' : 'Board · link'}</span>
     </button>
   );

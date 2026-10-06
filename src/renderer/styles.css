@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("./assets/fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
 /* ── Dark palette ──
  * The window is vibrancy-backed, so `--bg` is a translucent dark overlay
  * (not fully opaque) that darkens the material behind the app while still
@@ -27,6 +36,7 @@
   --text: #e6edf3;
   --text-muted: #8b949e;
   --accent: #3b82f6;
+  --accent-text: #fff;
   --term-fg: #e6edf3;
   --term-cursor: #e6edf3;
   --term-selection: rgba(255, 255, 255, 0.20);
@@ -36,6 +46,13 @@
   --icon-code:  #34d399; /* code     = emerald */
   --icon-mute:  #8b949e;
   --danger:     #f87171;
+  /* Claude status dots (spec claude-status-dots, AC21). Idle stays the
+   * existing green-500 in both themes; busy is amber. The light theme uses
+   * darker busy/blocked shades so they clear 3:1 against the lighter panel
+   * fill. */
+  --claude-idle:    #22c55e; /* green-500 */
+  --claude-busy:    #fbbf24; /* amber-400 */
+  --claude-blocked: #ef4444; /* red-500 */
   /* Highlight.js token colors — dark (GitHub-ish) */
   --hljs-comment:  #7d8590;
   --hljs-keyword:  #ff7b72;
@@ -76,6 +93,7 @@
   --text: #111418;
   --text-muted: #4b5563;
   --accent: #2563eb;
+  --accent-text: #fff;
   --term-fg: #111418;
   --term-cursor: #111418;
   --term-selection: rgba(0, 0, 0, 0.15);
@@ -84,6 +102,9 @@
   --icon-code:  #059669;
   --icon-mute:  #4b5563;
   --danger:     #dc2626;
+  --claude-idle:    #22c55e; /* green-500 */
+  --claude-busy:    #b45309; /* amber-700 */
+  --claude-blocked: #dc2626; /* red-600 */
   /* Highlight.js token colors — light */
   --hljs-comment:  #6a737d;
   --hljs-keyword:  #d73a49;
@@ -121,6 +142,7 @@
     --text: #111418;
     --text-muted: #4b5563;
     --accent: #2563eb;
+    --accent-text: #fff;
     --term-fg: #111418;
     --term-cursor: #111418;
     --term-selection: rgba(0, 0, 0, 0.15);
@@ -129,6 +151,9 @@
     --icon-code:  #059669;
     --icon-mute:  #4b5563;
     --danger:     #dc2626;
+    --claude-idle:    #22c55e;
+    --claude-busy:    #b45309;
+    --claude-blocked: #dc2626;
     --hljs-comment:  #6a737d;
     --hljs-keyword:  #d73a49;
     --hljs-string:   #032f62;
@@ -147,6 +172,380 @@
     --hljs-selector: #22863a;
     --hljs-emphasis: #24292e;
     --hljs-strong:   #24292e;
+  }
+}
+
+:root[data-palette="catppuccin"] {
+  --bg: #1e1e2e;
+  --panel: #181825;
+  --panel-strong: #313244;
+  --chat-surface: #1e1e2e;
+  --chat-row-hover: #313244;
+  --scrollbar-thumb: #585b70;
+  --scrollbar-thumb-hover: #7f849c;
+  --border: #45475a;
+  --input-bg: #1e1e2e;
+  --input-border: #7f849c;
+  --text: #cdd6f4;
+  --text-muted: #a6adc8;
+  --accent: #89b4fa;
+  --accent-text: #1e1e2e;
+  --term-fg: #cdd6f4;
+  --term-cursor: #f5e0dc;
+  --term-selection: #45475a;
+  --term-black: #45475a;
+  --term-red: #f38ba8;
+  --term-green: #a6e3a1;
+  --term-yellow: #f9e2af;
+  --term-blue: #89b4fa;
+  --term-magenta: #f5c2e7;
+  --term-cyan: #94e2d5;
+  --term-white: #a6adc8;
+  --term-bright-black: #585b70;
+  --term-bright-red: #f37799;
+  --term-bright-green: #89d88b;
+  --term-bright-yellow: #ebd391;
+  --term-bright-blue: #74a8fc;
+  --term-bright-magenta: #f2aede;
+  --term-bright-cyan: #6bd7ca;
+  --term-bright-white: #bac2de;
+  --icon-md: #89b4fa;
+  --icon-img: #f5c2e7;
+  --icon-code: #a6e3a1;
+  --icon-mute: #a6adc8;
+  --danger: #f38ba8;
+  --claude-idle: #a6e3a1;
+  --claude-busy: #f9e2af;
+  --claude-blocked: #f38ba8;
+  --hljs-comment: #9399b2;
+  --hljs-keyword: #cba6f7;
+  --hljs-string: #a6e3a1;
+  --hljs-number: #fab387;
+  --hljs-function: #89b4fa;
+  --hljs-title: #89b4fa;
+  --hljs-variable: #cdd6f4;
+  --hljs-attr: #f9e2af;
+  --hljs-tag: #cba6f7;
+  --hljs-name: #89b4fa;
+  --hljs-type: #f9e2af;
+  --hljs-literal: #fab387;
+  --hljs-meta: #f5c2e7;
+  --hljs-symbol: #f2cdcd;
+  --hljs-doctag: #cba6f7;
+  --hljs-selector: #a6e3a1;
+  --hljs-emphasis: #cdd6f4;
+  --hljs-strong: #cdd6f4;
+}
+
+:root[data-palette="rose-pine"] {
+  --bg: #191724;
+  --panel: #1f1d2e;
+  --panel-strong: #26233a;
+  --chat-surface: #191724;
+  --chat-row-hover: #26233a;
+  --scrollbar-thumb: #524f67;
+  --scrollbar-thumb-hover: #908caa;
+  --border: #403d52;
+  --input-bg: #191724;
+  --input-border: #6e6a86;
+  --text: #e0def4;
+  --text-muted: #908caa;
+  --accent: #c4a7e7;
+  --accent-text: #191724;
+  --term-fg: #e0def4;
+  --term-cursor: #e0def4;
+  --term-selection: #403d52;
+  --term-black: #26233a;
+  --term-red: #eb6f92;
+  --term-green: #31748f;
+  --term-yellow: #f6c177;
+  --term-blue: #9ccfd8;
+  --term-magenta: #c4a7e7;
+  --term-cyan: #ebbcba;
+  --term-white: #e0def4;
+  --term-bright-black: #6e6a86;
+  --term-bright-red: #eb6f92;
+  --term-bright-green: #31748f;
+  --term-bright-yellow: #f6c177;
+  --term-bright-blue: #9ccfd8;
+  --term-bright-magenta: #c4a7e7;
+  --term-bright-cyan: #ebbcba;
+  --term-bright-white: #e0def4;
+  --icon-md: #9ccfd8;
+  --icon-img: #c4a7e7;
+  --icon-code: #ebbcba;
+  --icon-mute: #908caa;
+  --danger: #eb6f92;
+  --claude-idle: #9ccfd8;
+  --claude-busy: #f6c177;
+  --claude-blocked: #eb6f92;
+  --hljs-comment: #908caa;
+  --hljs-keyword: #31748f;
+  --hljs-string: #f6c177;
+  --hljs-number: #ebbcba;
+  --hljs-function: #ebbcba;
+  --hljs-title: #ebbcba;
+  --hljs-variable: #e0def4;
+  --hljs-attr: #9ccfd8;
+  --hljs-tag: #9ccfd8;
+  --hljs-name: #9ccfd8;
+  --hljs-type: #9ccfd8;
+  --hljs-literal: #ebbcba;
+  --hljs-meta: #c4a7e7;
+  --hljs-symbol: #c4a7e7;
+  --hljs-doctag: #eb6f92;
+  --hljs-selector: #ebbcba;
+  --hljs-emphasis: #e0def4;
+  --hljs-strong: #e0def4;
+}
+
+:root[data-palette="catppuccin"][data-theme="light"] {
+  --bg: #eff1f5;
+  --panel: #e6e9ef;
+  --panel-strong: #dce0e8;
+  --chat-surface: #eff1f5;
+  --chat-row-hover: #dce0e8;
+  --scrollbar-thumb: #9ca0b0;
+  --scrollbar-thumb-hover: #7c7f93;
+  --border: #9ca0b0;
+  --input-bg: #eff1f5;
+  --input-border: #7c7f93;
+  --text: #4c4f69;
+  --text-muted: #5c5f77;
+  --accent: #1e66f5;
+  --accent-text: #eff1f5;
+  --term-fg: #4c4f69;
+  --term-cursor: #dc8a78;
+  --term-selection: #ccd0da;
+  --term-black: #5c5f77;
+  --term-red: #d20f39;
+  --term-green: #40a02b;
+  --term-yellow: #df8e1d;
+  --term-blue: #1e66f5;
+  --term-magenta: #ea76cb;
+  --term-cyan: #179299;
+  --term-white: #acb0be;
+  --term-bright-black: #6c6f85;
+  --term-bright-red: #de293e;
+  --term-bright-green: #49af3d;
+  --term-bright-yellow: #eea02d;
+  --term-bright-blue: #456eff;
+  --term-bright-magenta: #fe85d8;
+  --term-bright-cyan: #2d9fa8;
+  --term-bright-white: #bcc0cc;
+  --icon-md: #1e66f5;
+  --icon-img: #8839ef;
+  --icon-code: #40a02b;
+  --icon-mute: #5c5f77;
+  --danger: #d20f39;
+  --claude-idle: #40a02b;
+  --claude-busy: #df8e1d;
+  --claude-blocked: #d20f39;
+  --hljs-comment: #6c6f85;
+  --hljs-keyword: #8839ef;
+  --hljs-string: #40a02b;
+  --hljs-number: #fe640b;
+  --hljs-function: #1e66f5;
+  --hljs-title: #1e66f5;
+  --hljs-variable: #4c4f69;
+  --hljs-attr: #df8e1d;
+  --hljs-tag: #8839ef;
+  --hljs-name: #1e66f5;
+  --hljs-type: #df8e1d;
+  --hljs-literal: #fe640b;
+  --hljs-meta: #ea76cb;
+  --hljs-symbol: #dd7878;
+  --hljs-doctag: #8839ef;
+  --hljs-selector: #40a02b;
+  --hljs-emphasis: #4c4f69;
+  --hljs-strong: #4c4f69;
+}
+
+:root[data-palette="rose-pine"][data-theme="light"] {
+  --bg: #faf4ed;
+  --panel: #fffaf3;
+  --panel-strong: #f2e9e1;
+  --chat-surface: #faf4ed;
+  --chat-row-hover: #f2e9e1;
+  --scrollbar-thumb: #9893a5;
+  --scrollbar-thumb-hover: #797593;
+  --border: #cecacd;
+  --input-bg: #faf4ed;
+  --input-border: #9893a5;
+  --text: #575279;
+  --text-muted: #797593;
+  --accent: #286983;
+  --accent-text: #faf4ed;
+  --term-fg: #575279;
+  --term-cursor: #575279;
+  --term-selection: #dfdad9;
+  --term-black: #f2e9e1;
+  --term-red: #b4637a;
+  --term-green: #286983;
+  --term-yellow: #ea9d34;
+  --term-blue: #56949f;
+  --term-magenta: #907aa9;
+  --term-cyan: #d7827e;
+  --term-white: #575279;
+  --term-bright-black: #9893a5;
+  --term-bright-red: #b4637a;
+  --term-bright-green: #286983;
+  --term-bright-yellow: #ea9d34;
+  --term-bright-blue: #56949f;
+  --term-bright-magenta: #907aa9;
+  --term-bright-cyan: #d7827e;
+  --term-bright-white: #575279;
+  --icon-md: #286983;
+  --icon-img: #907aa9;
+  --icon-code: #286983;
+  --icon-mute: #797593;
+  --danger: #b4637a;
+  --claude-idle: #286983;
+  --claude-busy: #ea9d34;
+  --claude-blocked: #b4637a;
+  --hljs-comment: #797593;
+  --hljs-keyword: #286983;
+  --hljs-string: #ea9d34;
+  --hljs-number: #d7827e;
+  --hljs-function: #d7827e;
+  --hljs-title: #d7827e;
+  --hljs-variable: #575279;
+  --hljs-attr: #56949f;
+  --hljs-tag: #56949f;
+  --hljs-name: #56949f;
+  --hljs-type: #56949f;
+  --hljs-literal: #d7827e;
+  --hljs-meta: #907aa9;
+  --hljs-symbol: #907aa9;
+  --hljs-doctag: #b4637a;
+  --hljs-selector: #d7827e;
+  --hljs-emphasis: #575279;
+  --hljs-strong: #575279;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-palette="catppuccin"]:not([data-theme]) {
+    --bg: #eff1f5;
+    --panel: #e6e9ef;
+    --panel-strong: #dce0e8;
+    --chat-surface: #eff1f5;
+    --chat-row-hover: #dce0e8;
+    --scrollbar-thumb: #9ca0b0;
+    --scrollbar-thumb-hover: #7c7f93;
+    --border: #9ca0b0;
+    --input-bg: #eff1f5;
+    --input-border: #7c7f93;
+    --text: #4c4f69;
+    --text-muted: #5c5f77;
+    --accent: #1e66f5;
+    --accent-text: #eff1f5;
+    --term-fg: #4c4f69;
+    --term-cursor: #dc8a78;
+    --term-selection: #ccd0da;
+    --term-black: #5c5f77;
+    --term-red: #d20f39;
+    --term-green: #40a02b;
+    --term-yellow: #df8e1d;
+    --term-blue: #1e66f5;
+    --term-magenta: #ea76cb;
+    --term-cyan: #179299;
+    --term-white: #acb0be;
+    --term-bright-black: #6c6f85;
+    --term-bright-red: #de293e;
+    --term-bright-green: #49af3d;
+    --term-bright-yellow: #eea02d;
+    --term-bright-blue: #456eff;
+    --term-bright-magenta: #fe85d8;
+    --term-bright-cyan: #2d9fa8;
+    --term-bright-white: #bcc0cc;
+    --icon-md: #1e66f5;
+    --icon-img: #8839ef;
+    --icon-code: #40a02b;
+    --icon-mute: #5c5f77;
+    --danger: #d20f39;
+    --claude-idle: #40a02b;
+    --claude-busy: #df8e1d;
+    --claude-blocked: #d20f39;
+    --hljs-comment: #6c6f85;
+    --hljs-keyword: #8839ef;
+    --hljs-string: #40a02b;
+    --hljs-number: #fe640b;
+    --hljs-function: #1e66f5;
+    --hljs-title: #1e66f5;
+    --hljs-variable: #4c4f69;
+    --hljs-attr: #df8e1d;
+    --hljs-tag: #8839ef;
+    --hljs-name: #1e66f5;
+    --hljs-type: #df8e1d;
+    --hljs-literal: #fe640b;
+    --hljs-meta: #ea76cb;
+    --hljs-symbol: #dd7878;
+    --hljs-doctag: #8839ef;
+    --hljs-selector: #40a02b;
+    --hljs-emphasis: #4c4f69;
+    --hljs-strong: #4c4f69;
+  }
+
+  :root[data-palette="rose-pine"]:not([data-theme]) {
+    --bg: #faf4ed;
+    --panel: #fffaf3;
+    --panel-strong: #f2e9e1;
+    --chat-surface: #faf4ed;
+    --chat-row-hover: #f2e9e1;
+    --scrollbar-thumb: #9893a5;
+    --scrollbar-thumb-hover: #797593;
+    --border: #cecacd;
+    --input-bg: #faf4ed;
+    --input-border: #9893a5;
+    --text: #575279;
+    --text-muted: #797593;
+    --accent: #286983;
+    --accent-text: #faf4ed;
+    --term-fg: #575279;
+    --term-cursor: #575279;
+    --term-selection: #dfdad9;
+    --term-black: #f2e9e1;
+    --term-red: #b4637a;
+    --term-green: #286983;
+    --term-yellow: #ea9d34;
+    --term-blue: #56949f;
+    --term-magenta: #907aa9;
+    --term-cyan: #d7827e;
+    --term-white: #575279;
+    --term-bright-black: #9893a5;
+    --term-bright-red: #b4637a;
+    --term-bright-green: #286983;
+    --term-bright-yellow: #ea9d34;
+    --term-bright-blue: #56949f;
+    --term-bright-magenta: #907aa9;
+    --term-bright-cyan: #d7827e;
+    --term-bright-white: #575279;
+    --icon-md: #286983;
+    --icon-img: #907aa9;
+    --icon-code: #286983;
+    --icon-mute: #797593;
+    --danger: #b4637a;
+    --claude-idle: #286983;
+    --claude-busy: #ea9d34;
+    --claude-blocked: #b4637a;
+    --hljs-comment: #797593;
+    --hljs-keyword: #286983;
+    --hljs-string: #ea9d34;
+    --hljs-number: #d7827e;
+    --hljs-function: #d7827e;
+    --hljs-title: #d7827e;
+    --hljs-variable: #575279;
+    --hljs-attr: #56949f;
+    --hljs-tag: #56949f;
+    --hljs-name: #56949f;
+    --hljs-type: #56949f;
+    --hljs-literal: #d7827e;
+    --hljs-meta: #907aa9;
+    --hljs-symbol: #907aa9;
+    --hljs-doctag: #b4637a;
+    --hljs-selector: #d7827e;
+    --hljs-emphasis: #575279;
+    --hljs-strong: #575279;
   }
 }
 
@@ -184,7 +583,7 @@ html, body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  font-family: var(--metaide-ui-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -233,44 +632,128 @@ input::placeholder, textarea::placeholder {
   background: transparent;
 }
 
-/* Subtle pulse for the live-shell indicator dot */
+/* ── Motion ──
+ * Built-in CSS easings are too soft; these give UI motion a decisive start.
+ * Keyboard-summoned surfaces (palette, finders, switcher, prompt library,
+ * shortcuts help) deliberately do NOT animate — they're opened hundreds of
+ * times a day and any delay reads as lag. */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Mouse-opened modals: backdrop fades, panel settles in from 96%. Centered
+ * origin on purpose — modals aren't anchored to a trigger. No transform in
+ * the resting state so the panel never becomes a containing block. */
+.modal-backdrop { transition: opacity 200ms var(--ease-out); }
+.modal-panel {
+  transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+@starting-style {
+  .modal-backdrop { opacity: 0; }
+  .modal-panel { opacity: 0; transform: scale(0.96); }
+}
+
+/* Anchored popovers (context menu, hover preview). Origin is set inline to
+ * the cursor so the pop grows out of where the user clicked. Short — these
+ * open tens of times a day. */
+.popover {
+  transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+@starting-style {
+  .popover { opacity: 0; transform: scale(0.97); }
+}
+
+/* Tooltip: grows from the edge nearest its trigger. `data-instant` skips the
+ * animation when the user is already sweeping across a toolbar. */
+.tooltip {
+  --tooltip-y: 0%;
+  transform: translate(-50%, var(--tooltip-y));
+  transform-origin: top center;
+  transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out);
+}
+.tooltip[data-side="top"] { --tooltip-y: -100%; transform-origin: bottom center; }
+.tooltip[data-instant] { transition: none; }
+@starting-style {
+  .tooltip { opacity: 0; transform: translate(-50%, var(--tooltip-y)) scale(0.97); }
+}
+
+/* Toasts rise from below the stack; exit is quicker than entry. Transitions
+ * (not keyframes) so a rapid burst of toasts retargets smoothly. */
+.toast {
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.toast[data-leaving] {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-duration: 180ms;
+  pointer-events: none;
+}
+@starting-style {
+  .toast { opacity: 0; transform: translateY(100%); }
+}
+
+/* Shell split: the left pane fills the row alone and only takes its ratio
+ * while the right pane (divider + shell) is mounted next to it. */
+.split-left { width: 100%; }
+.split-left:not(:only-child) { width: var(--split-left); }
+
+/* Press feedback for primary actions — confirms the click landed. */
+.pressable {
+  transition-property: color, background-color, border-color, filter, transform;
+  transition-duration: 160ms;
+  transition-timing-function: var(--ease-out);
+}
+.pressable:not(:disabled):active { transform: scale(0.97); }
+
+/* Live-shell indicator: a ring expands off the dot. Animating transform and
+ * opacity on a pseudo-element stays on the compositor, unlike the previous
+ * box-shadow pulse which repainted every dot every frame. */
 @keyframes livePulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5); }
-  50%      { opacity: 0.85; box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+  from { transform: scale(1); opacity: 0.6; }
+  to   { transform: scale(2.6); opacity: 0; }
 }
 
-.live-dot {
-  animation: livePulse 2s ease-in-out infinite;
-}
-
-/* Section-tint helper — the ActivityBar sets `data-view` on each sidebar
- * column so users can tell which pane they're in from the ambient color
- * without reading a label. Tints are intentionally weak (8-12% blend) so
- * text contrast stays untouched; only the panel background shifts. */
-.section-panel { position: relative; }
-.section-panel::before {
+.live-dot { position: relative; }
+.live-dot::after {
   content: '';
   position: absolute;
   inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: livePulse 2s var(--ease-out) infinite;
   pointer-events: none;
-  background: var(--section-tint, transparent);
-  transition: background 220ms ease;
 }
-.section-panel[data-view="projects"] { --section-tint: color-mix(in oklab, var(--accent) 3%, transparent); }
-.section-panel[data-view="chat"]     { --section-tint: color-mix(in oklab, #22d3ee     3%, transparent); }
-.section-panel[data-view="git"]      { --section-tint: color-mix(in oklab, #ef4444     3%, transparent); }
-/* Thin colored strip on the left edge — 2px, low opacity, just a wink. */
-.section-panel::after {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0; width: 1px;
-  pointer-events: none;
-  background: var(--section-stripe, transparent);
-  transition: background 220ms ease;
+
+/* Claude status dot (spec claude-status-dots): fill colour carries the
+ * shell/project state, per-theme so busy/blocked clear 3:1 against each
+ * theme's panel fill (AC21). `.live-dot` supplies the pulse; the D1 grey
+ * inactive-tab dot never gets a `data-claude-state` attribute, so it is
+ * unaffected by these rules. */
+.status-dot[data-claude-state="idle"]    { background-color: var(--claude-idle); }
+.status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
+.status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
+
+/* AC21: on the accent-filled active ProjectSwitcher row, no amber/red fill
+ * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
+ * (white clears 3:1 against both themes' accent). */
+.status-dot-ring {
+  box-shadow: 0 0 0 1px #fff;
 }
-.section-panel[data-view="projects"] { --section-stripe: color-mix(in oklab, var(--accent) 35%, transparent); }
-.section-panel[data-view="chat"]     { --section-stripe: color-mix(in oklab, #22d3ee     40%, transparent); }
-.section-panel[data-view="git"]      { --section-stripe: color-mix(in oklab, #ef4444     40%, transparent); }
+
+/* Reduced motion: keep fades (they aid comprehension), drop movement. */
+@media (prefers-reduced-motion: reduce) {
+  .live-dot::after { animation: none; opacity: 0; }
+  .pressable:not(:disabled):active { transform: none; }
+  @starting-style {
+    .modal-panel, .popover, .toast { transform: none; }
+    .tooltip { transform: translate(-50%, var(--tooltip-y)); }
+  }
+  .toast[data-leaving] { transform: none; }
+}
+
+/* Sidebar column marker — `data-view` identifies the pane; no tint is painted
+ * so the panel matches the chrome surface behind it. */
+.section-panel { position: relative; }
 
 /* Compact ring spinner — inherits currentColor so it fits any panel. */
 @keyframes mp-spin {
@@ -342,6 +825,33 @@ input::placeholder, textarea::placeholder {
 .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .markdown img { max-width: 100%; border-radius: 6px; }
 
+/* Mermaid diagrams: centred in the column with code-block rhythm. The source
+ * stays visible until the diagram renders, and alongside an error. */
+.markdown .mermaid-block { position: relative; margin: 0.8em 0; }
+.markdown .mermaid-block[data-mermaid-state="rendered"] > .mermaid-source { display: none; }
+.markdown .mermaid-output { display: flex; justify-content: center; }
+/* !important: mermaid writes a fixed max-width inline on some diagram types. */
+.markdown .mermaid-output svg { max-width: 100% !important; height: auto; }
+/* Text mixed toward --text so it clears 4.5:1 on the code-block surface in both themes. */
+.markdown .mermaid-error {
+  margin-top: 0.5em;
+  padding: 0.8em 1em;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--danger) 8%, var(--panel-strong));
+  color: color-mix(in oklab, var(--danger) 80%, var(--text));
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* Math: wide display formulas scroll inside themselves, never the column. */
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
+.markdown .math-error { color: color-mix(in oklab, var(--danger) 80%, var(--text)); }
+
 /* Keyboard hint chip */
 kbd {
   display: inline-block;
@@ -354,3 +864,66 @@ kbd {
   border-radius: 4px;
   box-shadow: 0 1px 0 var(--border);
 }
+
+/* ── Chrome surfaces and semantic hues ──
+ * The chrome (title bar, activity bar, sidebars, status bar) is one
+ * continuous surface; panes are separated by tone and spacing, not borders.
+ * The main area sits on it as a rounded sheet. Every token is derived from
+ * the palette variables above, so all palettes and both themes inherit it.
+ * The hue tokens use a palette's terminal colours when it defines them and
+ * fall back to the `-default` values below.
+ */
+:root {
+  --surface-chrome: var(--panel);
+  --surface-sheet: color-mix(in oklab, var(--panel-strong) 55%, transparent);
+  --surface-hover: color-mix(in oklab, var(--text) 7%, transparent);
+  --surface-active: color-mix(in oklab, var(--text) 10%, transparent);
+  --surface-field: color-mix(in oklab, var(--text) 6%, transparent);
+  --accent-soft: color-mix(in oklab, var(--accent) 22%, transparent);
+  --accent-soft-text: color-mix(in oklab, var(--accent) 65%, var(--text));
+
+  --hue-yellow: var(--term-yellow, var(--hue-yellow-default));
+  --hue-purple: var(--term-magenta, var(--hue-purple-default));
+  --hue-cyan: var(--term-cyan, var(--hue-cyan-default));
+  --hue-pink: var(--term-red, var(--hue-pink-default));
+  --hue-orange: var(--hue-orange-default);
+  /* Hue pulled toward --text so small coloured text keeps its contrast. */
+  --hue-orange-text: color-mix(in oklab, var(--hue-orange) 75%, var(--text));
+  --hue-orange-soft: color-mix(in oklab, var(--hue-orange) 22%, transparent);
+  --hue-orange-soft-text: var(--hue-orange-text);
+  --badge-accent-text: var(--accent-soft-text);
+  /* Text drawn on a solid hue fill (badges). */
+  --badge-ink: #11131a;
+
+  --hue-yellow-default: #e0af68;
+  --hue-purple-default: #bb9af7;
+  --hue-cyan-default: #7dcfff;
+  --hue-pink-default: #f7768e;
+  --hue-orange-default: #ff9e64;
+}
+:root[data-theme="light"] {
+  --badge-ink: #fff;
+  --badge-accent-text: color-mix(in oklab, var(--accent) 10%, var(--text));
+  --hue-orange-soft-text: color-mix(in oklab, var(--hue-orange) 10%, var(--text));
+  --hue-yellow-default: #b45309;
+  --hue-purple-default: #7c3aed;
+  --hue-cyan-default: #0e7490;
+  --hue-pink-default: #be185d;
+  --hue-orange-default: #c2410c;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --badge-ink: #fff;
+    --badge-accent-text: color-mix(in oklab, var(--accent) 10%, var(--text));
+    --hue-orange-soft-text: color-mix(in oklab, var(--hue-orange) 10%, var(--text));
+    --hue-yellow-default: #b45309;
+    --hue-purple-default: #7c3aed;
+    --hue-cyan-default: #0e7490;
+    --hue-pink-default: #be185d;
+    --hue-orange-default: #c2410c;
+  }
+}
+:root[data-palette="catppuccin"] { --hue-orange-default: #fab387; }
+:root[data-palette="catppuccin"][data-theme="light"] { --hue-orange-default: #fe640b; }
+:root[data-palette="rose-pine"] { --hue-orange-default: #ebbcba; }
+:root[data-palette="rose-pine"][data-theme="light"] { --hue-orange-default: #d7827e; }

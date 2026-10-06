@@ -2,18 +2,54 @@ import type { IpcMain } from 'electron';
 import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import type { Services } from '@main/services';
-import type { IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
+import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
+import { resolveSpawnEnv } from '@main/domain/spawn-env';
+import { parseProjectEnv } from '@shared/project-env';
+import type { Project, ProjectConfig } from '@shared/types';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
+import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
+import { isClaudePermissionMode } from '@shared/claude-permission-mode';
+import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
+import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseGitStatus } from '@shared/parse-git-status';
+import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
+import { describeGitFailure, runGit } from '@main/git/run-git';
+import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
+import { readDiffSides } from '@main/git/diff-sides';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+
+const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
+
+/** Spawn env overlay for a non-template spawn site: `templateEnv` ⊕ the project's interpolated variables. */
+function projectSpawnEnv(
+  s: Services,
+  project: Project,
+  templateEnv: Record<string, string>,
+): Record<string, string> {
+  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir }).env;
+}
+
+/**
+ * Validates an untrusted `projects:update-config` patch before any write.
+ * Only `env` is checked (AC8); the error names a key, never a value (AC17).
+ */
+function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
+  if (typeof config !== 'object' || config === null || Array.isArray(config))
+    throw new Error('config must be an object');
+  const patch = config as Partial<ProjectConfig>;
+  if (patch.env === undefined) return patch;
+  const parsed = parseProjectEnv(patch.env);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return patch;
+}
 
 type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
@@ -267,10 +303,14 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
   'projects:pin':          async (s, { id, pinned }) => { s.projects.setPinned(id, pinned); return { ok: true } as const; },
   'projects:hide':         async (s, { id, hidden }) => { s.projects.setHidden(id, hidden); return { ok: true } as const; },
-  'projects:update-config':async (s, { id, config }) => ({ project: s.projects.updateConfig(id, config) }),
+  'projects:update-config':async (s, { id, config }) => ({ project: s.projects.updateConfig(id, validatedConfigPatch(config)) }),
   'projects:recents':      async (s, { limit }) => ({ projects: s.projects.listRecents(limit ?? 10) }),
 
   'shells:launch': async (s, { projectId }) => {
+    // Defence in depth behind the renderer's blocking modal: never spawn
+    // Claude in Manual mode (the local, un-rewritten default) before the
+    // user has made an explicit permission-mode choice.
+    if (s.settings.get('claude_permission_mode') === null) throw new Error('Choose a Claude permission mode first');
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
     const cap = s.settings.get('keep_alive_cap');
@@ -285,7 +325,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       }
     }
 
-    let launch = resolveLaunch(project, s.settings, s.homeDir);
+    let launch = resolveLaunch(project, s.settings, s.homeDir, process.env);
     let fallbackApplied = false;
 
     // If subsequent variant (--continue) exits within ~3s with "no
@@ -314,7 +354,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         // in the resolved project view, re-resolve, then restart cleanly.
         s.projects.updateConfig(projectId, {}); // touch — no-op
         const reProject = { ...project, firstLaunchedAt: null };
-        launch = resolveLaunch(reProject, s.settings, s.homeDir);
+        launch = resolveLaunch(reProject, s.settings, s.homeDir, process.env);
         fallbackApplied = true;
         await s.ptyManager.spawn(projectId, 0, launch);
       }
@@ -349,7 +389,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: defaultShellArgv(), cwd: project.path, env: {}, variant: 'first' as const };
+    const launch = {
+      argv: defaultShellArgv(),
+      cwd: project.path,
+      env: projectSpawnEnv(s, project, {}),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -399,7 +444,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: resolvedArgv, cwd: project.path, env: resolvedEnv, variant: 'first' as const };
+    const launch = {
+      argv: resolvedArgv,
+      cwd: project.path,
+      env: projectSpawnEnv(s, project, resolvedEnv),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -440,6 +490,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
+  'claude-state:list': async (s) => ({ shells: s.claudeState.list() }),
   'shells:alive-list': async (s) => {
     const rows = s.shells.list();
     const projects = new Map(s.projects.list().map(p => [p.id, p]));
@@ -506,12 +557,36 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:pin':   async (s, { projectId, shellIndex, pinned }) => { s.shells.setPinned(projectId, shellIndex, pinned); return { ok: true } as const; },
   'shells:snapshot': async (s, { projectId, shellIndex }) => {
     const alive = s.ptyManager?.isAlive(projectId, shellIndex) ?? false;
-    const output = s.ptyManager?.getScrollback(projectId, shellIndex) ?? '';
+    const output = await s.ptyManager?.getSnapshot(projectId, shellIndex) ?? '';
     return { output, alive };
   },
 
   'settings:get': async (s, { key }) => ({ value: s.settings.get(key) }),
-  'settings:set': async (s, { key, value }) => { s.settings.set(key, value as never); return { ok: true } as const; },
+  'settings:set': async (s, { key, value }) => {
+    // Permission mode and font preferences have dedicated validated setters.
+    if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
+    if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
+    s.settings.set(key, value as never);
+    return { ok: true } as const;
+  },
+  'settings:set-font': async (s, request) => {
+    if (!isFontSettingKey(request.key)) throw new Error('invalid font setting key');
+    const parsed = parseFontFamilyPreference(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    s.settings.set(request.key, parsed.value);
+    return { value: parsed.value };
+  },
+  'settings:set-claude-permission-mode': async (s, { mode }) => {
+    if (!isClaudePermissionMode(mode)) throw new Error(`invalid Claude permission mode (expected 'auto' or 'bypass')`);
+    const changedKeys = applyClaudePermissionMode(s.settings, mode);
+    return { mode, changedKeys };
+  },
+
+  // Renderer-supplied view data: validated here; a forged view can at worst suppress the user's own notifications.
+  'notifications:viewed-shells': async (s, req) => {
+    s.viewedShells.setReported(parseViewedShells(req));
+    return { ok: true } as const;
+  },
 
   'windows:popout-shell': async () => {
     throw new Error('windows:popout-shell requires WindowHooks — see registerIpc');
@@ -890,42 +965,15 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'git:panel-status': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    if (!existsSync(join(p.path, '.git'))) {
-      return { isRepo: false, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    const empty = { branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
+    if (!existsSync(join(p.path, '.git'))) return { isRepo: false, ...empty };
+    const r = runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
+    if (r.status !== 0 || r.tooLarge || r.timedOut) {
+      const error = describeGitFailure(r, 'status');
+      log.warn('[git:panel-status] git status failed', { projectId, status: r.status, error });
+      return { isRepo: true, ...empty, error };
     }
-    const r = spawnSync('git', ['-C', p.path, 'status', '--porcelain=v1', '--branch', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000 });
-    if (r.status !== 0) return { isRepo: true, branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
-    // Parse porcelain lines directly here — we need per-column detail
-    // (staged X vs unstaged Y) that the collapsed parseGitStatus loses.
-    const lines = r.stdout.split('\n');
-    let branch: string | null = null;
-    let ahead = 0;
-    let behind = 0;
-    const staged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
-    const unstaged: Array<{ path: string; status: 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' }> = [];
-    const untracked: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith('## ')) {
-        const branchMatch = line.slice(3).match(/^([^.\s]+)(?:\.\.\.[^\s]+)?/);
-        if (branchMatch) branch = branchMatch[1] ?? null;
-        const aheadMatch = line.match(/ahead (\d+)/);
-        const behindMatch = line.match(/behind (\d+)/);
-        if (aheadMatch)  ahead  = Number(aheadMatch[1]);
-        if (behindMatch) behind = Number(behindMatch[1]);
-        continue;
-      }
-      if (line.length < 3) continue;
-      const x = line[0]!; const y = line[1]!;
-      const path = line.slice(3);
-      const norm = (c: string): 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!' => {
-        if (c === 'M' || c === 'A' || c === 'D' || c === 'R' || c === 'U' || c === '?' || c === '!') return c;
-        return 'M';
-      };
-      if (x === '?' && y === '?') { untracked.push(path); continue; }
-      if (x !== ' ' && x !== '?') staged.push({ path, status: norm(x) });
-      if (y !== ' ' && y !== '?') unstaged.push({ path, status: norm(y) });
-    }
-    return { isRepo: true, branch, ahead, behind, staged, unstaged, untracked };
+    return { isRepo: true, ...parseGitPanelStatus(r.stdout.toString('utf8')) };
   },
   'git:stage':   async (s, { projectId, paths }) => {
     const p = s.projects.get(projectId);
@@ -1078,7 +1126,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         throw new Error('all shells are pinned — unpin one or raise cap');
       }
     }
-    const launch = { argv: task.command, cwd: p.path, env: {}, variant: 'first' as const };
+    const launch = {
+      argv: task.command,
+      cwd: p.path,
+      env: projectSpawnEnv(s, p, {}),
+      variant: 'first' as const,
+    };
     await s.ptyManager.spawn(projectId, idx, launch);
     const now = new Date();
     const nowIso = `${now.getUTCFullYear()}-${String(now.getUTCMonth()+1).padStart(2,'0')}-${String(now.getUTCDate()).padStart(2,'0')} ${String(now.getUTCHours()).padStart(2,'0')}:${String(now.getUTCMinutes()).padStart(2,'0')}:${String(now.getUTCSeconds()).padStart(2,'0')}`;
@@ -1086,25 +1139,21 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { shellIndex: idx };
   },
 
+  /* ─── Diff tab: side-by-side data ─── */
+  'git:diff-sides': async (s, { projectId, kind, path, origPath, ifDiffHashNot }) => {
+    const p = s.projects.get(projectId);
+    if (!p) throw new Error(`no project ${projectId}`);
+    if (!GIT_DIFF_KINDS.has(kind)) throw new Error(`invalid diff kind ${String(kind)}`);
+    if (!existsSync(join(p.path, '.git'))) throw new Error(`${p.path} is not a git repository`);
+    return readDiffSides(p.path, { kind, path, origPath, ifDiffHashNot });
+  },
+
   /* ─── Per-file git diff ─── */
-  'git:file-diff': async (s, { projectId, path, staged, untracked }) => {
+  'git:file-diff': async (s, { projectId, path, origPath, staged, untracked }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     if (!existsSync(join(p.path, '.git'))) return { diff: '' };
-    // Untracked files aren't in the index; `--no-index` compares against
-    // /dev/null so we get a full add-diff — matches what `git diff` prints
-    // once the file is added, without side-effects.
-    if (untracked) {
-      const r = spawnSync('git', ['-C', p.path, 'diff', '--no-index', '--', '/dev/null', path], { encoding: 'utf8', timeout: 15000 });
-      // `--no-index` returns non-zero when the files differ (they always do
-      // here — one side is /dev/null). Prefer stdout unless it's empty.
-      return { diff: r.stdout || r.stderr || '' };
-    }
-    const args = staged
-      ? ['-C', p.path, 'diff', '--cached', '--', path]
-      : ['-C', p.path, 'diff', '--', path];
-    const r = spawnSync('git', args, { encoding: 'utf8', timeout: 15000 });
-    return { diff: r.stdout || '' };
+    return readFileDiff(p.path, { path, origPath, staged, untracked });
   },
 
   /* ─── Global scrollback search ─── */
@@ -1176,6 +1225,7 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'shells:launch-cli':   ['alive-shells:changed', 'projects:changed'],
   'shells:cli-profiles-remove': ['projects:changed'],
   'shells:set-default-cli': ['projects:changed'],
+  'projects:update-config': ['projects:changed'],
   'shells:kill':    ['alive-shells:changed'],
   'shells:pin':     ['alive-shells:changed'],
 };
@@ -1205,9 +1255,15 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   }
 
   const WINDOW_CHANNELS = new Set<IpcChannelName>(['windows:popout-shell', 'windows:return-shell', 'windows:list-popped', 'windows:tile-all', 'files:start-drag', 'app:renderer-ready-for-files']);
+  // Wired separately below: these channels emit keyed `settings:changed`
+  // events that the fixed per-channel payload cannot express.
+  const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
+    'settings:set-font': true,
+    'settings:set-claude-permission-mode': true,
+  };
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
-    if (WINDOW_CHANNELS.has(channel)) continue; // wired below
+    if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS[channel]) continue; // wired below
     ipcMain.handle(channel, async (event, req) => {
       const fn = handlers[channel] as (s: Services, req: unknown, e?: Electron.IpcMainInvokeEvent) => Promise<unknown>;
       const result = await fn(services, req, event);
@@ -1215,6 +1271,18 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
       return result;
     });
   }
+
+  ipcMain.handle('settings:set-font', async (_e, req: IpcRequest<'settings:set-font'>) => {
+    const result = await handlers['settings:set-font'](services, req);
+    sendEvent('settings:changed', { key: req.key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-claude-permission-mode', async (_e, req: IpcRequest<'settings:set-claude-permission-mode'>) => {
+    const result = await handlers['settings:set-claude-permission-mode'](services, req);
+    for (const key of result.changedKeys) sendEvent('settings:changed', { key });
+    return result;
+  });
 
   ipcMain.handle('windows:popout-shell', async (_e, req: IpcRequest<'windows:popout-shell'>) => {
     if (!windowHooks) throw new Error('windows:popout-shell not wired');

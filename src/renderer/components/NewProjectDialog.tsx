@@ -129,8 +129,8 @@ export function NewProjectDialog({ open, roots, defaultRootId, onClose, onCreate
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="new-project-dialog">
-      <div className="bg-[--panel-strong] w-[560px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="new-project-dialog">
+      <div className="modal-panel bg-[--panel-strong] w-[560px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-[--border] flex items-center justify-between">
           <div className="font-semibold">New project</div>
           <button onClick={onClose} className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel]" aria-label="Close">
@@ -143,14 +143,14 @@ export function NewProjectDialog({ open, roots, defaultRootId, onClose, onCreate
           <div className="inline-flex rounded-md border border-[--border] p-0.5 bg-[--panel]/50 text-xs">
             <button
               onClick={() => setMode('empty')}
-              className={`px-3 py-1 rounded-md ${mode === 'empty' ? 'bg-[color:var(--accent)] text-white' : 'text-[--text-muted] hover:text-[--text]'}`}
+              className={`px-3 py-1 rounded-md ${mode === 'empty' ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'text-[--text-muted] hover:text-[--text]'}`}
               data-testid="mode-empty"
             >
               Empty folder
             </button>
             <button
               onClick={() => setMode('clone')}
-              className={`px-3 py-1 rounded-md ${mode === 'clone' ? 'bg-[color:var(--accent)] text-white' : 'text-[--text-muted] hover:text-[--text]'}`}
+              className={`px-3 py-1 rounded-md ${mode === 'clone' ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'text-[--text-muted] hover:text-[--text]'}`}
               data-testid="mode-clone"
             >
               Clone git repo
@@ -285,8 +285,8 @@ export function NewProjectDialog({ open, roots, defaultRootId, onClose, onCreate
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className={`text-sm px-4 py-1.5 rounded-md text-white font-medium ${
-              canSubmit ? 'bg-[color:var(--accent)] hover:brightness-110' : 'bg-[--panel-strong] text-[--text-muted] cursor-not-allowed'
+            className={`text-sm px-4 py-1.5 rounded-md text-[--accent-text] font-medium ${
+              canSubmit ? 'pressable bg-[color:var(--accent)] hover:brightness-110' : 'bg-[--panel-strong] text-[--text-muted] cursor-not-allowed'
             }`}
             data-testid="new-project-create"
           >

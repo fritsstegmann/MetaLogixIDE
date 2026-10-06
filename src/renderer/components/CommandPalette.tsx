@@ -87,12 +87,12 @@ export function CommandPalette({ open, commands, onClose }: Props) {
                   onClick={() => { onClose(); void c.run(); }}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`w-full flex items-center gap-3 text-left px-3 py-1.5 mx-1 rounded-md ${
-                    active ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel]'
+                    active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel]'
                   }`}
                 >
                   <span className="flex-1 min-w-0">
                     {c.category && (
-                      <span className={`text-[10px] uppercase tracking-wider mr-2 ${active ? 'text-white/70' : 'text-[--text-muted]'}`}>
+                      <span className={`text-[10px] uppercase tracking-wider mr-2 ${active ? 'text-[--accent-text]/70' : 'text-[--text-muted]'}`}>
                         {c.category}
                       </span>
                     )}

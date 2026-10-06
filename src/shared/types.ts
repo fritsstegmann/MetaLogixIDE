@@ -1,3 +1,5 @@
+import type { ClaudePermissionMode } from './claude-permission-mode';
+
 export interface Root {
   id: number;
   path: string;
@@ -96,6 +98,10 @@ export type SettingsMap = {
   'scrollback_lines':              number;
   'max_watched_paths':             number;
   'theme':                         'dark' | 'light' | 'system';
+  /** Host-installed family used by ordinary application UI; null keeps the built-in stack. */
+  'ui_font_family':                string | null;
+  /** Host-installed family used by integrated terminals; null keeps the built-in stack. */
+  'terminal_font_family':          string | null;
   'metaproject_base_url':          string;
   /** Last-used metaproject username. Password is NEVER persisted. */
   'metaproject_last_username':     string;
@@ -107,4 +113,10 @@ export type SettingsMap = {
    * shellIndex 0 launches on project open.
    */
   'default_cli_profiles':          CliProfile[];
+  /** Chosen Claude permission mode; `null` = not chosen yet (first-run modal). */
+  'claude_permission_mode':        ClaudePermissionMode | null;
+  /** Show an OS notification when a Claude shell needs the user's input (permission prompt, question, dialog). */
+  'notify_claude_needs_input':     boolean;
+  /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
+  'notify_claude_finished':        boolean;
 };

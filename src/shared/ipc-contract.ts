@@ -1,4 +1,7 @@
 import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
+import type { ClaudePermissionMode } from './claude-permission-mode';
+import type { ClaudeShellStateEntry } from './claude-state';
+import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -6,6 +9,18 @@ import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
  * conflict > untracked > modified > added > deleted > renamed > ignored.
  */
 export type GitFileStatus = 'M' | 'A' | 'D' | 'R' | 'U' | '?' | '!';
+
+/** One changed path in the git panel / Diff tab. `origPath` is set for renames and copies (status 'R'). */
+export interface GitChangeEntry { path: string; status: GitFileStatus; origPath?: string }
+
+/** Which comparison a Diff tab entry shows: staged = HEAD vs index, unstaged = index vs worktree, untracked = nothing vs worktree. */
+export type GitDiffKind = 'staged' | 'unstaged' | 'untracked';
+
+/** Full content of one side, used only for syntax highlighting. `text` is null when it was not read; `skipped` says why. */
+export interface GitSideContent {
+  text: string | null;
+  skipped?: 'absent' | 'too-large' | 'binary' | 'unavailable';
+}
 
 export interface IpcContract {
   // roots
@@ -82,13 +97,16 @@ export interface IpcContract {
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'shells:alive-list':  { request: undefined;                                   response: { shells: AliveShellSummary[] } };
+  /** Claude state of every shell that is not idle; shells absent from the list are idle. */
+  'claude-state:list':  { request: undefined;                                   response: { shells: ClaudeShellStateEntry[] } };
   'shells:pin':         { request: { projectId: number; shellIndex: number; pinned: boolean }; response: { ok: true } };
   'shells:snapshot':    { request: { projectId: number; shellIndex: number };   response: { output: string; alive: boolean } };
   /**
    * Snapshot of every alive shell's currently-detected ports. The main
    * process scans PTY output for common "listening on 3000" / "Local:
    * http://localhost:3000/" patterns and keeps a per-shell Set<number>.
-   * The ports:changed event fires whenever that set grows.
+   * The ports:changed event fires when that set grows and with an empty set
+   * when the shell exits or its active process is interrupted.
    */
   'shells:ports':       { request: undefined; response: { entries: Array<{ projectId: number; shellIndex: number; ports: number[] }> } };
   /**
@@ -118,6 +136,17 @@ export interface IpcContract {
   // settings
   'settings:get': { request: { key: keyof SettingsMap };                        response: { value: SettingsMap[keyof SettingsMap] } };
   'settings:set': { request: { key: keyof SettingsMap; value: SettingsMap[keyof SettingsMap] }; response: { ok: true } };
+  'settings:set-font': { request: { key: FontSettingKey; value: unknown }; response: { value: FontFamilyPreference } };
+  'settings:set-claude-permission-mode': { request: { mode: ClaudePermissionMode }; response: { mode: ClaudePermissionMode; changedKeys: Array<keyof SettingsMap> } };
+
+  // notifications
+  /**
+   * The main window reports which shells it currently shows (active tab, plus
+   * the right split pane when set; empty when no project or the Files tab is
+   * showing). Main uses it to hold back Claude notifications for a shell the
+   * user is viewing. Popouts are known to main already and are not reported.
+   */
+  'notifications:viewed-shells': { request: { shells: Array<{ projectId: number; shellIndex: number }> }; response: { ok: true } };
 
   // files (read-only)
   'files:tree':      { request: { projectId: number; relPath?: string };                    response: { entries: Array<{ name: string; isDir: boolean; relPath: string }> } };
@@ -140,9 +169,9 @@ export interface IpcContract {
   'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
   'search:project':  { request: { projectId: number; query: string; caseSensitive?: boolean; regex?: boolean; maxFiles?: number; maxMatchesPerFile?: number }; response: { matches: Array<{ relPath: string; line: number; col: number; preview: string }>; filesScanned: number; truncated: boolean } };
 
-  // Git — surfaced for the sidebar + status bar; read-only.
+  // Git — surfaced for the sidebar, status bar and Diff tab: status, staging, commit, push/pull.
   'git:status':      { request: { projectId: number }; response: { isRepo: boolean; branch: string | null; ahead: number; behind: number; files: Record<string, GitFileStatus>; dirty: boolean } };
-  /** Detailed status for the git panel: staged vs unstaged split. */
+  /** Detailed status for the git panel and Diff tab: staged vs unstaged split. */
   'git:panel-status': {
     request: { projectId: number };
     response: {
@@ -150,9 +179,11 @@ export interface IpcContract {
       branch: string | null;
       ahead: number;
       behind: number;
-      staged: Array<{ path: string; status: GitFileStatus }>;
-      unstaged: Array<{ path: string; status: GitFileStatus }>;
+      staged: GitChangeEntry[];
+      unstaged: GitChangeEntry[];
       untracked: string[];
+      /** git's error text when status could not be read (non-zero exit, timeout, output too large). Lists are then empty. */
+      error?: string;
     };
   };
   'git:stage':       { request: { projectId: number; paths: string[] }; response: { ok: true } };
@@ -283,9 +314,24 @@ export interface IpcContract {
    * Returns the unified diff for a single file. `staged: true` diffs the
    * index vs HEAD (what's in the "Staged" section of the panel); false
    * diffs the working copy vs the index. For untracked files, returns the
-   * whole file as an add-diff so the viewer works uniformly.
+   * whole file as an add-diff so the viewer works uniformly. `origPath` is
+   * the old path of a staged rename. `tooLarge` is set (and `diff` is '')
+   * when git's output exceeded the 1 MiB cap.
    */
-  'git:file-diff':  { request: { projectId: number; path: string; staged?: boolean; untracked?: boolean }; response: { diff: string } };
+  'git:file-diff':  { request: { projectId: number; path: string; origPath?: string; staged?: boolean; untracked?: boolean }; response: { diff: string; tooLarge?: true } };
+  /**
+   * Side-by-side data for one Diff tab entry: the unified diff plus each
+   * side's full content for highlighting. `unchanged` is returned when
+   * sha1(diff) equals `ifDiffHashNot`; `too-large` when the diff exceeds
+   * 1 MiB (no content is read).
+   */
+  'git:diff-sides': {
+    request: { projectId: number; kind: GitDiffKind; path: string; origPath?: string; ifDiffHashNot?: string };
+    response:
+      | { status: 'ok'; diff: string; diffHash: string; oldSide: GitSideContent; newSide: GitSideContent }
+      | { status: 'unchanged' }
+      | { status: 'too-large' };
+  };
 
   /* ─── Global scrollback search ─── */
   'shells:search-scrollback': {
@@ -325,10 +371,13 @@ export interface IpcEvents {
   'popout:changed':         { popped: Array<{ projectId: number; shellIndex: number }> };
   'metaproject:event':      { event: string; payload: unknown };
   'ports:changed':          { projectId: number; shellIndex: number; ports: number[] };
+  /** A shell's Claude state changed; sent to every window on real transitions only. */
+  'claude-state:changed':   ClaudeShellStateEntry;
   /**
-   * Fired when the user clicks an OS "command finished" notification. The
-   * renderer should switch to the named project, focus the shell tab, and
-   * bring the window forward.
+   * Fired when the user clicks an OS notification for a live shell — the
+   * generic "command finished" one or a Claude "needs input" / "finished"
+   * one. The renderer should switch to the named project, focus the shell
+   * tab, and bring the window forward.
    */
   'shell:focus-request':    { projectId: number; shellIndex: number };
   /**
