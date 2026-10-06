@@ -146,7 +146,7 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'settings',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks',
   );
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
@@ -729,14 +729,9 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            if (v === 'settings') { setSettingsOpen(true); return; }
-            if (v === 'chat' || v === 'projects' || v === 'git' || v === 'tasks') {
-              // Toggle if the same view is clicked twice — quality-of-life.
-              setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
-              if (!sidebarOpen) toggleSidebar(true, true);
-              return;
-            }
-            setActiveView(v);
+            // Toggle if the same view is clicked twice — quality-of-life.
+            setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
+            if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}

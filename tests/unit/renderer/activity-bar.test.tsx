@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ActivityBar } from '@renderer/components/ActivityBar';
 
 const noop = () => {};
-function render(props: { chatUnread?: number; gitDirty?: number; taskCount?: number; active?: 'projects' | 'chat' | 'git' | 'tasks' | 'settings' } = {}) {
+function render(props: { chatUnread?: number; gitDirty?: number; taskCount?: number; active?: 'projects' | 'chat' | 'git' | 'tasks' } = {}) {
   return renderToStaticMarkup(
     <ActivityBar active={props.active ?? 'projects'} onSelect={noop} onToggleSidebar={noop} sidebarOpen
       chatUnread={props.chatUnread} gitDirty={props.gitDirty} taskCount={props.taskCount} />,

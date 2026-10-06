@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks' | 'settings';
+export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks';
 
 interface Props {
   active: ActivityView;
