@@ -111,12 +111,57 @@ appearances inherit it:
 | `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
 | `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
 | `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
-| `--hue-orange-text`, `--badge-ink` | Contrast helpers for small coloured text and text on a hue fill. |
+| `--hue-orange-text` | Small coloured text, such as the Diff count. |
+| `--hue-orange-soft`, `--hue-orange-soft-text`, `--badge-accent-text` | Activity-bar count badges: a soft hue fill with text that keeps 4.5:1 contrast. Light appearances mix the badge text almost fully toward `--text`. |
+| `--badge-ink` | Unused since badges became soft tints; kept for a later token cleanup. |
+
+The side panels (projects, chat, git) paint no tint of their own; they sit
+directly on `--surface-chrome`.
+
+**Title bar.** The main and popout title bars are 44px tall. The main title
+bar centres `TitleGroup` (`src/renderer/components/TitleGroup.tsx`): the
+selected project's name and its branch in `--hue-pink`, or "MetaLogix IDE"
+when no project is selected. The branch uses the status bar's rule
+(`git.branch`, or `HEAD` when detached). The group sits in a box inset 130px
+from both edges, so it stays centred on the window and clear of the traffic
+lights and the buttons. On macOS, `src/main/index.ts` sets
+`trafficLightPosition: { x: 12, y: 15 }` for both window types, which centres
+the lights on the 44px bar. The title-bar buttons are 32px with 3px right
+padding, so the last glyph ends 12px from the edge and mirrors the lights.
+The document title (`<project> — MetaLogix IDE`) is unchanged.
+
+**Activity bar and status bar.** The activity bar is 56px wide with 36px
+buttons; count badges sit at the top-right of their button. Settings is
+reached from the title-bar gear or ⌘,. The status bar is 34px at 12px text.
+
+**Sidebar.** The header is one row: a filter field and a "+" button
+(`src/renderer/components/SidebarHeader.tsx`). "+" opens the shared
+`ContextMenu` with New project… (⌘⇧N), Add root folder… and Rescan roots;
+`src/renderer/sidebar-add-menu.ts` builds the items and runs the add-root and
+rescan flows. With `autoFocus`, `ContextMenu` focuses its first enabled item,
+moves with the arrow keys, and returns focus to the opener on close. Copy and
+test ids live in `src/renderer/sidebar-copy.ts`.
+
+Section headers (In use, Recents, Projects) align with the filter field and
+show a chevron on the right. The full list is titled "Projects" but stores its
+collapsed state under the legacy key "All projects", so existing state
+survives the rename. Rows are 34px tall. The scroll region runs to the
+sidebar's edge and never scrolls horizontally.
+
+The default width is 260px (`src/renderer/sidebar-width.ts`). Every existing
+install had the old 288px default stored, because the width is written on
+mount. A one-time migration, guarded by `metaide.sidebarWidth.migrated`,
+clears a stored 288 so the new default applies; any other width is kept.
+The resize handle sits above the sidebar and sheet so it can be dragged and
+double-clicked to reset.
 
 Each sidebar root shows a folder glyph in a stable hue.
 `src/renderer/root-hue.ts` hashes the root path (FNV-1a, trailing separators
 ignored) to one of five hue tokens, so a root keeps its colour across launches
-and palettes.
+and palettes. Root labels are abbreviated by `src/renderer/abbreviate-path.ts`:
+the macOS home becomes `~`, leading segments shrink to their first character,
+and the last segment stays whole (`~/P/P/acme`). The tooltip shows the full
+path.
 
 ### Markdown preview pipeline
 
