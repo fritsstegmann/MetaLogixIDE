@@ -20,7 +20,6 @@ export const FONT_COPY = {
   retry: 'Retry',
   saving: 'Saving…',
   saveFailed: 'Could not save this font. Your previous font remains active.',
-  emptyName: 'Enter a font family or choose System default.',
   customOption: (family: string): string => `Use “${family}”`,
   discoveryUnsupported: 'Installed fonts can’t be listed here. Type an exact family name.',
   discoveryDenied: 'Access to installed fonts was denied. Type an exact family name.',

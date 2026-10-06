@@ -1,0 +1,145 @@
+/**
+ * Pure option, validation and highlight logic for the font combobox. The
+ * highlight is stored as an option identity (or none, meaning "best match for
+ * the typed text") rather than an index, so it survives the option list
+ * changing underneath it, and Enter on a field the user has not edited or
+ * navigated resolves to no action.
+ */
+
+import type { FontFamilyPreference } from '@shared/font-settings';
+import { parseFontFamilyPreference } from '@shared/font-settings';
+
+/** Longest family list rendered at once; typing narrows it further. */
+export const MAX_VISIBLE_FAMILIES = 200;
+
+export type FontOption =
+  | { readonly kind: 'default' }
+  | { readonly kind: 'family'; readonly family: string }
+  | { readonly kind: 'custom'; readonly family: string };
+
+export type FontEntry =
+  | { readonly ok: true; readonly value: FontFamilyPreference }
+  | { readonly ok: false; readonly error: string };
+
+export interface FontPickerState {
+  readonly query: string;
+  readonly open: boolean;
+  readonly activeKey: string | null;
+  readonly dirty: boolean;
+}
+
+export type FontPickerEvent =
+  | { readonly type: 'open' }
+  | { readonly type: 'type'; readonly text: string }
+  | { readonly type: 'highlight'; readonly key: string }
+  | { readonly type: 'close' }
+  | { readonly type: 'reset'; readonly query: string };
+
+export type EnterAction =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'choose'; readonly option: FontOption }
+  | { readonly kind: 'commit'; readonly text: string };
+
+const DEFAULT_OPTION: FontOption = { kind: 'default' };
+const NONE: EnterAction = { kind: 'none' };
+
+/** Whether `family` is in `families`, ignoring case. */
+export function includesFamily(families: readonly string[], family: string): boolean {
+  const folded = family.toLowerCase();
+  return families.some((candidate) => candidate.toLowerCase() === folded);
+}
+
+function isFiltering(query: string, value: FontFamilyPreference): boolean {
+  const needle = query.trim().toLowerCase();
+  return needle.length > 0 && needle !== (value ?? '').toLowerCase();
+}
+
+/** Trims typed text; empty means System default, otherwise the shared family rules apply. */
+export function validateFontEntry(text: string): FontEntry {
+  if (text.trim().length === 0) return { ok: true, value: null };
+  return parseFontFamilyPreference(text);
+}
+
+/**
+ * System default, then families containing the trimmed text (all of them while
+ * the field is empty or still shows the saved family), then `Use "<text>"`
+ * when the text names no family exactly.
+ */
+export function buildFontOptions(input: { families: readonly string[]; query: string; value: FontFamilyPreference }): FontOption[] {
+  const { families, query, value } = input;
+  const needle = query.trim().toLowerCase();
+  const filtering = isFiltering(query, value);
+  const matches = filtering ? families.filter((f) => f.toLowerCase().includes(needle)) : families;
+  const list: FontOption[] = [DEFAULT_OPTION];
+  for (const family of matches.slice(0, MAX_VISIBLE_FAMILIES)) list.push({ kind: 'family', family });
+  const typed = query.trim();
+  if (filtering && !includesFamily(families, typed)) list.push({ kind: 'custom', family: typed });
+  return list;
+}
+
+/** Stable identity of an option across rebuilt lists. */
+export function optionKey(option: FontOption): string {
+  return option.kind === 'default' ? 'default' : `${option.kind}:${option.family}`;
+}
+
+/** Index of the saved preference in the list, or -1 when it is not listed. */
+export function selectedOptionIndex(options: readonly FontOption[], value: FontFamilyPreference): number {
+  return options.findIndex((o) =>
+    value === null ? o.kind === 'default' : o.kind !== 'default' && o.family.toLowerCase() === value.toLowerCase());
+}
+
+/** Closed, unedited state showing the saved family. */
+export function initialPickerState(value: FontFamilyPreference): FontPickerState {
+  return { query: value ?? '', open: false, activeKey: null, dirty: false };
+}
+
+/** Applies one user event; typing always opens the list with the best-match highlight. */
+export function fontPickerReducer(state: FontPickerState, event: FontPickerEvent): FontPickerState {
+  switch (event.type) {
+    case 'open':
+      return state.open ? state : { ...state, open: true, activeKey: null };
+    case 'type':
+      return { ...state, query: event.text, open: true, activeKey: null, dirty: true };
+    case 'highlight':
+      return { ...state, activeKey: event.key, dirty: true };
+    case 'close':
+      return { ...state, open: false, activeKey: null };
+    case 'reset':
+      return { query: event.query, open: state.open, activeKey: null, dirty: false };
+  }
+}
+
+function bestMatchIndex(options: readonly FontOption[], query: string, value: FontFamilyPreference): number {
+  if (query.trim().length === 0) return 0;
+  if (isFiltering(query, value)) return Math.max(0, options.findIndex((o) => o.kind !== 'default'));
+  return Math.max(0, selectedOptionIndex(options, value));
+}
+
+/** Index of the highlighted option: the explicit highlight if still listed, else the best match. */
+export function activeOptionIndex(options: readonly FontOption[], state: FontPickerState, value: FontFamilyPreference): number {
+  if (state.activeKey !== null) {
+    const index = options.findIndex((o) => optionKey(o) === state.activeKey);
+    if (index >= 0) return index;
+  }
+  return bestMatchIndex(options, state.query, value);
+}
+
+/** Identity of the option one step from `index`, wrapping at both ends. */
+export function moveHighlight(options: readonly FontOption[], index: number, step: 1 | -1): string {
+  const next = options[(index + step + options.length) % options.length];
+  return optionKey(next ?? DEFAULT_OPTION);
+}
+
+/**
+ * What Enter does: save the explicitly highlighted option, else the best match
+ * for edited text, else nothing — an unedited field, or text that still names
+ * the saved family, keeps the current font.
+ */
+export function resolveEnter(state: FontPickerState, options: readonly FontOption[], value: FontFamilyPreference): EnterAction {
+  if (!state.dirty) return NONE;
+  if (!state.open) return { kind: 'commit', text: state.query };
+  const explicit = options.find((o) => optionKey(o) === state.activeKey);
+  if (explicit) return { kind: 'choose', option: explicit };
+  if (state.query.trim().length > 0 && !isFiltering(state.query, value)) return NONE;
+  return { kind: 'choose', option: options[bestMatchIndex(options, state.query, value)] ?? DEFAULT_OPTION };
+}
