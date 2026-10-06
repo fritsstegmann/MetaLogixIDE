@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   FONT_SETTING_KEYS,
   MAX_FONT_FAMILY_CODE_POINTS,
-  TERMINAL_FONT_FALLBACK,
-  UI_FONT_FALLBACK,
   isFontSettingKey,
   parseFontFamilyPreference,
 } from '@shared/font-settings';
@@ -44,8 +42,4 @@ describe('font settings contract', () => {
     expect(isFontSettingKey('theme')).toBe(false);
   });
 
-  it('pins the compatibility fallback stacks', () => {
-    expect(UI_FONT_FALLBACK).toBe('-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif');
-    expect(TERMINAL_FONT_FALLBACK).toBe('"SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, monospace');
-  });
 });

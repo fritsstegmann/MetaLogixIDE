@@ -30,6 +30,8 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'default_cli_profiles': [
     { name: 'Claude',       argv: ['claude'],                                   icon: '🤖' },
     { name: 'OpenAI Codex', argv: ['codex'],                                    icon: '🧠' },
+    { name: 'Pi',           argv: ['pi'],                                       icon: 'builtin:pi' },
+    { name: 'oh-my-pi',     argv: ['omp'],                                      icon: 'builtin:omp' },
     { name: 'ChatGPT',      argv: ['sgpt', '--repl', 'temp'],                   icon: '💬' },
     { name: 'Gemini',       argv: ['gemini'],                                   icon: '✨' },
     { name: 'Ollama',       argv: ['ollama', 'run', 'llama3'],                  icon: '🦙' },
@@ -60,26 +62,26 @@ export class SettingsRepo {
     this.db.prepare(
       `UPDATE settings SET value = ? WHERE key = 'metaproject_base_url' AND value = ?`,
     ).run(JSON.stringify(DEFAULT_SETTINGS['metaproject_base_url']), JSON.stringify(''));
-    // Union new seed CLI profiles into existing installs. Users already past
-    // first-run have their own row for `default_cli_profiles`, so the INSERT
-    // OR IGNORE above skipped it — without this merge they'd never see newly
-    // shipped defaults like ChatGPT/Ollama. User edits and additions are
-    // preserved (match is by `name`); we only add missing seeds to the end.
     const row = this.db.prepare(`SELECT value FROM settings WHERE key = 'default_cli_profiles'`).get() as { value: string } | undefined;
     if (row) {
       const current = JSON.parse(row.value) as SettingsMap['default_cli_profiles'];
+      let iconsChanged = false;
+      const profiles = current.map(p => {
+        if (p.icon !== undefined) return p;
+        const icon = p.name === 'Pi' ? 'builtin:pi' : p.name === 'oh-my-pi' ? 'builtin:omp' : undefined;
+        if (icon === undefined) return p;
+        iconsChanged = true;
+        return { ...p, icon };
+      });
       const have = new Set(current.map(p => p.name));
       const missing = DEFAULT_SETTINGS['default_cli_profiles'].filter(p => !have.has(p.name));
-      if (missing.length > 0) {
-        // A missing built-in `Claude` profile is re-added here on every
-        // boot; when a mode is already chosen (AC12a) the re-added profile
-        // must carry that mode's flag, never a different one or none.
+      if (iconsChanged || missing.length > 0) {
         const mode = this.get('claude_permission_mode');
         const seeded = mode === null
           ? missing
           : missing.map(p => (p.name === 'Claude' ? { ...p, argv: withPermissionMode(p.argv, mode) } : p));
         this.db.prepare(`UPDATE settings SET value = ? WHERE key = 'default_cli_profiles'`)
-          .run(JSON.stringify([...current, ...seeded]));
+          .run(JSON.stringify([...profiles, ...seeded]));
       }
     }
   }

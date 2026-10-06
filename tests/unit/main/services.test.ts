@@ -134,3 +134,30 @@ describe('buildServices — Claude state tracker', () => {
     expect(services.claudeState.stateOf(shell)).toBe('idle');
   });
 });
+
+describe('buildServices — shell runtime restart', () => {
+  it('discards previous-runtime shells without losing projects or the configured cap', () => {
+    const opts = tempOpts();
+    const first = buildServices(opts);
+    const root = first.roots.add('/restart-root');
+    const project = first.projects.upsert(root.id, '/restart-root/project', 'project');
+    first.settings.set('keep_alive_cap', 2);
+    for (let shellIndex = 0; shellIndex < 2; shellIndex++) {
+      first.shells.upsert({
+        projectId: project.id, shellIndex, model: null, launchArgv: ['/bin/zsh', '-l'],
+        startedAt: '2026-10-05 10:00:00', lastActiveAt: '2026-10-05 10:00:00',
+        pinned: shellIndex === 1,
+      });
+    }
+    first.db.close();
+
+    const restarted = buildServices(opts);
+    try {
+      expect(restarted.shells.list()).toEqual([]);
+      expect(restarted.projects.get(project.id)).toEqual(project);
+      expect(restarted.settings.get('keep_alive_cap')).toBe(2);
+    } finally {
+      restarted.db.close();
+    }
+  });
+});

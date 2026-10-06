@@ -41,7 +41,10 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
     const generation = fontDiscoveryGeneration.current;
     setFontDiscovery({ status: 'loading' });
     const result = await discoverLocalFonts(window);
-    if (fontDiscoveryGeneration.current === generation) setFontDiscovery(result);
+    if (fontDiscoveryGeneration.current === generation) {
+      fontDiscoveryAttempted.current = false;
+      setFontDiscovery(result);
+    }
   }, []);
 
   if (!open) return null;
@@ -99,7 +102,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
           <button
             type="button"
             onClick={onClose}
-            className="pressable min-h-11 rounded-md bg-[--accent] px-4 text-sm text-white hover:brightness-110"
+            className="pressable min-h-11 rounded-md bg-[--accent] px-4 text-sm text-[--accent-text] hover:brightness-110"
             data-testid="settings-done"
           >
             Done
@@ -125,7 +128,7 @@ function SectionButton({ active, onClick, children }: { active: boolean; onClick
       type="button"
       onClick={onClick}
       className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-left text-sm sm:w-full sm:px-2 ${
-        active ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong] text-[--text]'
+        active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel-strong] text-[--text]'
       }`}
     >
       {children}
@@ -142,7 +145,7 @@ function GeneralPanel({
   readonly fontDiscovery: FontDiscoveryState;
   readonly onLoadInstalledFonts: () => Promise<void>;
 }) {
-  const { mode, effective, setMode } = useTheme();
+  const { mode, palette, effective, setMode, setPalette } = useTheme();
   const [cap, setCap] = useState<number | null>(null);
   const [scanDepth, setScanDepth] = useState<number | null>(null);
   const [maxWatched, setMaxWatched] = useState<number | null>(null);
@@ -183,15 +186,40 @@ function GeneralPanel({
     <div className="space-y-6">
       <Header title="General" subtitle="Appearance and workspace defaults" />
 
+      <Field label="Theme" hint="Choose the IDE palette. Catppuccin uses Mocha/Latte; Rosé Pine uses Rosé Pine/Dawn.">
+        <div className="flex flex-wrap gap-2">
+          {([
+            { id: 'default', label: 'Default' },
+            { id: 'catppuccin', label: 'Catppuccin' },
+            { id: 'rose-pine', label: 'Rosé Pine' },
+          ] as const).map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              aria-pressed={palette === theme.id}
+              onClick={() => setPalette(theme.id)}
+              className={`px-3 py-1.5 rounded-md text-sm border ${
+                palette === theme.id
+                  ? 'bg-[--accent] text-[--accent-text] border-transparent'
+                  : 'bg-[--panel] border-[--border] hover:bg-[--panel-strong]'
+              }`}
+            >
+              {theme.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+
       <Field label="Appearance" hint="Switch how the app renders. System follows your OS.">
         <div className="flex gap-2">
           {(['system', 'light', 'dark'] as ThemeMode[]).map((t) => (
             <button
               key={t}
+              aria-pressed={mode === t}
               onClick={() => setMode(t)}
               className={`px-3 py-1.5 rounded-md text-sm border ${
                 mode === t
-                  ? 'bg-[--accent] text-white border-transparent'
+                  ? 'bg-[--accent] text-[--accent-text] border-transparent'
                   : 'bg-[--panel] border-[--border] hover:bg-[--panel-strong]'
               }`}
             >
@@ -303,12 +331,13 @@ function FontSettingsControls({
         <button
           type="button"
           onClick={() => void onLoadInstalledFonts()}
-          disabled={discovery.status !== 'idle'}
+          disabled={discovery.status === 'loading'}
           aria-describedby={discoveryStatusId}
           className="pressable min-h-11 shrink-0 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] disabled:cursor-not-allowed disabled:opacity-50"
           data-testid={FONT_TEST_IDS.loadInstalled}
         >
-          {FONT_COPY.loadInstalled}
+          {discovery.status === 'denied' || discovery.status === 'error' || discovery.status === 'unsupported'
+            ? 'Retry loading installed fonts' : FONT_COPY.loadInstalled}
         </button>
       </div>
       <p id={discoveryStatusId} aria-live="polite" className="text-xs text-[--text-muted]">
@@ -321,6 +350,7 @@ function FontSettingsControls({
         fallback={UI_FONT_FALLBACK}
         discovery={discovery}
         onSave={(value) => saveFont('ui_font_family', value)}
+        onLoadInstalledFonts={onLoadInstalledFonts}
       />
       <FontControl
         settingKey="terminal_font_family"
@@ -329,6 +359,7 @@ function FontSettingsControls({
         fallback={TERMINAL_FONT_FALLBACK}
         discovery={discovery}
         onSave={(value) => saveFont('terminal_font_family', value)}
+        onLoadInstalledFonts={onLoadInstalledFonts}
       />
     </section>
   );
@@ -366,7 +397,7 @@ function RootsPanel() {
       <Header title="Root directories" subtitle="Folders scanned for projects. Add each parent folder where your projects live." />
       <button
         onClick={add}
-        className="w-full text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-white rounded-md py-2"
+        className="w-full text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-[--accent-text] rounded-md py-2"
       >
         + Add root
       </button>

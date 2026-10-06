@@ -30,7 +30,7 @@ export function PermissionModeControl({ mode, disabled = false, onChange }: Prop
           onClick={() => { if (mode !== m) onChange(m); }}
           className={`px-3 py-1.5 rounded-md text-sm border disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-1 focus-visible:ring-offset-[--panel-strong] ${
             mode === m
-              ? 'bg-[--accent] text-white border-transparent'
+              ? 'bg-[--accent] text-[--accent-text] border-transparent'
               : 'bg-[--panel] border-[--border] hover:bg-[--panel-strong]'
           }`}
           data-testid={TEST_IDS[m]}

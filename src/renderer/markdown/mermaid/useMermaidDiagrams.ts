@@ -3,7 +3,7 @@
  * each block the Markdown renderer emitted and replaces its pending state with
  * the diagram or an inline error, one block at a time.
  */
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import {
   MERMAID_BLOCK_CLASS,
   MERMAID_ERROR_CLASS,
@@ -58,6 +58,13 @@ export function useMermaidDiagrams(
   theme: EffectiveTheme,
   renderer: DiagramRenderer = mermaidRenderer,
 ): void {
+  const [paletteRevision, setPaletteRevision] = useState(0);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setPaletteRevision((revision) => revision + 1));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-palette'] });
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const blocks = Array.from(container.current?.querySelectorAll(`.${MERMAID_BLOCK_CLASS}`) ?? []);
     if (blocks.length === 0) return;
@@ -78,5 +85,5 @@ export function useMermaidDiagrams(
     return () => {
       cancelled = true;
     };
-  }, [container, html, theme, renderer]);
+  }, [container, html, theme, renderer, paletteRevision]);
 }

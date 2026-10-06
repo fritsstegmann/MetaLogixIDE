@@ -12,7 +12,87 @@ preview pipeline, terminal focus, Claude notifications and the Claude status
 dots. The product design is in
 `docs/superpowers/specs/2026-07-18-metaide-design.md`.
 
+### Main-process startup invariant
+
+After services are constructed, `src/main/index.ts` registers every generic
+IPC handler before creating the initial `BrowserWindow`. Renderer providers
+may invoke settings channels while the first document is still loading, so
+window creation must not move ahead of `registerIpc`.
+
+On macOS, startup resolves PATH from the user's interactive login shell before
+constructing services or creating a renderer (`src/main/index.ts:374-386,508-510`).
+The resolver reads only NUL-framed PATH output, ignoring shell startup banners.
+It limits execution to 10 seconds and output to 1 MiB
+(`src/main/domain/login-shell-path.ts:10-33`).
+If resolution fails, startup logs a warning and retains the inherited PATH.
+Managed runtimes such as mise-provided Bun are available when the shell exposes
+them in PATH. CLI profile commands still launch directly, not through shell text.
+
+`buildServices()` clears the `shells` table before constructing the fresh PTY
+runtime (`src/main/services.ts:77-96`). These records belong to the previous
+runtime, not resumable terminals. Cleanup removes pinned and unpinned records
+but preserves projects and settings. Previous-run records cannot consume the
+keep-alive cap or block the first terminal after restart.
+
 ## Components
+
+### Coding-agent CLI profiles
+
+The shell tab bar's **+** menu offers **Pi** (`pi`) and **oh-my-pi** (`omp`)
+alongside Claude, OpenAI Codex, and the other built-in CLI profiles.
+Install and configure each agent separately; the IDE starts its executable through the user's PATH.
+The IDE does not install agents or supply their provider credentials.
+
+`src/main/repos/settings-repo.ts` seeds the profiles on new installations.
+Its existing name-based merge also adds missing built-in profiles to existing installations.
+Profiles with the same name retain their custom command and environment.
+
+The Pi and oh-my-pi profiles use official SVG icons bundled with the renderer.
+Startup fills missing icons on existing global profiles without replacing
+custom icons, commands, environments, or profile order
+(`src/main/repos/settings-repo.ts:65-85`).
+Pi's monochrome mark follows the app text color; omp retains its gradient.
+The build emits these icons as local files because the CSP blocks data URLs
+(`electron.vite.config.ts:62-63`).
+Icon sources: [Pi favicon](https://pi.dev/favicon.svg) and
+[omp favicon](https://omp.sh/favicon.svg).
+Project profiles override global profiles (`src/main/domain/launch.ts:14-18`).
+
+Click a profile to open a new terminal tab.
+Use its star button to select it as the folder's automatic launch command.
+Clear the star to restore the global launch command.
+The existing shell launch, environment, tab, and popout paths apply to these agents.
+Pi and oh-my-pi use bare `pi` and `omp` commands on both first and subsequent launches.
+They do not receive Claude-specific permission flags or hooks.
+
+Upstream CLI references: [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
+and [oh-my-pi](https://github.com/can1357/oh-my-pi/blob/main/docs/cli-reference.md).
+
+### IDE themes
+
+Settings → General provides **Default**, **Catppuccin**, and **Rosé Pine** palettes.
+Appearance remains independent: **Light**, **Dark**, or **System**.
+Default preserves the original IDE colors and starts in dark mode.
+Catppuccin uses Mocha in dark mode and Latte in light mode.
+Rosé Pine uses Rosé Pine in dark mode and Dawn in light mode.
+System appearance follows the operating system for each palette.
+
+`src/renderer/hooks/useTheme.ts` shares preferences between controls through
+`useSyncExternalStore`. It stores appearance in `metaide.theme.v2` and palette
+in `metaide.theme.palette`. Existing appearance choices remain valid.
+Local events synchronize controls within a window; storage events synchronize
+other renderer windows. `App` initializes the preferences for main and popout windows.
+The hook applies `data-theme` and `data-palette` before paint and synchronizes
+Electron native chrome with the appearance mode.
+
+`src/renderer/styles.css` defines the palette tokens. Chrome, inputs, status icons,
+syntax highlighting, and terminal colors use those tokens.
+Accent-filled controls use `--accent-text` rather than a fixed white foreground.
+Existing terminals refresh their foreground, cursor, selection, and ANSI colors
+when either document theme attribute changes.
+Mermaid diagrams render again on palette changes, including changes between
+palettes with the same light/dark appearance. Explicit diagram themes remain independent.
+The Command Palette also provides commands for all three palettes.
 
 ### Markdown preview pipeline
 

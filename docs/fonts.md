@@ -10,18 +10,23 @@ The UI font applies to navigation, labels, controls, chat prose, and rendered Ma
 
 The Terminal font applies to all integrated terminals, including split and popped-out terminals. A live change keeps the terminal process, scrollback, selection, and input, then remeasures and repaints the terminal (`src/renderer/components/ShellTab.tsx:337-349`, `src/renderer/terminal-font-update.ts:108-139`).
 
-Install a Nerd Font on the host before you select it. MetaLogix IDE does not download or bundle fonts. A Nerd Font icon renders only when the selected font contains that private-use glyph.
+Terminals include **Symbols Nerd Font Mono v3.4.0** as a bundled fallback for private-use Nerd Font icons. Normal text keeps the existing system stack or your selected family. A selected font that already contains an icon takes precedence. The bundled face is restricted to private-use Unicode ranges, so it does not replace ordinary letters, numbers, or punctuation. Reset keeps this icon fallback.
+
+The app loads the symbols before opening or repainting a terminal, including split and popout terminals. The font and its MIT license ship inside the application; no OS installation or runtime download is required. The upstream release is https://github.com/ryanoasis/nerd-fonts/releases/tag/v3.4.0.
 
 ## Select an installed font
 
 1. Open **Settings → General → Fonts**.
-2. Select **Load installed fonts**.
-3. Allow font access when the operating system requests it.
-4. Enter or select a family in **UI font** or **Terminal font**.
+2. Select **Choose installed font** below **UI font** or **Terminal font**.
+3. Allow font access if requested.
+4. Search the installed families. Each row shows a sample in that font.
+5. Select a row to apply it. The main preview and availability status update.
 
 Font discovery runs only after the button action. The app keeps only family names in memory and does not read font files (`src/renderer/fonts/local-font-access.ts:49-60`).
 
-If discovery is unsupported or denied, enter the exact installed family name. Settings reports availability as unknown. If discovery succeeds and does not list a saved family, Settings reports that family as unavailable and keeps the saved value (`src/renderer/components/FontControl.tsx:55-73`).
+If discovery is unsupported, denied, or fails, select **Retry loading installed fonts** to try again without closing Settings, or enter the exact installed family name manually. Settings reports availability as unknown until discovery succeeds. If successful discovery does not list a saved family, Settings reports that family as unavailable and keeps the saved value.
+
+The list includes all installed families for both preferences; terminal selection does not hide proportional fonts or guess whether a family is a Nerd Font. Use Tab and Enter or Space to select a row. Escape closes the installed-font panel without closing Settings. Reset and manual entry remain available.
 
 ## Reset a font
 

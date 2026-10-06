@@ -83,6 +83,7 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
   const settings = new SettingsRepo(db);
   settings.seedDefaults();
   applyPermissionModeEnvOverride(settings);
+  db.exec('DELETE FROM shells');
   const roots = new RootsRepo(db);
   const projects = new ProjectsRepo(db);
   const shells = new ShellsRepo(db);

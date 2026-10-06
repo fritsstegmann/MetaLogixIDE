@@ -46,6 +46,9 @@ import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeSta
 import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { useApplyUiFont } from './fonts/use-apply-ui-font';
 
+const piIconUrl = new URL('./assets/cli-icons/pi.svg', import.meta.url).href;
+const ompIconUrl = new URL('./assets/cli-icons/omp.svg', import.meta.url).href;
+
 interface PopoutInfo {
   projectId: number;
   shellIndex: number;
@@ -70,6 +73,7 @@ function readPopout(): PopoutInfo | null {
 /** Selects the renderer shell and applies synchronized application typography. */
 export function App() {
   useApplyUiFont();
+  useTheme();
   const popout = useMemo(readPopout, []);
   // ErrorBoundary catches render/lifecycle errors so an unhandled throw in
   // any descendant doesn't unmount the whole tree and leave the user with
@@ -235,7 +239,7 @@ function MainApp() {
   const envDrafts = useEnvDrafts();
   const envDirty = selected != null && envDrafts.isDirty(selected.id);
   const [taskCount, setTaskCount] = useState(0);
-  const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode } = useTheme();
+  const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
   shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
@@ -290,8 +294,11 @@ function MainApp() {
     { id: 'theme.system',    category: 'Theme',    title: 'Follow system theme',                          run: () => setThemeMode('system') },
     { id: 'theme.light',     category: 'Theme',    title: 'Use light theme',                              run: () => setThemeMode('light') },
     { id: 'theme.dark',      category: 'Theme',    title: 'Use dark theme',                               run: () => setThemeMode('dark') },
+    { id: 'theme.default',   category: 'Theme',    title: 'Use Default palette',                           run: () => setThemePalette('default') },
+    { id: 'theme.catppuccin', category: 'Theme',   title: 'Use Catppuccin palette',                        run: () => setThemePalette('catppuccin') },
+    { id: 'theme.rose-pine', category: 'Theme',    title: 'Use Rosé Pine palette',                         run: () => setThemePalette('rose-pine') },
     { id: 'app.settings',    category: 'App',      title: 'Open Settings',                    hint: '⌘,',  run: () => setSettingsOpen(true) },
-  ], [selected, sidebarOpen, setThemeMode]);
+  ], [selected, sidebarOpen, setThemeMode, setThemePalette]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -1256,7 +1263,7 @@ function NewShellMenu({
         </label>
         <div className="flex gap-2">
           <button
-            className="flex-1 px-2 py-1.5 rounded pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-40"
+            className="flex-1 px-2 py-1.5 rounded pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-40"
             disabled={!customCmd.trim()}
             onClick={() => onLaunchCustom(customName.trim(), customCmd.trim(), customSave && !!customName.trim())}
           >
@@ -1298,7 +1305,27 @@ function NewShellMenu({
               onClick={() => onLaunchProfile(p.name)}
               title={p.argv.join(' ')}
             >
-              <span className="w-5 text-center text-base leading-none">{p.icon ?? '▸'}</span>
+              <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
+                {p.icon === 'builtin:pi' ? (
+                  <span
+                    className="w-5 h-5 bg-current"
+                    style={{
+                      maskImage: `url("${piIconUrl}")`,
+                      maskSize: 'contain',
+                      maskRepeat: 'no-repeat',
+                      maskPosition: 'center',
+                      WebkitMaskImage: `url("${piIconUrl}")`,
+                      WebkitMaskSize: 'contain',
+                      WebkitMaskRepeat: 'no-repeat',
+                      WebkitMaskPosition: 'center',
+                    }}
+                  />
+                ) : p.icon === 'builtin:omp' ? (
+                  <img src={ompIconUrl} alt="" className="w-5 h-5" />
+                ) : (
+                  p.icon ?? '▸'
+                )}
+              </span>
               <span className="flex-1 truncate font-medium">{p.name}</span>
               {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
               {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
@@ -1580,7 +1607,7 @@ function PoppedPlaceholder({ projectId, shellIndex, name }: { projectId: number;
         <div className="text-lg font-semibold">{name}</div>
         <button
           onClick={async () => { await api.invoke('windows:return-shell', { projectId, shellIndex }); }}
-          className="text-sm px-4 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110"
+          className="text-sm px-4 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110"
           data-testid="return-popout"
         >
           Bring back to this window
@@ -1630,7 +1657,7 @@ function WelcomeOnboarding() {
         <div className="flex gap-2 justify-center pt-2">
           <button
             onClick={addRoot}
-            className="pressable bg-[color:var(--accent)] text-white text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
+            className="pressable bg-[color:var(--accent)] text-[--accent-text] text-sm font-medium px-4 py-2 rounded-md hover:brightness-110 shadow-sm"
             data-testid="welcome-add-root"
           >
             + Add a root folder

@@ -128,7 +128,7 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
           <button
             type="submit"
             disabled={submitting}
-            className="min-h-[44px] min-w-[44px] px-5 text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-white rounded-md disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]"
+            className="min-h-[44px] min-w-[44px] px-5 text-sm font-medium pressable bg-[--accent] hover:brightness-110 text-[--accent-text] rounded-md disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 focus-visible:ring-offset-[--panel-strong]"
             data-testid={PERMISSION_MODE_TEST_IDS.dialogConfirm}
           >
             {PERMISSION_MODE_COPY.confirm}

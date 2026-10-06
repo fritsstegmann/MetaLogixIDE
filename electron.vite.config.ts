@@ -59,8 +59,8 @@ export default defineConfig({
     root: 'src/renderer',
     build: {
       rollupOptions: { input: resolve('src/renderer/index.html') },
-      // Never inline fonts: the CSP has no font-src, so data: fonts would be blocked.
-      assetsInlineLimit: (file: string) => (/\.(woff2?|ttf)$/.test(file) ? false : undefined),
+      // Emit fonts and CLI icons as files: the CSP does not permit data URLs.
+      assetsInlineLimit: (file: string) => (/\.(woff2?|ttf)$/.test(file) || /\/cli-icons\/.*\.svg$/.test(file) ? false : undefined),
     },
     plugins: [react()],
     resolve: { alias: { '@shared': resolve('src/shared'), '@renderer': resolve('src/renderer') } }

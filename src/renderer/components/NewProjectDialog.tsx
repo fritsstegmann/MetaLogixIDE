@@ -143,14 +143,14 @@ export function NewProjectDialog({ open, roots, defaultRootId, onClose, onCreate
           <div className="inline-flex rounded-md border border-[--border] p-0.5 bg-[--panel]/50 text-xs">
             <button
               onClick={() => setMode('empty')}
-              className={`px-3 py-1 rounded-md ${mode === 'empty' ? 'bg-[color:var(--accent)] text-white' : 'text-[--text-muted] hover:text-[--text]'}`}
+              className={`px-3 py-1 rounded-md ${mode === 'empty' ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'text-[--text-muted] hover:text-[--text]'}`}
               data-testid="mode-empty"
             >
               Empty folder
             </button>
             <button
               onClick={() => setMode('clone')}
-              className={`px-3 py-1 rounded-md ${mode === 'clone' ? 'bg-[color:var(--accent)] text-white' : 'text-[--text-muted] hover:text-[--text]'}`}
+              className={`px-3 py-1 rounded-md ${mode === 'clone' ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'text-[--text-muted] hover:text-[--text]'}`}
               data-testid="mode-clone"
             >
               Clone git repo
@@ -285,7 +285,7 @@ export function NewProjectDialog({ open, roots, defaultRootId, onClose, onCreate
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className={`text-sm px-4 py-1.5 rounded-md text-white font-medium ${
+            className={`text-sm px-4 py-1.5 rounded-md text-[--accent-text] font-medium ${
               canSubmit ? 'pressable bg-[color:var(--accent)] hover:brightness-110' : 'bg-[--panel-strong] text-[--text-muted] cursor-not-allowed'
             }`}
             data-testid="new-project-create"

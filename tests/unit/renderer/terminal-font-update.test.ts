@@ -1,6 +1,6 @@
 /** Contract tests for in-place terminal font updates and geometry synchronization. */
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { TERMINAL_FONT_FALLBACK } from '@shared/font-settings';
+import { TERMINAL_FONT_FALLBACK, TERMINAL_SYMBOL_FONT } from '@shared/font-settings';
 import {
   createTerminalFontUpdater,
   createTerminalGeometrySynchronizer,
@@ -91,17 +91,13 @@ describe('createTerminalFontUpdater', () => {
     const updater = createTerminalFontUpdater({
       terminal: harness.terminal,
       synchronize: harness.synchronize,
-      loadFont: (specification) => {
-        harness.events.push(`load:${specification}`);
-        return readiness.promise;
-      },
+      loadFont: () => readiness.promise,
       timeoutMs: 100,
     });
 
     const applied = updater.apply('Fira Code Nerd Font');
     expect(harness.events).toEqual([
       `option:"Fira Code Nerd Font", ${TERMINAL_FONT_FALLBACK}`,
-      'load:14px "Fira Code Nerd Font"',
     ]);
 
     readiness.resolve();
@@ -109,7 +105,6 @@ describe('createTerminalFontUpdater', () => {
 
     expect(harness.events).toEqual([
       `option:"Fira Code Nerd Font", ${TERMINAL_FONT_FALLBACK}`,
-      'load:14px "Fira Code Nerd Font"',
       'fit',
       'atlas',
       'refresh:0-23',
@@ -177,7 +172,8 @@ describe('createTerminalFontUpdater', () => {
     const updater = createTerminalFontUpdater({
       terminal: harness.terminal,
       synchronize: harness.synchronize,
-      loadFont: () => loads.shift()?.promise ?? Promise.resolve(),
+      loadFont: (specification) => specification.includes(TERMINAL_SYMBOL_FONT)
+        ? Promise.resolve() : loads.shift()?.promise ?? Promise.resolve(),
       timeoutMs: 100,
     });
 
@@ -225,26 +221,26 @@ describe('createTerminalFontUpdater', () => {
     expect(harness.clearSelection).not.toHaveBeenCalled();
   });
 
-  it('restores the exact legacy fallback without starting a font load', async () => {
+  it('waits for bundled icon readiness on the default stack before fitting and repainting', async () => {
     const harness = createHarness();
-    const loadFont = vi.fn<() => Promise<unknown>>();
+    const icons = deferred();
     const updater = createTerminalFontUpdater({
       terminal: harness.terminal,
       synchronize: harness.synchronize,
-      loadFont,
+      loadFont: () => icons.promise,
       timeoutMs: 100,
     });
 
-    await updater.apply(null);
-
-    expect(harness.events).toEqual([
-      `option:${TERMINAL_FONT_FALLBACK}`,
+    const applied = updater.apply(null);
+    expect(harness.events).toEqual([`option:${TERMINAL_FONT_FALLBACK}`]);
+    icons.resolve();
+    await applied;
+    expect(harness.events.slice(1)).toEqual([
       'fit',
       'atlas',
       'refresh:0-23',
       'resize:80x24',
     ]);
-    expect(loadFont).not.toHaveBeenCalled();
   });
 });
 

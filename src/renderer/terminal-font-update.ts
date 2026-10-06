@@ -1,5 +1,5 @@
 /** Coordinates in-place xterm font changes with bounded readiness and geometry updates. */
-import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
+import { TERMINAL_FONT_FALLBACK, TERMINAL_SYMBOL_FONT, type FontFamilyPreference } from '@shared/font-settings';
 import { buildFontFamilyStack, serializeFontFamily } from '@renderer/fonts/font-family';
 
 const DEFAULT_FONT_SIZE = 14;
@@ -38,14 +38,15 @@ interface TerminalGeometryDependencies {
 interface TerminalFontUpdaterDependencies {
   readonly terminal: TerminalFontUpdatePort;
   readonly synchronize: TerminalGeometrySynchronizer;
-  readonly loadFont?: (specification: string) => Promise<unknown>;
+  readonly loadFont?: (specification: string, text?: string) => Promise<unknown>;
   readonly timeoutMs: number;
 }
 
 function waitForFont(
-  loadFont: (specification: string) => Promise<unknown>,
+  loadFont: (specification: string, text?: string) => Promise<unknown>,
   specification: string,
   timeoutMs: number,
+  text?: string,
 ): Promise<void> {
   // ES2022 and Electron's Node 20 runtime do not provide Promise.withResolvers().
   return new Promise((resolve) => {
@@ -58,7 +59,7 @@ function waitForFont(
     };
     const timeoutId = setTimeout(finish, Math.max(0, timeoutMs));
     try {
-      void loadFont(specification).then(finish, finish);
+      void loadFont(specification, text).then(finish, finish);
     } catch {
       finish();
     }
@@ -121,13 +122,24 @@ export function createTerminalFontUpdater(
         TERMINAL_FONT_FALLBACK,
       );
 
-      if (family !== null && dependencies.loadFont) {
+      if (dependencies.loadFont) {
         const fontSize = dependencies.terminal.options.fontSize || DEFAULT_FONT_SIZE;
-        await waitForFont(
-          dependencies.loadFont,
-          `${fontSize}px ${serializeFontFamily(family)}`,
-          dependencies.timeoutMs,
-        );
+        const pendingFonts = [
+          waitForFont(
+            dependencies.loadFont,
+            `${fontSize}px ${serializeFontFamily(TERMINAL_SYMBOL_FONT)}`,
+            dependencies.timeoutMs,
+            '\ue0b0\uf000\udb80\udc00',
+          ),
+        ];
+        if (family !== null) {
+          pendingFonts.push(waitForFont(
+            dependencies.loadFont,
+            `${fontSize}px ${serializeFontFamily(family)}`,
+            dependencies.timeoutMs,
+          ));
+        }
+        await Promise.all(pendingFonts);
       }
       if (disposed || generation !== updateGeneration) return;
       dependencies.synchronize({ clearGlyphCache: true, forceResize: true });

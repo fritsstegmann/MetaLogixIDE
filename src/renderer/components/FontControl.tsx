@@ -24,6 +24,7 @@ interface Props {
   readonly fallback: string;
   readonly discovery: FontDiscoveryState;
   readonly onSave: (value: FontFamilyPreference) => Promise<void>;
+  readonly onLoadInstalledFonts: () => Promise<void>;
 }
 
 const AVAILABLE_COPY = 'Font is installed on this computer.';
@@ -81,10 +82,11 @@ export function FontControl({
   fallback,
   discovery,
   onSave,
+  onLoadInstalledFonts,
 }: Props): React.JSX.Element {
   const reactId = useId();
   const inputId = `${reactId}-input`;
-  const listId = `${reactId}-families`;
+  const pickerId = `${reactId}-picker`;
   const hintId = `${reactId}-hint`;
   const statusId = `${reactId}-status`;
   const errorId = `${reactId}-error`;
@@ -92,11 +94,16 @@ export function FontControl({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const savingRef = useRef(false);
   const pendingValueRef = useRef<FontFamilyPreference | undefined>(undefined);
   const ids = testIds(settingKey);
   const families = discovery.status === 'success' ? discovery.families : [];
   const previewStack = buildFontFamilyStack(value, fallback);
+  const matchingFamilies = families.filter((family) =>
+    family.toLowerCase().includes(search.trim().toLowerCase()),
+  );
 
   useEffect(() => {
     pendingValueRef.current = undefined;
@@ -161,13 +168,12 @@ export function FontControl({
         </button>
       </div>
       <p id={hintId} className="text-xs text-[--text-muted]">
-        Search installed fonts or enter an exact family name.
+        Choose a font installed on this computer, or enter an exact family name.
       </p>
       <input
         id={inputId}
         name={settingKey}
         type="text"
-        list={listId}
         value={input}
         placeholder={FONT_COPY.defaultValue}
         autoComplete="off"
@@ -195,9 +201,92 @@ export function FontControl({
         className="min-h-11 w-full rounded-md border border-[--input-border] bg-[--input-bg] px-3.5 py-3 text-base text-[--text] transition-colors hover:border-[--text-muted] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
         data-testid={ids.input}
       />
-      <datalist id={listId}>
-        {families.map((family) => <option key={family} value={family} />)}
-      </datalist>
+      <button
+        type="button"
+        aria-expanded={pickerOpen}
+        aria-controls={pickerId}
+        disabled={saving}
+        onClick={() => {
+          setPickerOpen(!pickerOpen);
+          if (!pickerOpen && discovery.status !== 'success' && discovery.status !== 'loading') {
+            void onLoadInstalledFonts();
+          }
+        }}
+        className="pressable min-h-11 rounded-md border border-[--input-border] bg-[--panel] px-3 text-sm hover:bg-[--panel-strong] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:opacity-50"
+      >
+        {pickerOpen ? 'Close installed fonts' : 'Choose installed font'}
+      </button>
+      {pickerOpen && (
+        <div
+          id={pickerId}
+          className="space-y-2 rounded-md border border-[--border] bg-[--panel-strong] p-3"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              setPickerOpen(false);
+              document.getElementById(inputId)?.focus();
+            }
+          }}
+        >
+          {discovery.status === 'success' ? (
+            <>
+              <label className="block text-xs text-[--text-muted]" htmlFor={`${pickerId}-search`}>
+                Search installed fonts for {label.toLowerCase()}
+              </label>
+              <input
+                id={`${pickerId}-search`}
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="min-h-11 w-full rounded-md border border-[--input-border] bg-[--input-bg] px-3 text-base focus-visible:ring-2 focus-visible:ring-[--accent]/70"
+              />
+              <p className="text-xs text-[--text-muted]" aria-live="polite">
+                {families.length === 0 ? 'No installed font families were found.'
+                  : matchingFamilies.length === 0 ? 'No installed fonts match your search.'
+                    : `${matchingFamilies.length} font ${matchingFamilies.length === 1 ? 'family' : 'families'}`}
+              </p>
+              <ul className="max-h-56 space-y-1 overflow-y-auto" aria-label={`Installed fonts for ${label.toLowerCase()}`}>
+                {matchingFamilies.map((family) => (
+                  <li key={family}>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      aria-pressed={value !== null && family.toLowerCase() === value.toLowerCase()}
+                      onClick={() => {
+                        void commit(family);
+                      }}
+                      className="pressable min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-[--panel] focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:opacity-50"
+                    >
+                      <span className="block truncate text-sm">{family}</span>
+                      <span
+                        className="block truncate text-lg text-[--text-muted]"
+                        style={{ fontFamily: buildFontFamilyStack(family, fallback) }}
+                      >
+                        Aa Bb 0O 1l — The quick brown fox
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <p role="status" className="text-sm text-[--text-muted]">
+                {availabilityText(null, discovery)}
+              </p>
+              {discovery.status !== 'loading' && (
+                <button
+                  type="button"
+                  onClick={() => void onLoadInstalledFonts()}
+                  className="pressable min-h-11 rounded-md border border-[--input-border] px-3 text-sm focus-visible:ring-2 focus-visible:ring-[--accent]/70"
+                >
+                  Retry loading installed fonts
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div
         className="min-w-0 overflow-hidden rounded-md border border-[--border] bg-[--panel-strong] px-3 py-2"
         style={{ fontFamily: previewStack }}

@@ -130,7 +130,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
           </button>
           <button
             onClick={onNewProject}
-            className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-white hover:brightness-110 active:brightness-95 pressable rounded-md py-1.5"
+            className="flex-1 text-xs font-medium bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 active:brightness-95 pressable rounded-md py-1.5"
             title="Create a new project (⌘⇧N)"
             data-testid="new-project-btn"
             disabled={!onNewProject}
@@ -301,7 +301,7 @@ function ProjectRow({
       onContextMenu={onContextMenu}
       title={`${project.path}\n(right-click for options)`}
       className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition-colors ${
-        selected ? 'bg-[color:var(--accent)] text-white' : 'hover:bg-[--panel-strong]'
+        selected ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel-strong]'
       }`}
     >
       <button
@@ -329,7 +329,7 @@ function ProjectRow({
           data-testid="row-unload"
           className={`w-4 h-4 flex items-center justify-center rounded transition-colors ${
             selected
-              ? 'text-white/80 hover:text-white hover:bg-white/15 opacity-100'
+              ? 'text-[--accent-text]/80 hover:text-[--accent-text] hover:bg-white/15 opacity-100'
               : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--panel] opacity-0 group-hover:opacity-100 focus:opacity-100'
           }`}
           title="Unload session (close shell)"
@@ -520,7 +520,7 @@ function RenameProjectDialog({
           <button
             onClick={submit}
             disabled={!canSubmit}
-            className="text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-white hover:brightness-110 disabled:opacity-50"
+            className="text-xs font-medium px-3 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-50"
           >
             {busy ? 'Renaming…' : 'Rename'}
           </button>
