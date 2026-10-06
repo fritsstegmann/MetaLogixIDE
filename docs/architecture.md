@@ -94,6 +94,34 @@ Mermaid diagrams render again on palette changes, including changes between
 palettes with the same light/dark appearance. Explicit diagram themes remain independent.
 The Command Palette also provides commands for all three palettes.
 
+Each palette card in Settings previews its own palette, whichever palette is
+active. The previews are literal colours in
+`src/renderer/components/settings/palette-swatches.ts`, one dark and one light
+set per palette; a card shows the set for the effective appearance. These are
+the only literal colours in Settings.
+
+### Settings dialog
+
+`src/renderer/components/Settings.tsx` is the dialog shell: an 820x640 modal
+(`role="dialog"`, `aria-modal`, labelled by its `h1`), the section nav, the
+version footer and the Done bar. Each section is its own module in
+`src/renderer/components/settings/`:
+
+| File | Responsibility |
+|---|---|
+| `GeneralPanel.tsx` | Appearance, Fonts, Workspace and Notifications sections. Loads and saves the General settings. |
+| `RootsPanel.tsx`, `LaunchPanel.tsx`, `MetaprojectPanel.tsx` | The other sections. |
+| `primitives.tsx` | `SettingsSection`, `SettingRow`, `SettingStack`, `WorkspaceNumber`, `Switch`, and the older `Header` and `Field`. |
+| `PaletteCards.tsx`, `palette-swatches.ts` | Palette cards (`aria-pressed` buttons) and their preview colours. |
+| `ModeControl.tsx`, `mode-keys.ts` | The Mode radiogroup; arrow keys move and apply the selection. |
+| `nav-icons.tsx` | Section nav buttons and their icons; the active item has `aria-current="page"`. |
+| `dialog-focus.ts`, `src/renderer/hooks/useDialogFocus.ts` | Focus moves to the panel on open, Tab stays inside the dialog, and focus returns to the opener on close. Escape is not intercepted. |
+| `version-label.ts`, `src/renderer/hooks/useAppVersion.ts` | Footer text from `app:get-version`; it shows the wordmark alone if the call fails. |
+
+Components below `GeneralPanel` take values and callbacks as props, so unit
+tests render them without a DOM. Real focus, layout and colour are covered by
+`tests/e2e/settings-board.spec.ts`.
+
 ### App chrome
 
 The chrome around the content (title bar, activity bar, sidebar columns and
@@ -110,6 +138,8 @@ appearances inherit it:
 |---|---|
 | `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
 | `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
+| `--surface-raised` | Floating lists over a dialog, such as the font list. It is the dialog surface mixed with white, so it is always lighter than the dialog. |
+| `--switch-off` | The track of a switch that is off. |
 | `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
 | `--hue-orange-text` | Small coloured text, such as the Diff count. |
 | `--hue-orange-soft`, `--hue-orange-soft-text`, `--badge-accent-text` | Activity-bar count badges: a soft hue fill with text that keeps 4.5:1 contrast. Light appearances mix the badge text almost fully toward `--text`. |
@@ -278,7 +308,7 @@ or escape sequences for this.
 | Adapter | `src/main/notifications/os-notifications.ts` | Wraps Electron `Notification`. Keeps each instance referenced until it is clicked or closed. |
 | Composition | `src/main/notifications/install.ts` | Connects the Claude state tracker's `onHookApplied` stream, the notifier, windows and PTY exit events. Builds the click navigation. |
 | Presentation | `src/renderer/viewed-shells.ts`, `src/renderer/hooks/useReportViewedShells.ts` | Derive the shells on screen and report them on `notifications:viewed-shells`. |
-| Presentation | `src/renderer/components/Settings.tsx` | The two toggles in Settings → General. |
+| Presentation | `src/renderer/components/settings/GeneralPanel.tsx` | The two switches in Settings → General → Notifications. |
 
 Rules:
 
