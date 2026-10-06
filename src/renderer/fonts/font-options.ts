@@ -143,3 +143,18 @@ export function resolveEnter(state: FontPickerState, options: readonly FontOptio
   if (state.query.trim().length > 0 && !isFiltering(state.query, value)) return NONE;
   return { kind: 'choose', option: options[bestMatchIndex(options, state.query, value)] ?? DEFAULT_OPTION };
 }
+
+/** A pointer position in screen coordinates. */
+export interface PointerPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * True only when the pointer really moved since the previous event. Chromium
+ * also sends mouse events when a list re-renders under a still pointer; those
+ * must not override the highlight the user's typing chose.
+ */
+export function pointerMoved(previous: PointerPosition | null, next: PointerPosition): boolean {
+  return previous !== null && (previous.x !== next.x || previous.y !== next.y);
+}

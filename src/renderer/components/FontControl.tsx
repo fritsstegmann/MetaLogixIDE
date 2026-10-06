@@ -22,12 +22,14 @@ import {
   initialPickerState,
   moveHighlight,
   optionKey,
+  pointerMoved,
   resolveEnter,
   selectedOptionIndex,
   validateFontEntry,
   type FontOption,
   type FontPickerEvent,
   type FontPickerState,
+  type PointerPosition,
 } from '@renderer/fonts/font-options';
 
 export type FontDiscoveryState =
@@ -73,6 +75,8 @@ interface FontPicker {
   readonly open: () => void;
   readonly type: (text: string) => void;
   readonly highlight: (index: number) => void;
+  /** Highlights a row on real pointer movement only (see `pointerMoved`). */
+  readonly hover: (index: number, at: PointerPosition) => void;
   readonly step: (step: 1 | -1) => void;
   readonly enter: () => void;
   readonly escape: () => void;
@@ -181,12 +185,15 @@ function useFontPicker({ value, discovery, onSave, onLoadInstalledFonts }: Props
     if (!state.open && (discovery.status === 'idle' || discoveryFailure(discovery) !== null)) void onLoadInstalledFonts();
   };
   const restore = (): void => dispatch({ type: 'reset', query: value ?? '' });
+  const lastPointer = useRef<PointerPosition | null>(null);
+  const highlight = (index: number): void => { const option = options[index]; if (option) dispatch({ type: 'highlight', key: optionKey(option) }); };
   return {
     state, options, activeIndex, commit,
     selectedIndex: selectedOptionIndex(options, value),
     open: () => { loadIfClosed(); dispatch({ type: 'open' }); },
     type: (text) => { loadIfClosed(); commit.clearErrors(); dispatch({ type: 'type', text }); },
-    highlight: (index) => { const option = options[index]; if (option) dispatch({ type: 'highlight', key: optionKey(option) }); },
+    highlight,
+    hover: (index, at) => { const moved = pointerMoved(lastPointer.current, at); lastPointer.current = at; if (moved) highlight(index); },
     step: (step) => dispatch({ type: 'highlight', key: moveHighlight(options, activeIndex, step) }),
     enter: () => {
       const action = resolveEnter(state, options, value);
@@ -281,7 +288,7 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
       role="option"
       aria-selected={selected}
       data-testid={option.kind === 'default' ? ids.testReset : undefined}
-      onMouseEnter={() => picker.highlight(index)}
+      onMouseMove={(e) => picker.hover(index, { x: e.screenX, y: e.screenY })}
       onClick={() => void picker.commit.choose(option)}
       className={`flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm ${
         index === picker.activeIndex ? 'bg-[--surface-active]' : ''

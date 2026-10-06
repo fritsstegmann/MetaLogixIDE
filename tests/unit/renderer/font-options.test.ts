@@ -7,6 +7,7 @@ import {
   initialPickerState,
   moveHighlight,
   optionKey,
+  pointerMoved,
   resolveEnter,
   selectedOptionIndex,
   validateFontEntry,
@@ -216,5 +217,20 @@ describe('fontPickerReducer and keyboard', () => {
   it('Enter on a closed edited field commits the typed text', () => {
     const closed = run('Alpha', [{ type: 'type', text: 'Gamma' }, { type: 'close' }]);
     expect(resolveEnter(closed, options, 'Alpha')).toEqual({ kind: 'commit', text: 'Gamma' });
+  });
+});
+
+describe('pointerMoved (F1: a still pointer must not steal the highlight)', () => {
+  it('is false when the pointer has not moved since the last event', () => {
+    expect(pointerMoved({ x: 10, y: 20 }, { x: 10, y: 20 })).toBe(false);
+  });
+
+  it('is true when either coordinate changed', () => {
+    expect(pointerMoved({ x: 10, y: 20 }, { x: 11, y: 20 })).toBe(true);
+    expect(pointerMoved({ x: 10, y: 20 }, { x: 10, y: 19 })).toBe(true);
+  });
+
+  it('is false for the first event, so a list opening under the pointer keeps the typed highlight', () => {
+    expect(pointerMoved(null, { x: 10, y: 20 })).toBe(false);
   });
 });
