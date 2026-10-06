@@ -194,14 +194,14 @@ function useFontPicker({ value, discovery, onSave, onLoadInstalledFonts }: Props
     else if (action.kind === 'commit') void commit.commitTyped(action.text);
     else restore();
   };
-  const highlight = (index: number): void => { const option = options[index]; if (option) dispatch({ type: 'highlight', key: optionKey(option) }); };
+  const highlight = (index: number, via?: 'pointer'): void => { const option = options[index]; if (option) dispatch({ type: 'highlight', key: optionKey(option), via }); };
   return {
     state, options, activeIndex, commit,
     selectedIndex: selectedOptionIndex(options, value),
     open: () => { loadIfClosed(); dispatch({ type: 'open' }); },
     type: (text) => { loadIfClosed(); commit.clearErrors(); dispatch({ type: 'type', text }); },
     highlight,
-    hover: (index, at) => { const moved = pointerMoved(lastPointer.current, at); lastPointer.current = at; if (moved) highlight(index); },
+    hover: (index, at) => { const moved = pointerMoved(lastPointer.current, at); lastPointer.current = at; if (moved) highlight(index, 'pointer'); },
     step: (step) => dispatch({ type: 'highlight', key: moveHighlight(options, activeIndex, step) }),
     enter: () => apply(resolveEnter(state, options, value)),
     escape: () => { dispatch({ type: 'close' }); restore(); },

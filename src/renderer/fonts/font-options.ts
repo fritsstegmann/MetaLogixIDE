@@ -26,12 +26,16 @@ export interface FontPickerState {
   readonly open: boolean;
   readonly activeKey: string | null;
   readonly dirty: boolean;
+  /** The user typed since the last reset. */
+  readonly typed: boolean;
+  /** The current highlight was set by the pointer, not the keyboard or typing. */
+  readonly activeByPointer: boolean;
 }
 
 export type FontPickerEvent =
   | { readonly type: 'open' }
   | { readonly type: 'type'; readonly text: string }
-  | { readonly type: 'highlight'; readonly key: string }
+  | { readonly type: 'highlight'; readonly key: string; readonly via?: 'pointer' }
   | { readonly type: 'close' }
   | { readonly type: 'reset'; readonly query: string };
 
@@ -90,22 +94,22 @@ export function selectedOptionIndex(options: readonly FontOption[], value: FontF
 
 /** Closed, unedited state showing the saved family. */
 export function initialPickerState(value: FontFamilyPreference): FontPickerState {
-  return { query: value ?? '', open: false, activeKey: null, dirty: false };
+  return { query: value ?? '', open: false, activeKey: null, dirty: false, typed: false, activeByPointer: false };
 }
 
 /** Applies one user event; typing always opens the list with the best-match highlight. */
 export function fontPickerReducer(state: FontPickerState, event: FontPickerEvent): FontPickerState {
   switch (event.type) {
     case 'open':
-      return state.open ? state : { ...state, open: true, activeKey: null };
+      return state.open ? state : { ...state, open: true, activeKey: null, activeByPointer: false };
     case 'type':
-      return { ...state, query: event.text, open: true, activeKey: null, dirty: true };
+      return { ...state, query: event.text, open: true, activeKey: null, dirty: true, typed: true, activeByPointer: false };
     case 'highlight':
-      return { ...state, activeKey: event.key, dirty: true };
+      return { ...state, activeKey: event.key, dirty: true, activeByPointer: event.via === 'pointer' };
     case 'close':
-      return { ...state, open: false, activeKey: null };
+      return { ...state, open: false, activeKey: null, activeByPointer: false };
     case 'reset':
-      return { query: event.query, open: state.open, activeKey: null, dirty: false };
+      return { ...initialPickerState(null), query: event.query, open: state.open };
   }
 }
 
@@ -165,7 +169,13 @@ export function pointerMoved(previous: PointerPosition | null, next: PointerPosi
   return previous !== null && (previous.x !== next.x || previous.y !== next.y);
 }
 
-/** Leaving the field saves exactly what Enter would (see `resolveEnter`). */
+/**
+ * Leaving the field saves what Enter would, except that a highlight set only
+ * by the pointer is ignored: passing over a row and clicking elsewhere must not
+ * change the font. Without it, typed text resolves to its best match.
+ */
 export function resolveBlur(state: FontPickerState, options: readonly FontOption[], value: FontFamilyPreference): EnterAction {
-  return resolveEnter(state, options, value);
+  if (!state.activeByPointer) return resolveEnter(state, options, value);
+  if (!state.typed) return NONE;
+  return resolveEnter({ ...state, activeKey: null }, options, value);
 }

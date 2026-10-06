@@ -183,7 +183,7 @@ describe('fontPickerReducer and keyboard', () => {
   const options = [DEFAULT, family('Alpha'), family('Beta')];
 
   it('starts closed and unmodified, showing the saved family', () => {
-    expect(initialPickerState('Alpha')).toEqual({ query: 'Alpha', open: false, activeKey: null, dirty: false });
+    expect(initialPickerState('Alpha')).toEqual({ query: 'Alpha', open: false, activeKey: null, dirty: false, typed: false, activeByPointer: false });
     expect(initialPickerState(null).query).toBe('');
   });
 
@@ -292,5 +292,51 @@ describe('resolveBlur matches Enter (gate C2)', () => {
     const state = run(null, [{ type: 'type', text: 'Zed Mono' }]);
     const options = buildFontOptions({ families, query: 'Zed Mono', value: null });
     expect(resolveBlur(state, options, null)).toEqual({ kind: 'choose', option: custom('Zed Mono') });
+  });
+});
+
+describe('exact name beats an earlier prefix match (gate M3)', () => {
+  it('saves the exact family even when another family starts with the same text first', () => {
+    const families = ['Symbol Neu', 'Symbol'];
+    const state = run(null, [{ type: 'type', text: 'symbol' }]);
+    const options = buildFontOptions({ families, query: 'symbol', value: null });
+    expect(options[activeOptionIndex(options, state, null)]).toEqual(family('Symbol'));
+  });
+});
+
+describe('blur ignores a highlight set only by the pointer (gate M1)', () => {
+  const families = ['Alpha Sans', 'Beta Mono'];
+  const hover = (name: string): FontPickerEvent => ({ type: 'highlight', key: optionKey(family(name)), via: 'pointer' });
+
+  it('saves nothing when the pointer merely passed over a row of an unedited field', () => {
+    const state = run('Beta Mono', [{ type: 'open' }, hover('Alpha Sans')]);
+    const options = buildFontOptions({ families, query: 'Beta Mono', value: 'Beta Mono' });
+    expect(resolveBlur(state, options, 'Beta Mono')).toEqual({ kind: 'none' });
+  });
+
+  it('saves the typed best match, not a hovered row that is still listed', () => {
+    const both = ['Alpha Sans', 'Alpha Mono'];
+    const state = run(null, [{ type: 'type', text: 'alpha' }, hover('Alpha Mono')]);
+    const options = buildFontOptions({ families: both, query: 'alpha', value: null });
+    expect(options).toContainEqual(family('Alpha Mono'));
+    expect(resolveBlur(state, options, null)).toEqual({ kind: 'choose', option: family('Alpha Sans') });
+  });
+
+  it('still saves a row chosen with the arrow keys', () => {
+    const state = run(null, [{ type: 'open' }, { type: 'highlight', key: optionKey(family('Beta Mono')) }]);
+    const options = buildFontOptions({ families, query: '', value: null });
+    expect(resolveBlur(state, options, null)).toEqual({ kind: 'choose', option: family('Beta Mono') });
+  });
+
+  it('keeps Enter saving the hovered row (approved hover rule)', () => {
+    const state = run(null, [{ type: 'open' }, hover('Beta Mono')]);
+    const options = buildFontOptions({ families, query: '', value: null });
+    expect(resolveEnter(state, options, null)).toEqual({ kind: 'choose', option: family('Beta Mono') });
+  });
+
+  it('saves nothing when a hover replaced an arrow highlight and nothing was typed', () => {
+    const state = run('Beta Mono', [{ type: 'open' }, { type: 'highlight', key: optionKey(family('Alpha Sans')) }, hover('Beta Mono')]);
+    const options = buildFontOptions({ families, query: 'Beta Mono', value: 'Beta Mono' });
+    expect(resolveBlur(state, options, 'Beta Mono')).toEqual({ kind: 'none' });
   });
 });
