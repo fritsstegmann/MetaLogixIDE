@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Loc
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { resolveColour } from './helpers/mermaid-palette';
 import { effectiveColours, backgroundLuminance, paintedOver, textContrast, type Theme } from './helpers/contrast';
 
 /**
@@ -179,6 +180,24 @@ function resolveIn(scope: Locator, prop: 'color' | 'background-color', expr: str
     probe.remove();
     return value;
   }, { prop, expr });
+}
+
+/** A resolved token must be a visible colour: an undefined custom property resolves to transparent and would match anything else that is transparent. */
+async function expectVisibleColour(css: string, what: string): Promise<void> {
+  expect(css, `${what} resolved to transparent`).not.toBe('rgba(0, 0, 0, 0)');
+  expect((await resolveColour(win, css)).a, `${what} alpha (${css})`).toBeGreaterThan(0);
+}
+
+/**
+ * Waits until the renderer sees the emulated OS scheme, then two frames so React has
+ * committed whatever a matchMedia change listener scheduled. A negative read after this
+ * means the app had the chance to react and did not.
+ */
+async function osSchemeIs(scheme: Theme): Promise<void> {
+  await expect
+    .poll(() => win.evaluate(() => window.matchMedia('(prefers-color-scheme: dark)').matches))
+    .toBe(scheme === 'dark');
+  await win.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
 }
 
 function rgbOf(hex: string): string {
@@ -557,22 +576,30 @@ test('AC15b: swatches follow Light/Dark live and the OS only in System mode', as
   await expect.poll(all).toEqual(set('dark'));
 
   await win.emulateMedia({ colorScheme: 'dark' });
+  await osSchemeIs('dark');
   await radio('System').click();
   await expect(radio('System')).toHaveText('System · dark');
   await expect.poll(all).toEqual(set('dark'));
   await win.emulateMedia({ colorScheme: 'light' });
+  await osSchemeIs('light');
   await expect(radio('System')).toHaveText('System · light');
   await expect.poll(all).toEqual(set('light'));
   await win.emulateMedia({ colorScheme: 'dark' });
+  await osSchemeIs('dark');
   await expect.poll(all).toEqual(set('dark'));
 
+  // Each negative flip is real: the OS starts on the scheme the explicit mode matches, then moves away.
+  await win.emulateMedia({ colorScheme: 'light' });
+  await osSchemeIs('light');
   await radio('Light').click();
   await expect.poll(all).toEqual(set('light'));
   await win.emulateMedia({ colorScheme: 'dark' });
+  await osSchemeIs('dark');
   expect(await all(), 'Light ignores an OS flip to dark').toEqual(set('light'));
   await radio('Dark').click();
   await expect.poll(all).toEqual(set('dark'));
   await win.emulateMedia({ colorScheme: 'light' });
+  await osSchemeIs('light');
   expect(await all(), 'Dark ignores an OS flip to light').toEqual(set('dark'));
 
   await win.emulateMedia({ colorScheme: null });
@@ -789,6 +816,7 @@ test('AC28, AC29: notification switches in every palette x theme', async () => {
     const at = `${palette}/${theme}`;
     const accent = await resolveIn(dialog(), 'background-color', 'var(--accent)');
     const off = await resolveIn(dialog(), 'background-color', 'var(--switch-off)');
+    await expectVisibleColour(off, `${at} --switch-off`);
     for (const s of SWITCHES) {
       const sw = win.getByTestId(s.testId);
       const t = await box(track(sw));
@@ -812,6 +840,7 @@ test('AC28, AC29: notification switches in every palette x theme', async () => {
   await openGeneral();
   const accent = await resolveIn(dialog(), 'background-color', 'var(--accent)');
   const off = await resolveIn(dialog(), 'background-color', 'var(--switch-off)');
+  await expectVisibleColour(off, '--switch-off');
   for (const s of SWITCHES) {
     const sw = win.getByTestId(s.testId);
     await expect(sw).toHaveRole('switch');
@@ -905,17 +934,28 @@ test('AC7: footer falls back to the wordmark when app:get-version rejects', asyn
   await app.evaluate(({ ipcMain }) => {
     const handlers = (ipcMain as unknown as IpcMainWithHandlers)._invokeHandlers;
     if (!handlers?.get('app:get-version')) throw new Error('app:get-version handler unavailable');
+    const g = globalThis as typeof globalThis & { __versionCalls?: number };
+    g.__versionCalls = 0;
     ipcMain.removeHandler('app:get-version');
     ipcMain.handle('app:get-version', () => {
+      g.__versionCalls = (g.__versionCalls ?? 0) + 1;
       throw new Error('injected version failure');
     });
   });
+  const versionCalls = () =>
+    app.evaluate(() => (globalThis as typeof globalThis & { __versionCalls?: number }).__versionCalls ?? 0);
   const errors: string[] = [];
   win.on('pageerror', (e) => errors.push(e.message));
   await win.reload();
   await win.waitForLoadState('domcontentloaded');
   await mockLocalFonts();
   await openGeneral();
+  // Positive sentinel: the rejecting handler has actually answered every mounted caller
+  // (Settings' useAppVersion, plus the status bar's own fetch when it is mounted), then a
+  // render tick, so the wordmark below is the post-rejection render, not the pre-fetch one.
+  const callers = 1 + (await win.getByTestId('status-bar').count());
+  await expect.poll(versionCalls, { message: 'injected app:get-version invoked' }).toBeGreaterThanOrEqual(callers);
+  await win.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
   const nav = dialog().getByRole('navigation', { name: 'Settings sections' });
   await expect(nav.getByText(/^MetaLogix IDE/)).toHaveText('MetaLogix IDE');
   await expect(win.getByTestId('settings-modal').getByRole('alert')).toHaveCount(0);
