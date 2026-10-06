@@ -60,6 +60,7 @@ describe('FontControl markup (AC20 row and input)', () => {
     expect(cls).toContain('rounded-[10px]');
     expect(cls).toContain('text-sm');
     expect(cls).toContain('focus-visible:ring-2');
+    expect(cls).toContain('focus-visible:rounded-[10px]');
     expect(attr(input, 'role')).toBe('combobox');
   });
 });
@@ -74,6 +75,7 @@ describe('FontControl markup (AC21-AC23 option list)', () => {
     expect(cls).toContain('max-h-64');
     expect(cls).toContain('overflow-y-auto');
     expect(cls).toContain('rounded-xl');
+    expect(cls).toContain('top-[46px]');
     expect(cls).toContain('p-[5px]');
     expect(cls).toContain('bg-[--surface-raised]');
     expect(cls).not.toContain('bg-[--panel-strong]');

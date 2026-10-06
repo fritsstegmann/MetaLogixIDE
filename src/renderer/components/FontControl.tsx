@@ -265,7 +265,7 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         onChange={(event) => picker.type(event.target.value)}
         onBlur={picker.blur}
         onKeyDown={(event) => handlers[event.key]?.(event)}
-        className="min-h-10 w-full rounded-[10px] bg-[--surface-field] py-2 pl-3 pr-9 text-sm text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
+        className="min-h-10 w-full rounded-[10px] bg-[--surface-field] py-2 pl-3 pr-9 text-sm text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:rounded-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
         style={{ fontFamily: buildFontFamilyStack(value, fallback) }}
         data-testid={ids.testInput}
       />
@@ -273,6 +273,22 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
       </span>
     </div>
+  );
+}
+
+function FontOptionLabel({ option, fallback }: {
+  readonly option: FontOption;
+  readonly fallback: string;
+}): React.JSX.Element {
+  if (option.kind === 'custom') return <span className="truncate">{FONT_COPY.customOption(option.family)}</span>;
+  const family = option.kind === 'default' ? null : option.family;
+  return (
+    <span
+      className={`truncate ${family === null ? 'text-[--text-muted]' : ''}`}
+      style={{ fontFamily: buildFontFamilyStack(family, fallback) }}
+    >
+      {family ?? FONT_COPY.defaultValue}
+    </span>
   );
 }
 
@@ -284,7 +300,6 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
   readonly fallback: string;
 }): React.JSX.Element {
   const selected = index === picker.selectedIndex;
-  const family = option.kind === 'default' ? null : option.family;
   return (
     <li
       id={optionId(ids, index)}
@@ -300,16 +315,7 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
       <span aria-hidden className={`inline-flex w-3.5 shrink-0 text-[--accent] ${selected ? '' : 'invisible'}`}>
         {selected && <CheckIcon size={13} />}
       </span>
-      {option.kind === 'custom' ? (
-        <span className="truncate">{FONT_COPY.customOption(option.family)}</span>
-      ) : (
-        <span
-          className={`truncate ${family === null ? 'text-[--text-muted]' : ''}`}
-          style={{ fontFamily: buildFontFamilyStack(family, fallback) }}
-        >
-          {family ?? FONT_COPY.defaultValue}
-        </span>
-      )}
+      <FontOptionLabel option={option} fallback={fallback} />
     </li>
   );
 }
@@ -350,7 +356,7 @@ function FontOptionList({ picker, ids, label, fallback, discovery, onRetry }: {
       id={ids.list}
       role="listbox"
       aria-label={`${label} options`}
-      className="popover absolute left-0 right-0 top-12 z-20 max-h-64 overflow-y-auto rounded-xl bg-[--surface-raised] p-[5px] shadow-xl ring-1 ring-black/10"
+      className="popover absolute left-0 right-0 top-[46px] z-20 max-h-64 overflow-y-auto rounded-xl bg-[--surface-raised] p-[5px] shadow-xl ring-1 ring-black/10"
       onMouseDown={(event) => event.preventDefault()}
     >
       {picker.options.map((option, index) => (

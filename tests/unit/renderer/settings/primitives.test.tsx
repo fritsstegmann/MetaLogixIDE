@@ -115,6 +115,11 @@ describe('WorkspaceNumber', () => {
     expect(classes(html, 'input')).toEqual(expect.arrayContaining(['text-right', 'tabular-nums']));
   });
 
+  it('keeps its 9px radius on keyboard focus against the global focus-visible radius', () => {
+    const html = renderToStaticMarkup(<WorkspaceNumber {...base} onChange={() => {}} />);
+    expect(classes(html, 'input')).toEqual(expect.arrayContaining(['rounded-[9px]', 'focus-visible:rounded-[9px]']));
+  });
+
   it('defaults step to 1 and renders an empty value before load', () => {
     const html = renderToStaticMarkup(<WorkspaceNumber id="ws-cap" value={null} min={1} max={20} onChange={() => {}} />);
     expect(attr(html, 'input', 'step')).toBe('1');

@@ -103,7 +103,7 @@ export function WorkspaceNumber({ id, value, min, max, step = 1, onChange }: Num
         const n = Number(e.target.value);
         if (Number.isFinite(n)) onChange(Math.max(min, Math.min(max, n)));
       }}
-      className="h-[34px] w-[84px] shrink-0 rounded-[9px] bg-[--surface-field] px-2.5 text-right text-[13px] tabular-nums text-[--text] focus:outline-none focus:ring-2 focus:ring-[--accent]/60"
+      className="h-[34px] w-[84px] shrink-0 rounded-[9px] bg-[--surface-field] px-2.5 text-right text-[13px] tabular-nums text-[--text] focus:outline-none focus:ring-2 focus:ring-[--accent]/60 focus-visible:rounded-[9px]"
     />
   );
 }
