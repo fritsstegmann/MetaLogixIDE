@@ -6,6 +6,11 @@
  * computes WCAG contrast itself. Only the shared contract constants
  * (`REFERENCE_MATERIALS`, `BG_LAYERS`, thresholds) are imported.
  *
+ * Chromium serialises `color-mix()` as `oklab()` or `color()`, which
+ * `parseColour` does not read. The collectors below hand such values to
+ * `resolveColour`, which paints them on a 1x1 canvas and reads the pixel
+ * back, so every colour reaching `mustParse` is plain `rgba()`.
+ *
  * Text is paired with what it actually sits on by hit-testing, not by class
  * name: every visible text leaf is sampled at three points across its box,
  * and the shapes painted under each point (SVG fills that contain the point,
@@ -103,6 +108,59 @@ export function mustParse(value: string, what: string): Rgba {
   const c = parseColour(value);
   if (!c) throw new Error(`${what}: not a concrete colour: ${JSON.stringify(value)}`);
   return c;
+}
+
+/** Colour syntaxes the browser may serialise that `parseColour` does not read. */
+const BROWSER_ONLY_COLOUR = /^(?:color-mix|color|oklab|oklch|lab|lch|hsla?|hwb)\(/i;
+
+/** Resolves a CSS colour string (any syntax the browser accepts, including `oklab()`/`color()`) to sRGB + alpha. */
+export async function resolveColour(win: Page, cssColour: string): Promise<Rgba> {
+  return win.evaluate((css) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+    if (!ctx) throw new Error('no 2d context');
+    // A sentinel first: a colour the canvas rejects leaves fillStyle unchanged.
+    ctx.fillStyle = '#010203';
+    const sentinel = ctx.fillStyle;
+    ctx.fillStyle = css;
+    if (ctx.fillStyle === sentinel && css.trim().toLowerCase() !== '#010203') {
+      throw new Error(`canvas rejected colour ${JSON.stringify(css)}`);
+    }
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillRect(0, 0, 1, 1);
+    const [r = 0, g = 0, b = 0, a = 0] = ctx.getImageData(0, 0, 1, 1).data;
+    return { r, g, b, a: a / 255 };
+  }, cssColour);
+}
+
+/**
+ * Maps each value to a string `parseColour` reads: values in a syntax only
+ * the browser understands are resolved through `resolveColour` and returned
+ * as `rgba()`; everything else (`rgb()`, hex, `none`, paint servers) is
+ * returned unchanged, so non-colours still fail or skip where they did.
+ */
+export async function concreteColours(
+  win: Page,
+  values: Iterable<string>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const value of values) {
+    if (out.has(value)) continue;
+    if (parseColour(value) || !BROWSER_ONLY_COLOUR.test(value.trim())) {
+      out.set(value, value);
+      continue;
+    }
+    const c = await resolveColour(win, value);
+    out.set(value, `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`);
+  }
+  return out;
+}
+
+/** `concreteColours` for one value. */
+export async function concreteColour(win: Page, value: string): Promise<string> {
+  return (await concreteColours(win, [value])).get(value) ?? value;
 }
 
 /** Source-over compositing in sRGB space, as Chromium paints it. */
@@ -337,7 +395,7 @@ export async function tokenColour(win: Page, name: `--${string}`): Promise<Rgba>
     probe.remove();
     return c;
   }, name);
-  return mustParse(value, `token ${name}`);
+  return mustParse(await concreteColour(win, value), `token ${name}`);
 }
 
 /**
@@ -381,6 +439,12 @@ export interface Layer {
   colour: string;
   alpha: number;
   desc: string;
+  /**
+   * Painted outside the diagram block (the pane, e.g. the translucent
+   * `<main>` sheet). Composited like any layer, but it does not make the
+   * text count as sitting on a diagram fill.
+   */
+  pane: boolean;
 }
 
 /** A visible text leaf, its paint, and the layers under each sample point. */
@@ -399,7 +463,7 @@ export interface TextSample {
  * `pointer-events: none` on a shape cannot hide it from the oracle.
  */
 export async function collectTextSamples(block: Locator): Promise<TextSample[]> {
-  return block.evaluate((blockEl, outputSel) => {
+  const raw = await block.evaluate((blockEl, outputSel) => {
     const svg = blockEl.querySelector(`${outputSel} svg`);
     if (!svg) throw new Error('no rendered svg in block');
     const output = svg.parentElement as Element;
@@ -434,7 +498,7 @@ export async function collectTextSamples(block: Locator): Promise<TextSample[]> 
       desc: string;
       fg: string;
       fgAlpha: number;
-      stacks: { colour: string; alpha: number; desc: string }[][];
+      stacks: { colour: string; alpha: number; desc: string; pane: boolean }[][];
     }[] = [];
     try {
       for (const el of leaves) {
@@ -450,7 +514,7 @@ export async function collectTextSamples(block: Locator): Promise<TextSample[]> 
         const stacks = [0.2, 0.5, 0.8].map((fx) => {
           const x = r.left + r.width * fx;
           const y = r.top + r.height / 2;
-          const layers: { colour: string; alpha: number; desc: string }[] = [];
+          const layers: { colour: string; alpha: number; desc: string; pane: boolean }[] = [];
           for (const hit of document.elementsFromPoint(x, y)) {
             if (hit === document.body || hit === document.documentElement) break;
             const hs = getComputedStyle(hit);
@@ -470,11 +534,17 @@ export async function collectTextSamples(block: Locator): Promise<TextSample[]> 
                 colour: hs.fill,
                 alpha: parseFloat(hs.fillOpacity || '1') * chainOpacity(hit),
                 desc: describe(hit),
+                pane: !blockEl.contains(hit),
               });
             } else {
               const bg = hs.backgroundColor;
               if (bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') continue;
-              layers.push({ colour: bg, alpha: chainOpacity(hit), desc: describe(hit) });
+              layers.push({
+                colour: bg,
+                alpha: chainOpacity(hit),
+                desc: describe(hit),
+                pane: !blockEl.contains(hit),
+              });
             }
           }
           return layers;
@@ -498,6 +568,22 @@ export async function collectTextSamples(block: Locator): Promise<TextSample[]> 
     }
     return out;
   }, OUTPUT);
+  const colours = await concreteColours(
+    block.page(),
+    raw.flatMap((s) => [s.fg, ...s.stacks.flat().map((l) => l.colour)]),
+  );
+  const concrete = (v: string) => colours.get(v) ?? v;
+  return raw.map((s) => ({
+    ...s,
+    fg: concrete(s.fg),
+    // The page skips a transparent `rgba(0, 0, 0, 0)` background; skip the
+    // same layer when the browser serialised it as `oklab()`/`color()`.
+    stacks: s.stacks.map((stack) =>
+      stack
+        .filter((l) => concrete(l.colour) === l.colour || parseColour(concrete(l.colour))?.a !== 0)
+        .map((l) => ({ ...l, colour: concrete(l.colour) })),
+    ),
+  }));
 }
 
 /** Where a text sits: on an opaque fill at every sample, on bare background at every sample, or mixed. */
@@ -534,7 +620,9 @@ export function scoreTexts(samples: TextSample[], refs: readonly [Rgb, Rgb]): Te
     const fgRaw = mustParse(s.fg, `text ${s.desc} "${s.text}"`);
     let ratio = Infinity;
     let worst = { fg: '', bg: '' };
-    const opaqueAt = s.stacks.map((stack) =>
+    // The backdrop class looks at diagram layers only; pane layers are still composited.
+    const diagram = s.stacks.map((stack) => stack.filter((l) => !l.pane));
+    const opaqueAt = diagram.map((stack) =>
       stack.some((l) => mustParse(l.colour, l.desc).a * l.alpha >= OPAQUE),
     );
     for (const stack of s.stacks) {
@@ -548,14 +636,14 @@ export function scoreTexts(samples: TextSample[], refs: readonly [Rgb, Rgb]): Te
         }
       }
     }
-    const allEmpty = s.stacks.every((st) => st.length === 0);
+    const allEmpty = diagram.every((st) => st.length === 0);
     const backdrop: Backdrop = opaqueAt.every(Boolean) ? 'fill' : allEmpty ? 'background' : 'mixed';
     return {
       text: s.text,
       desc: s.desc,
       backdrop,
       fg: s.fg,
-      on: s.stacks.find((st) => st.length > 0)?.[0]?.desc ?? '(pane background)',
+      on: diagram.find((st) => st.length > 0)?.[0]?.desc ?? '(pane background)',
       ratio,
       worst,
     };
@@ -609,7 +697,7 @@ export async function collectPaints(
   roles: RoleSelector[],
   markers = false,
 ): Promise<Paint[]> {
-  return block.evaluate(
+  const raw = await block.evaluate(
     (blockEl, { roles: rs, markers: withMarkers, outputSel }) => {
       const svg = blockEl.querySelector(`${outputSel} svg`);
       if (!svg) throw new Error('no rendered svg in block');
@@ -678,6 +766,15 @@ export async function collectPaints(
     },
     { roles, markers, outputSel: OUTPUT },
   );
+  const colours = await concreteColours(
+    block.page(),
+    raw.flatMap((p) => [p.fill, p.stroke]),
+  );
+  return raw.map((p) => ({
+    ...p,
+    fill: colours.get(p.fill) ?? p.fill,
+    stroke: colours.get(p.stroke) ?? p.stroke,
+  }));
 }
 
 /** Concrete colour of a paint channel, or null for `none` / paint servers / fully transparent. */
@@ -709,7 +806,10 @@ export async function allSvgColours(block: Locator): Promise<string[]> {
     }
     return values;
   }, OUTPUT);
-  return [...new Set(raw.map(hexOf).filter((h): h is string => h !== null))];
+  const colours = await concreteColours(block.page(), raw);
+  return [
+    ...new Set(raw.map((v) => hexOf(colours.get(v) ?? v)).filter((h): h is string => h !== null)),
+  ];
 }
 
 /** Every `#rrggbb` string value anywhere in a (possibly nested) themeVariables map. */

@@ -11,7 +11,10 @@ import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '../../src/r
  * (docs/specs/2026-10-06-shell-chrome-cleanup.md AC16–AC23, AC21a).
  *
  * One app with one root holding `alpha` and `beta`. Tests run in file order
- * and share the app; the collapsed-state test reloads, so it runs last.
+ * and share the app; the collapsed-state test reloads, so it runs last. The
+ * section tests (AC23–AC24d) each seed their own In use and Recents rows with
+ * `seedSections`, so a worker restart after an earlier failure cannot leave
+ * them without rows.
  * Not covered here, by ruling Q3: the "Rescanning…" disabled state and the
  * Add-root wiring for a picked folder (unit tests, A1.2) — the native picker
  * resolves null under METAIDE_TEST_MODE.
@@ -157,6 +160,35 @@ function fish(path: string): string {
     return seg.startsWith('.') && seg.length > 1 ? seg.slice(0, 2) : seg.slice(0, 1);
   });
   return (home ? '~' : '') + out.join('/');
+}
+
+/**
+ * Seeds the sections the row and header tests measure: In use holds `beta`
+ * (alive), Recents holds `alpha` (opened, then its shell killed). Clears the
+ * filter and expands every section first. Safe to repeat: re-opening an
+ * alive or recent project is harmless.
+ */
+async function seedSections(): Promise<void> {
+  await filterInput().fill('');
+  for (const id of ['section-in-use', 'section-recents', SIDEBAR_TESTIDS.sectionAll]) {
+    const t = win.getByTestId(`${id}-toggle`);
+    if ((await t.count()) > 0 && (await t.getAttribute('aria-expanded')) === 'false') await t.click();
+  }
+  await projectRow('alpha').click();
+  await expect(projectRow('alpha')).toHaveAttribute('data-alive', '1', { timeout: 10000 });
+  await projectRow('beta').click();
+  await expect(projectRow('beta')).toHaveAttribute('data-alive', '1', { timeout: 10000 });
+  // Kill every alpha shell: a re-opened project need not get shell index 0 again.
+  const alphaId = await projectIdOf('alpha');
+  const { shells } = await invoke<{ shells: { projectId: number; shellIndex: number }[] }>('shells:alive-list', undefined);
+  const alphaShells = shells.filter((sh) => sh.projectId === alphaId);
+  expect(alphaShells.length, 'seed: alpha has a live shell to kill').toBeGreaterThan(0);
+  for (const sh of alphaShells) await invoke('shells:kill', { projectId: alphaId, shellIndex: sh.shellIndex });
+  const inUse = win.getByTestId('section-in-use');
+  const recents = win.getByTestId('section-recents');
+  await expect(inUse.getByTestId('project-row'), 'seed: In use holds beta only').toHaveText(['beta'], { timeout: 10000 });
+  await expect(recents.getByTestId('project-row').filter({ hasText: 'alpha' }), 'seed: Recents holds alpha').toHaveCount(1);
+  await expect(win.getByTestId('section-recents-toggle'), 'seed: Recents expanded').toHaveAttribute('aria-expanded', 'true');
 }
 
 async function openMenuByClick(): Promise<void> {
@@ -340,16 +372,10 @@ test('AC21: ⌘⇧N opens the new-project dialog and the menu never shows', asyn
 
 test('AC23: sections are 28px apart, 28px below the header; aside padding 4/0/20/8 with a 16px right inset on header and scroll content; headers 11px uppercase 0.06em', async () => {
   // In use (beta, alive) and Recents (alpha, opened then unloaded) both show.
-  await projectRow('alpha').click();
-  await expect(projectRow('alpha')).toHaveAttribute('data-alive', '1', { timeout: 10000 });
-  await projectRow('beta').click();
-  await expect(projectRow('beta')).toHaveAttribute('data-alive', '1', { timeout: 10000 });
-  await invoke('shells:kill', { projectId: await projectIdOf('alpha'), shellIndex: 0 });
+  await seedSections();
   const inUse = win.getByTestId('section-in-use');
   const recents = win.getByTestId('section-recents');
   const all = win.getByTestId(SIDEBAR_TESTIDS.sectionAll);
-  await expect(inUse.getByTestId('project-row')).toHaveText(['beta'], { timeout: 10000 });
-  await expect(recents.getByTestId('project-row').filter({ hasText: 'alpha' })).toHaveCount(1);
 
   const pad = await aside().evaluate((el) => {
     const cs = getComputedStyle(el);
@@ -378,10 +404,14 @@ test('AC23: sections are 28px apart, 28px below the header; aside padding 4/0/20
 });
 
 test('AC24b: the scroll region never overflows sideways and every row sits inside its content box', async () => {
+  await seedSections();
   const scroll = await markScrollRegion();
   const region = win.locator('[data-e2e="scroll-region"]');
   const rows = win.locator('[data-e2e="scroll-region"] [data-testid="project-row"]');
   expect(await rows.count(), 'positive control: rows in In use, Recents and Projects').toBeGreaterThanOrEqual(4);
+  for (const id of ['section-in-use', 'section-recents']) {
+    await expect(region.getByTestId(id).getByTestId('project-row'), `positive control: ${id} rows are measured`).not.toHaveCount(0);
+  }
   const widths = await region.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
   expect(widths.scroll, 'no horizontal overflow').toBe(widths.client);
   for (const row of await rows.all()) {
@@ -393,9 +423,13 @@ test('AC24b: the scroll region never overflows sideways and every row sits insid
 });
 
 test('AC24c: project rows are 34px tall with 10px side padding, 8px radius and a 10px dot-to-name gap', async () => {
+  await seedSections();
   await markScrollRegion();
   const rows = win.locator('[data-e2e="scroll-region"] [data-testid="project-row"]');
   expect(await rows.count(), 'positive control: rows found').toBeGreaterThanOrEqual(4);
+  for (const id of ['section-in-use', 'section-recents']) {
+    await expect(win.getByTestId(id).getByTestId('project-row'), `positive control: ${id} rows are measured`).not.toHaveCount(0);
+  }
   for (const row of await rows.all()) {
     const name = (await row.textContent())?.trim() ?? '';
     const wrapper = row.locator('xpath=..');
@@ -412,6 +446,7 @@ test('AC24c: project rows are 34px tall with 10px side padding, 8px radius and a
 });
 
 test('AC24d: section headers align with the filter, show a right-edge 11px chevron, and the root label is fish-abbreviated', async () => {
+  await seedSections();
   await markHeader();
   const field = await box(win.locator('[data-e2e="filter-field"]'));
   for (const id of ['section-in-use', 'section-recents', SIDEBAR_TESTIDS.sectionAll]) {

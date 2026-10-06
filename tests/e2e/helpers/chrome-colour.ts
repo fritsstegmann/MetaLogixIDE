@@ -1,41 +1,20 @@
 /**
  * Colour oracle for the shell chrome suites (chrome-dimensions.spec.ts).
  *
- * Chromium serialises `color-mix()` results as `oklab()` or `color()`, which
- * `parseColour` in mermaid-palette.ts cannot read. Every colour here is
- * resolved by the browser itself instead: it is painted on a 1x1 canvas and
- * the pixel is read back, so whatever syntax the computed style uses, the
- * test sees concrete sRGB channels and alpha. `tokenColour`/`parseColour` are
- * never called on a `color-mix` token.
+ * Chromium serialises `color-mix()` results as `oklab()` or `color()`. Every
+ * colour here is resolved by the browser itself through `resolveColour`
+ * (mermaid-palette.ts): it is painted on a 1x1 canvas and the pixel is read
+ * back, so whatever syntax the computed style uses, the test sees concrete
+ * sRGB channels and alpha.
  *
- * Compositing and WCAG contrast come from mermaid-palette.ts (import only).
+ * Canvas resolution, compositing and WCAG contrast live in mermaid-palette.ts.
  */
 
 import type { Locator, Page } from '@playwright/test';
 import type { EffectiveTheme } from '../../../src/renderer/markdown/contract';
-import { contrast, over, readReferenceBackgrounds, toHex, type Rgb, type Rgba } from './mermaid-palette';
+import { contrast, over, readReferenceBackgrounds, resolveColour, toHex, type Rgb, type Rgba } from './mermaid-palette';
 
-/** Resolves a CSS colour string (any syntax the browser accepts, including `oklab()`/`color()`) to sRGB + alpha. */
-export async function resolveColour(win: Page, cssColour: string): Promise<Rgba> {
-  return win.evaluate((css) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1;
-    canvas.height = 1;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
-    if (!ctx) throw new Error('no 2d context');
-    // A sentinel first: a colour the canvas rejects leaves fillStyle unchanged.
-    ctx.fillStyle = '#010203';
-    const sentinel = ctx.fillStyle;
-    ctx.fillStyle = css;
-    if (ctx.fillStyle === sentinel && css.trim().toLowerCase() !== '#010203') {
-      throw new Error(`canvas rejected colour ${JSON.stringify(css)}`);
-    }
-    ctx.clearRect(0, 0, 1, 1);
-    ctx.fillRect(0, 0, 1, 1);
-    const [r = 0, g = 0, b = 0, a = 0] = ctx.getImageData(0, 0, 1, 1).data;
-    return { r, g, b, a: a / 255 };
-  }, cssColour);
-}
+export { resolveColour };
 
 /** A custom property resolved through a probe's computed `color`, then through the canvas. */
 export async function resolveToken(win: Page, name: `--${string}`): Promise<Rgba> {
