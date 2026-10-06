@@ -1,15 +1,52 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
 import { GeneralPanel } from '@renderer/components/settings/GeneralPanel';
 import { RootsPanel } from '@renderer/components/settings/RootsPanel';
 import { LaunchPanel } from '@renderer/components/settings/LaunchPanel';
 import { MetaprojectPanel } from '@renderer/components/settings/MetaprojectPanel';
-type Section = 'general' | 'roots' | 'launch' | 'metaproject';
+import { SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
+import { versionLabel } from '@renderer/components/settings/version-label';
+import { useAppVersion } from '@renderer/hooks/useAppVersion';
+import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
+
+interface FontDiscoverySession {
+  readonly fontDiscovery: FontDiscoveryState;
+  readonly onLoadInstalledFonts: () => Promise<void>;
+}
+
+interface SettingsDialogProps extends FontDiscoverySession {
+  readonly section: SettingsSection;
+  readonly onSection: (section: SettingsSection) => void;
+  readonly version: string | null;
+  readonly onClose: () => void;
+}
 
 /** Renders application settings and owns installed-font discovery for one open session. */
-export function Settings({ open, onClose }: { open: boolean; onClose: () => void }): React.JSX.Element | null {
-  const [section, setSection] = useState<Section>('general');
+export function Settings({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}): React.JSX.Element | null {
+  const [section, setSection] = useState<SettingsSection>('general');
+  const version = useAppVersion();
+  const fonts = useFontDiscoverySession(open);
+  if (!open) return null;
+  return (
+    <SettingsDialog
+      section={section}
+      onSection={setSection}
+      version={version}
+      onClose={onClose}
+      {...fonts}
+    />
+  );
+}
+
+/** Installed-font discovery state for one open session, reset (and in-flight results dropped) on close. */
+function useFontDiscoverySession(open: boolean): FontDiscoverySession {
   const [fontDiscovery, setFontDiscovery] = useState<FontDiscoveryState>({ status: 'idle' });
   const fontDiscoveryAttempted = useRef(false);
   const fontDiscoveryGeneration = useRef(0);
@@ -21,7 +58,7 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
     setFontDiscovery({ status: 'idle' });
   }, [open]);
 
-  const loadInstalledFonts = useCallback(async (): Promise<void> => {
+  const onLoadInstalledFonts = useCallback(async (): Promise<void> => {
     if (fontDiscoveryAttempted.current) return;
     fontDiscoveryAttempted.current = true;
     const generation = fontDiscoveryGeneration.current;
@@ -33,7 +70,25 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
     }
   }, []);
 
-  if (!open) return null;
+  return { fontDiscovery, onLoadInstalledFonts };
+}
+
+// The global :focus-visible rule would square the corners and ring the whole panel when it takes initial focus.
+const PANEL_CLASS =
+  'modal-panel relative flex h-[640px] max-h-[92vh] w-[820px] max-w-[92vw] flex-col overflow-hidden rounded-2xl bg-[--panel-strong] shadow-2xl focus-visible:rounded-2xl focus-visible:outline-none';
+
+/** The open dialog: backdrop, focus-managed panel, header, nav, the active section and the footer. */
+function SettingsDialog({
+  section,
+  onSection,
+  version,
+  onClose,
+  fontDiscovery,
+  onLoadInstalledFonts,
+}: SettingsDialogProps): React.JSX.Element {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onKeyDown = useDialogFocus(panelRef);
   return (
     <div
       className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
@@ -41,40 +96,23 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
       data-testid="settings-modal"
     >
       <div
-        className="modal-panel relative flex h-[600px] max-h-[92vh] w-[760px] max-w-[92vw] flex-col overflow-hidden rounded-2xl bg-[--panel-strong] shadow-2xl"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className={PANEL_CLASS}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
       >
-        {/* Header */}
-        <div className="drag h-12 flex items-center justify-between pl-5 pr-2 shrink-0">
-          <span className="text-sm font-semibold">Settings</span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="no-drag flex min-h-11 min-w-11 items-center justify-center rounded-md text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text]"
-            title="Close (Esc)"
-            data-testid="settings-close"
-            aria-label="Close settings"
-          >
-            <CloseIcon />
-          </button>
-        </div>
-
-        {/* Body: nav + panel */}
+        <SettingsHeader titleId={titleId} onClose={onClose} />
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <nav aria-label="Settings sections" className="flex w-full shrink-0 gap-2 overflow-x-auto px-3 pb-3 sm:w-48 sm:flex-col sm:gap-1 sm:overflow-visible sm:pt-1">
-            <SectionButton active={section === 'general'} onClick={() => setSection('general')}>General</SectionButton>
-            <SectionButton active={section === 'roots'} onClick={() => setSection('roots')}>Root directories</SectionButton>
-            <SectionButton active={section === 'launch'} onClick={() => setSection('launch')}>Launch commands</SectionButton>
-            <SectionButton active={section === 'metaproject'} onClick={() => setSection('metaproject')}>Metaproject</SectionButton>
-            <div className="mt-auto hidden px-2 pt-3 text-[10px] text-[--text-muted] sm:block">
-              MetaLogix IDE · Phase 1
-            </div>
-          </nav>
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 sm:px-6 sm:pt-1">
+          <SettingsNav section={section} onSection={onSection} version={version} />
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-7 pt-1 sm:pl-3 sm:pr-7">
             {section === 'general' && (
               <GeneralPanel
                 fontDiscovery={fontDiscovery}
-                onLoadInstalledFonts={loadInstalledFonts}
+                onLoadInstalledFonts={onLoadInstalledFonts}
               />
             )}
             {section === 'roots' && <RootsPanel />}
@@ -82,42 +120,102 @@ export function Settings({ open, onClose }: { open: boolean; onClose: () => void
             {section === 'metaproject' && <MetaprojectPanel />}
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="h-14 flex items-center justify-end gap-2 px-4 shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="pressable min-h-10 rounded-lg bg-[--accent-soft] px-5 text-sm font-medium text-[--accent-soft-text] hover:brightness-125"
-            data-testid="settings-done"
-          >
-            Done
-          </button>
-        </div>
+        <SettingsFooter onClose={onClose} />
       </div>
     </div>
   );
 }
 
-function CloseIcon() {
+function SettingsFooter({ onClose }: { readonly onClose: () => void }): React.JSX.Element {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
+    <div className="flex h-[60px] shrink-0 items-center justify-end gap-2 px-5">
+      <button
+        type="button"
+        onClick={onClose}
+        className="pressable h-9 rounded-[10px] bg-[--accent-soft] px-5 text-sm font-medium text-[--accent-soft-text] hover:brightness-125 focus-visible:rounded-[10px]"
+        data-testid="settings-done"
+      >
+        Done
+      </button>
+    </div>
   );
 }
 
-function SectionButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function SettingsHeader({
+  titleId,
+  onClose,
+}: {
+  readonly titleId: string;
+  readonly onClose: () => void;
+}): React.JSX.Element {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`min-h-10 shrink-0 rounded-lg px-3 py-2 text-left text-sm sm:w-full sm:px-2.5 ${
-        active ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'hover:bg-[--surface-hover] text-[--text-muted] hover:text-[--text]'
-      }`}
+    <div className="drag flex h-[52px] shrink-0 items-center justify-between pl-[22px] pr-2.5">
+      <h1 id={titleId} className="text-[15px] font-semibold">
+        Settings
+      </h1>
+      <button
+        type="button"
+        onClick={onClose}
+        className="no-drag flex h-9 w-9 items-center justify-center rounded-[10px] text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:rounded-[10px]"
+        title="Close (Esc)"
+        data-testid="settings-close"
+        aria-label="Close settings"
+      >
+        <CloseIcon />
+      </button>
+    </div>
+  );
+}
+
+interface SettingsNavProps {
+  readonly section: SettingsSection;
+  readonly onSection: (section: SettingsSection) => void;
+  readonly version: string | null;
+}
+
+const NAV_ITEMS: readonly { readonly section: SettingsSection; readonly label: string }[] = [
+  { section: 'general', label: 'General' },
+  { section: 'roots', label: 'Root directories' },
+  { section: 'launch', label: 'Launch commands' },
+  { section: 'metaproject', label: 'Metaproject' },
+];
+
+function SettingsNav({ section, onSection, version }: SettingsNavProps): React.JSX.Element {
+  return (
+    <nav
+      aria-label="Settings sections"
+      className="flex w-full shrink-0 gap-2 overflow-x-auto px-3 pb-3 sm:w-[196px] sm:flex-col sm:gap-0.5 sm:overflow-visible sm:pb-4 sm:pt-1"
     >
-      {children}
-    </button>
+      {NAV_ITEMS.map((item) => (
+        <SectionButton
+          key={item.section}
+          section={item.section}
+          active={section === item.section}
+          onClick={() => onSection(item.section)}
+        >
+          {item.label}
+        </SectionButton>
+      ))}
+      <div className="mt-auto hidden px-3 pt-3 text-[11.5px] text-[--text-muted] sm:block">
+        {versionLabel(version)}
+      </div>
+    </nav>
+  );
+}
+
+function CloseIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M18 6L6 18M6 6l12 12" />
+    </svg>
   );
 }
