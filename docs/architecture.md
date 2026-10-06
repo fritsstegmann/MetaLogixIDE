@@ -766,7 +766,7 @@ the whole side falls back to escaped plain text.
   Settings session. After a failure, **Retry** or reopening the list requests
   it again. Exact-name entry and System default remain
   available when discovery is unsupported or denied
-  (`src/renderer/components/FontControl.tsx`, `src/renderer/components/Settings.tsx:30-53`).
+  (`src/renderer/components/FontControl.tsx`, `useFontDiscoverySession` in `src/renderer/components/Settings.tsx:48-74`).
   Option building, validation and the highlight live in the pure module
   `src/renderer/fonts/font-options.ts`. The highlight is stored as an option's
   identity, not an index, so it survives the list changing when discovery
