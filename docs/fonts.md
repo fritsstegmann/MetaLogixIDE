@@ -24,11 +24,11 @@ Each preference is one field: **Interface** for application text and **Terminal*
 4. Type to filter the list. If the text does not match an installed family exactly, the list also offers **Use “…”** to save the typed name as an exact family.
 5. Click an entry, or use the arrow keys and Enter. The preview line under the field updates.
 
-The field shows the saved family in that font. Escape closes the list, restores the saved name, and keeps Settings open. Leaving the field saves a changed name, the same as Enter.
+The field shows the saved family in that font. Enter on a field you have not changed saves nothing. Escape closes the list, restores the saved name, and keeps Settings open. Leaving the field saves a changed name, the same as Enter.
 
-Font discovery runs the first time a list opens in a Settings session. The app keeps only family names in memory and does not read font files (`src/renderer/fonts/local-font-access.ts:49-60`).
+Font discovery runs the first time a list opens in a Settings session; focusing a field opens its list. The app keeps only family names in memory and does not read font files (`src/renderer/fonts/local-font-access.ts:49-60`).
 
-If discovery is unsupported, denied, or fails, the list says so and shows **Retry**. You can still type an exact installed family name. The status under the field reports availability as unknown until discovery succeeds. If successful discovery does not list a saved family, the status reports that family as unavailable and keeps the saved value. The status line is empty when there is nothing to report.
+If discovery is unsupported, denied, or fails, the list says so and shows **Retry**; reopening the list also tries again. You can still type an exact installed family name. The status under the field reports availability as unknown until discovery succeeds. If successful discovery does not list a saved family, the status reports that family as unavailable and keeps the saved value. The status line is empty when there is nothing to report.
 
 The list includes all installed families for both preferences; terminal selection does not hide proportional fonts or guess whether a family is a Nerd Font.
 

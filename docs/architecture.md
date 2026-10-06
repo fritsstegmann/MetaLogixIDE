@@ -125,7 +125,7 @@ when no project is selected. The branch uses the status bar's rule
 (`git.branch`, or `HEAD` when detached). The group sits in a box inset 130px
 from both edges, so it stays centred on the window and clear of the traffic
 lights and the buttons. On macOS, `src/main/index.ts` sets
-`trafficLightPosition: { x: 12, y: 15 }` for both window types, which centres
+`trafficLightPosition: { x: 12, y: 14 }` for both window types, which centres
 the lights on the 44px bar. The title-bar buttons are 32px with 3px right
 padding, so the last glyph ends 12px from the edge and mirrors the lights.
 The document title (`<project> — MetaLogix IDE`) is unchanged.
@@ -139,7 +139,7 @@ reached from the title-bar gear or ⌘,. The status bar is 34px at 12px text.
 `ContextMenu` with New project… (⌘⇧N), Add root folder… and Rescan roots;
 `src/renderer/sidebar-add-menu.ts` builds the items and runs the add-root and
 rescan flows. With `autoFocus`, `ContextMenu` focuses its first enabled item,
-moves with the arrow keys, and returns focus to the opener on close. Copy and
+and moves with the arrow keys; `SidebarHeader` returns focus to "+" when the menu closes. Copy and
 test ids live in `src/renderer/sidebar-copy.ts`.
 
 Section headers (In use, Recents, Projects) align with the filter field and
@@ -731,11 +731,16 @@ the whole side falls back to escaped plain text.
   (`electron.vite.config.ts:63`). The KaTeX stylesheet is imported in
   `src/renderer/main.tsx:5`.
 - **Font discovery is user-initiated and optional.** Chromium Local Font
-  Access is permission-sensitive. Settings calls it only when the user opens
-  a font list, at most once per successful Settings session, and again from
-  **Retry** after a failure. Exact-name entry and System default remain
+  Access is permission-sensitive. Settings calls it only when a font list
+  opens (focusing a font field opens its list), at most once per successful
+  Settings session. After a failure, **Retry** or reopening the list requests
+  it again. Exact-name entry and System default remain
   available when discovery is unsupported or denied
   (`src/renderer/components/FontControl.tsx`, `src/renderer/components/Settings.tsx:30-53`).
+  Option building, validation and the highlight live in the pure module
+  `src/renderer/fonts/font-options.ts`. The highlight is stored as an option's
+  identity, not an index, so it survives the list changing when discovery
+  completes, and Enter on an unedited field saves nothing.
 - **A selected family is one literal CSS family.** The serializer validates
   the value, escapes quotes and backslashes, and places it before the exact
   compatibility fallback. It sets one CSSOM property and never creates
