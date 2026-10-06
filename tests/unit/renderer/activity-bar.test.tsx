@@ -32,7 +32,7 @@ describe('ActivityBar geometry (AC10)', () => {
   });
   it('every button is 36x36 with 10px radius', () => {
     const bs = buttons(render());
-    expect(bs).toHaveLength(6);
+    expect(bs).toHaveLength(5);
     for (const b of bs) {
       expect(classesOf(b)).toEqual(expect.arrayContaining(['w-9', 'h-9', 'rounded-[10px]']));
       expect(classesOf(b)).not.toContain('w-8');
@@ -40,7 +40,7 @@ describe('ActivityBar geometry (AC10)', () => {
   });
   it('every icon is 17x17', () => {
     const icons = svgs(render());
-    expect(icons).toHaveLength(6);
+    expect(icons).toHaveLength(5);
     for (const s of icons) {
       expect(s).toContain('width="17"');
       expect(s).toContain('height="17"');
@@ -63,7 +63,7 @@ describe('ActivityBar badges (AC11-AC14)', () => {
     const doc = render(all);
     for (const id of ['ab-chat', 'ab-git']) {
       const c = badgeOf(doc, id)?.classes ?? [];
-      expect(c).toEqual(expect.arrayContaining(['bg-[--accent-soft]', 'text-[--accent-soft-text]']));
+      expect(c).toEqual(expect.arrayContaining(['bg-[--accent-soft]', 'text-[--badge-accent-text]']));
       expect(c).not.toContain('bg-[color:var(--accent)]');
     }
   });

@@ -751,22 +751,9 @@ input::placeholder, textarea::placeholder {
   .toast[data-leaving] { transform: none; }
 }
 
-/* Section-tint helper — the ActivityBar sets `data-view` on each sidebar
- * column so users can tell which pane they're in from the ambient color
- * without reading a label. Tints are intentionally weak (8-12% blend) so
- * text contrast stays untouched; only the panel background shifts. */
+/* Sidebar column marker — `data-view` identifies the pane; no tint is painted
+ * so the panel matches the chrome surface behind it. */
 .section-panel { position: relative; }
-.section-panel::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: var(--section-tint, transparent);
-  transition: background 220ms ease;
-}
-.section-panel[data-view="projects"] { --section-tint: color-mix(in oklab, var(--accent) 3%, transparent); }
-.section-panel[data-view="chat"]     { --section-tint: color-mix(in oklab, #22d3ee     3%, transparent); }
-.section-panel[data-view="git"]      { --section-tint: color-mix(in oklab, #ef4444     3%, transparent); }
 
 /* Compact ring spinner — inherits currentColor so it fits any panel. */
 @keyframes mp-spin {
@@ -904,6 +891,7 @@ kbd {
   --hue-orange-text: color-mix(in oklab, var(--hue-orange) 75%, var(--text));
   --hue-orange-soft: color-mix(in oklab, var(--hue-orange) 22%, transparent);
   --hue-orange-soft-text: var(--hue-orange-text);
+  --badge-accent-text: var(--accent-soft-text);
   /* Text drawn on a solid hue fill (badges). */
   --badge-ink: #11131a;
 
@@ -915,6 +903,8 @@ kbd {
 }
 :root[data-theme="light"] {
   --badge-ink: #fff;
+  --badge-accent-text: color-mix(in oklab, var(--accent) 10%, var(--text));
+  --hue-orange-soft-text: color-mix(in oklab, var(--hue-orange) 10%, var(--text));
   --hue-yellow-default: #b45309;
   --hue-purple-default: #7c3aed;
   --hue-cyan-default: #0e7490;
@@ -924,6 +914,8 @@ kbd {
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     --badge-ink: #fff;
+    --badge-accent-text: color-mix(in oklab, var(--accent) 10%, var(--text));
+    --hue-orange-soft-text: color-mix(in oklab, var(--hue-orange) 10%, var(--text));
     --hue-yellow-default: #b45309;
     --hue-purple-default: #7c3aed;
     --hue-cyan-default: #0e7490;

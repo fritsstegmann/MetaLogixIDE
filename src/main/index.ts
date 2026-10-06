@@ -132,7 +132,7 @@ function darwinChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
     ? {
         titleBarStyle: 'hiddenInset',
         // y centres the lights on the 44px title bar shared by the main and popout windows.
-        trafficLightPosition: { x: 12, y: 14 },
+        trafficLightPosition: { x: 12, y: 15 },
         vibrancy: 'sidebar',
         visualEffectState: 'active',
         roundedCorners: true,

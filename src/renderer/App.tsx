@@ -682,9 +682,10 @@ function MainApp() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
-      {/* Native-feeling drag region for hidden-inset title bar */}
-      <div className="drag relative h-11 flex items-center pl-[76px] pr-4 shrink-0">
-        <div className="absolute inset-y-0 left-[124px] right-[124px] flex items-center justify-center min-w-0 pointer-events-none">
+      {/* Native-feeling drag region for hidden-inset title bar. pr-[3px] puts the
+          last button's 14px glyph 12px from the right edge, mirroring the traffic lights' inset. */}
+      <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
+        <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
           <TitleGroup
             projectName={selected?.name ?? null}
             branch={git.isRepo ? (git.branch ?? 'HEAD') : null}

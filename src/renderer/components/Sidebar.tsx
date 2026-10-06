@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { rootHueVar } from '@renderer/root-hue';
+import { abbreviatePath } from '@renderer/abbreviate-path';
 import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
@@ -79,19 +80,21 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
   return (
     <aside
       data-view="projects"
-      className="section-panel h-full flex flex-col gap-7 shrink-0 pt-1 pr-4 pb-5 pl-2"
+      className="section-panel h-full flex flex-col gap-7 shrink-0 pt-1 pb-5 pl-2"
       style={{ width: width ?? SIDEBAR_WIDTH.default }}
     >
-      <SidebarHeader
-        filter={filter}
-        onFilterChange={setFilter}
-        onNewProject={onNewProject}
-        roots={roots}
-        refreshRoots={refreshRoots}
-        refreshProjects={refreshProjects}
-      />
+      <div className="pr-4">
+        <SidebarHeader
+          filter={filter}
+          onFilterChange={setFilter}
+          onNewProject={onNewProject}
+          roots={roots}
+          refreshRoots={refreshRoots}
+          refreshProjects={refreshProjects}
+        />
+      </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-7">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-4 flex flex-col gap-7">
         {inUse.length > 0 && (
           <Section title="In use" testId="section-in-use" accent dotState={overallClaudeState}>
             {inUse.map((p) => (
@@ -190,11 +193,11 @@ function Section({
         onClick={toggle}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className="w-full px-3 pt-2 pb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.06em] font-medium text-[--text] hover:bg-[--surface-hover]"
+        className="w-full h-[26px] mb-1 px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]"
       >
-        <span className="inline-block w-3 transition-transform text-[--text-muted]" style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}>▾</span>
         {accent && <StatusDot state={dotState ?? 'idle'} />}
-        <span className={accent ? '' : 'text-[--text-muted]'}>{title}</span>
+        <span className={`flex-1 ${accent ? '' : 'text-[--text-muted]'}`}>{title}</span>
+        <ChevronIcon collapsed={collapsed} />
       </button>
       {!collapsed && children}
     </div>
@@ -208,7 +211,7 @@ function ProjectRow({
   onSelect,
   onRename,
   onEditEnv,
-  indent = 12,
+  indent = 0,
 }: {
   project: Project;
   selected: boolean;
@@ -253,7 +256,7 @@ function ProjectRow({
     <div
       onContextMenu={onContextMenu}
       title={`${project.path}\n(right-click for options)`}
-      className={`group w-full flex items-center gap-2 pr-1 py-1 text-sm rounded-md mx-1 transition-colors ${
+      className={`group w-full h-[34px] flex items-center gap-2.5 px-2.5 text-sm rounded-lg transition-colors ${
         selected ? 'bg-[--accent-soft] text-[--text] font-medium' : 'hover:bg-[--surface-hover]'
       }`}
     >
@@ -261,7 +264,7 @@ function ProjectRow({
         onClick={() => onSelect(project)}
         data-testid="project-row"
         data-alive={alive ? '1' : '0'}
-        className="flex-1 min-w-0 flex items-center gap-2 text-left"
+        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left"
         style={{ paddingLeft: indent }}
       >
         {alive ? (
@@ -354,14 +357,14 @@ function RootBlock({
         onClick={toggle}
         aria-expanded={open}
         data-testid="root-toggle"
-        className="w-full text-left px-3 py-1 text-xs text-[--text-muted] hover:text-[--text] flex items-center gap-1.5"
+        className="w-full text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] flex items-center gap-2.5"
       >
-        <span className="inline-block w-3 transition-transform" style={{ transform: open ? 'none' : 'rotate(-90deg)' }}>▾</span>
         <RootFolderGlyph color={rootHueVar(root.path)} />
-        <span className="truncate flex-1" title={root.path}>{shortenPath(root.path)}</span>
+        <span className="truncate flex-1" title={root.path}>{abbreviatePath(root.path)}</span>
         <span className="text-[10px] opacity-70">
           {aliveInRoot > 0 ? `${aliveInRoot}/${projects.length}` : projects.length}
         </span>
+        <ChevronIcon collapsed={!open} />
       </button>
       {open && projects.map((p) => (
         <ProjectRow
@@ -372,7 +375,7 @@ function RootBlock({
           onSelect={onSelect}
           onRename={onRename}
           onEditEnv={onEditEnv}
-          indent={22}
+          indent={12}
         />
       ))}
     </div>
@@ -470,14 +473,25 @@ function RenameProjectDialog({
   );
 }
 
-function shortenPath(p: string): string {
-  const home = '/Users/';
-  if (p.startsWith(home)) {
-    const rest = p.slice(home.length);
-    const slash = rest.indexOf('/');
-    if (slash > 0) return `~/${rest.slice(slash + 1)}`;
-  }
-  return p;
+/** Collapse chevron for section and root-group toggles: points down when open, right when collapsed. */
+function ChevronIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      aria-hidden
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0 text-[--text-muted] transition-transform duration-150"
+      style={{ transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
 }
 
 /** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
