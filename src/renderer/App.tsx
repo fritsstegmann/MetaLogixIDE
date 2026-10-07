@@ -50,6 +50,9 @@ import { useApplyUiFont } from './fonts/use-apply-ui-font';
 import { XIcon } from './components/shell-icons';
 import { ShellTabsBar } from './components/ShellTabsBar';
 import { ShellSplit } from './components/ShellSplit';
+import { ShellTabDot } from './components/ShellTabDot';
+import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
+import { shellChipLabel } from './shell-label';
 
 
 interface PopoutInfo {
@@ -194,12 +197,12 @@ function MainApp() {
   const projectState = projectKey ? projectStates[projectKey] : undefined;
   const activeShellIndex = projectState?.activeShellIndex ?? 0;
   const rightShellIndex = projectState?.rightShellIndex ?? null;
-  const splitRatio = projectState?.splitRatio ?? 0.5;
+  const splitRatio = sanitizeRatio(projectState?.splitRatio);
   const patchProjectState = useCallback((patch: Partial<ProjectUiState>) => {
     if (!projectKey) return;
     setProjectStates((prev) => ({
       ...prev,
-      [projectKey]: { activeShellIndex: 0, rightShellIndex: null, splitRatio: 0.5, ...prev[projectKey], ...patch },
+      [projectKey]: { activeShellIndex: 0, rightShellIndex: null, splitRatio: SPLIT_RATIO_DEFAULT, ...prev[projectKey], ...patch },
     }));
   }, [projectKey, setProjectStates]);
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
@@ -210,7 +213,7 @@ function MainApp() {
     const key = String(projectId);
     setProjectStates((prev) => ({
       ...prev,
-      [key]: { rightShellIndex: null, splitRatio: 0.5, ...prev[key], activeShellIndex: idx },
+      [key]: { rightShellIndex: null, splitRatio: SPLIT_RATIO_DEFAULT, ...prev[key], activeShellIndex: idx },
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
@@ -518,6 +521,16 @@ function MainApp() {
     void pick(p);
   }
 
+  /** One split pane's shell: the chip's label and dot inputs, falling back to the full shell list for a popped right shell that has left the strip. */
+  function splitPane(projectId: number, index: number) {
+    return {
+      index,
+      label: shellChipLabel(projectShells, index) || shellChipLabel(allProjectShells, index),
+      dot: <ShellTabDot projectId={projectId} shellIndex={index} isActive={index === activeShellIndex} />,
+      popped: isPopped(projectId, index),
+    };
+  }
+
   function mainBody(project: Project) {
     switch (mainTab) {
       case 'shell':
@@ -526,13 +539,15 @@ function MainApp() {
             key={project.id}
             projectId={project.id}
             projectName={project.name}
-            leftIndex={activeShellIndex}
-            rightIndex={rightShellIndex}
+            panes={{
+              left: splitPane(project.id, activeShellIndex),
+              right: rightShellIndex != null ? splitPane(project.id, rightShellIndex) : null,
+              path: project.path,
+              onMoveToTab: moveSplitToTab,
+              onClose: () => void closeSplit(true),
+            }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
-            isPoppedLeft={isPopped(project.id, activeShellIndex)}
-            isPoppedRight={rightShellIndex != null && isPopped(project.id, rightShellIndex)}
-            onCloseSplit={closeSplit}
             onOpenFile={(relPath, line) => {
               setMainTab('files');
               setOpenInFiles({ relPath, line });
@@ -654,22 +669,30 @@ function MainApp() {
     try {
       const { shellIndex } = await api.invoke('shells:launch-plain', { projectId: selected.id });
       setRightShellIndex(shellIndex);
-      setSplitRatio(0.5);
+      setSplitRatio(SPLIT_RATIO_DEFAULT);
     } catch (e) {
       toast('Failed to open split', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     }
   }
 
-  /** Close the split. Kills the right pane's shell (it was auto-spawned for the split). */
-  async function closeSplit() {
+  /** Close the split. Kills the right pane's shell (it was auto-spawned for the split). `refocus` returns focus to the left terminal when the clicked control is about to unmount. */
+  async function closeSplit(refocus = false) {
     if (!selected || rightShellIndex == null) return;
     const idx = rightShellIndex;
     setRightShellIndex(null);
+    if (refocus) terminalFocus.requestProjectFocus(selected.id);
     // Let the pane fold away with its shell still live, rather than showing
     // an exited terminal on the way out.
     await new Promise((r) => setTimeout(r, REVEAL_OUT_MS));
     try { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: idx }); }
     catch { /* fine — the shell may already be gone */ }
+  }
+
+  /** "To tab": take the right shell out of the split without killing it; it stays a chip (or in its popout window) and the left terminal keeps focus. */
+  function moveSplitToTab() {
+    if (!selected || rightShellIndex == null) return;
+    setRightShellIndex(null);
+    terminalFocus.requestProjectFocus(selected.id);
   }
 
   async function unloadCurrent() {

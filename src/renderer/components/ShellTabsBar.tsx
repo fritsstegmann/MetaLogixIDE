@@ -5,8 +5,8 @@ import { Tooltip } from './Tooltip';
 import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { ShellTabDot } from './ShellTabDot';
 import { shellChipLabel } from '../shell-label';
-import { SPLIT_TESTIDS } from '../split-copy';
-import { PlusIcon, SplitIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
+import { SplitPill } from './SplitPill';
+import { PlusIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
 
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
 const ompIconUrl = new URL('../assets/cli-icons/omp.svg', import.meta.url).href;
@@ -79,7 +79,7 @@ function NewShellMenu({
     return (
       <div
         data-new-shell-menu="1"
-        className="absolute top-full right-0 mt-1 z-40 w-80 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden p-3 space-y-2 text-xs"
+        className="absolute top-full left-0 mt-1 z-40 w-80 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden p-3 space-y-2 text-xs"
       >
         <div className="font-semibold text-sm">Run a custom command</div>
         <input
@@ -119,7 +119,7 @@ function NewShellMenu({
   return (
     <div
       data-new-shell-menu="1"
-      className="absolute top-full right-0 mt-1 z-40 w-72 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden"
+      className="absolute top-full left-0 mt-1 z-40 w-72 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden"
     >
       <div className="px-3 py-2 border-b border-[--border]">
         <div className="text-[10px] uppercase tracking-wider text-[--text-muted] font-semibold">
@@ -258,7 +258,7 @@ export function ShellTabsBar({
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className="flex items-center gap-1 px-2 py-1 text-xs shrink-0 overflow-visible">
-      <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
+      <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
           const label = shellChipLabel(shells, s.shellIndex);
@@ -287,19 +287,7 @@ export function ShellTabsBar({
           );
         })}
       </div>
-      {/* Split-view toggle. Opens a right pane with an auto-spawned plain
-          shell, so the user can watch Claude on the left and run one-off
-          commands on the right without leaving the main window. */}
-      <Tooltip label={splitOn ? 'Close split' : 'Split shell right'}>
-        <button
-          onClick={onToggleSplit}
-          className={`shrink-0 w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong] ${splitOn ? 'text-[color:var(--accent)]' : 'text-[--text-muted] hover:text-[--text]'}`}
-          data-testid={SPLIT_TESTIDS.toggle}
-        >
-          <SplitIcon />
-        </button>
-      </Tooltip>
-      {/* Add button lives at the RIGHT END of the tab strip. Click opens a
+      {/* Add button sits right after the chips, outside their scroller so it never scrolls away. Click opens a
           menu of CLIs; the selected one is added as another tab. To put it
           in its own window instead, use the popout icon in the top toolbar
           (it moves the currently-active tab out). */}
@@ -328,6 +316,8 @@ export function ShellTabsBar({
           />
         )}
       </div>
+      <div className="flex-1" />
+      <SplitPill on={splitOn} onToggle={onToggleSplit} />
     </div>
   );
 }

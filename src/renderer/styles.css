@@ -885,6 +885,10 @@ kbd {
   --surface-raised: color-mix(in oklab, var(--panel-strong) 92%, white);
   /* Off track of a switch. */
   --switch-off: color-mix(in oklab, var(--text) 22%, transparent);
+  /* Split shell: pane card surface, focused-pane ring, divider grab pill. */
+  --surface-pane: color-mix(in oklab, var(--panel-strong) 70%, var(--bg));
+  --pane-ring: color-mix(in srgb, var(--accent) 28%, transparent);
+  --split-grip: color-mix(in oklab, var(--text) 22%, transparent);
 
   --hue-yellow: var(--term-yellow, var(--hue-yellow-default));
   --hue-purple: var(--term-magenta, var(--hue-purple-default));

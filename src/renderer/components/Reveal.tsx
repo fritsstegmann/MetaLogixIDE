@@ -23,18 +23,23 @@ function reducedMotion(): boolean {
  *
  * `animate` is read when `show` flips: pass false for keyboard-initiated
  * toggles so they stay instant. The initial mount never animates. Flipping
- * `show` mid-animation reverses from the current frame.
+ * `show` mid-animation reverses from the current frame. `onExited` fires
+ * once the children have unmounted after a hide, animated or not.
  */
-export function Reveal({ show, animate, className, children }: {
+export function Reveal({ show, animate, className, children, onExited }: {
   show: boolean;
   animate: boolean;
   className?: string;
   children: ReactNode;
+  onExited?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const anim = useRef<Animation | null>(null);
   const prevShow = useRef(show);
   const [present, setPresent] = useState(show);
+  const onExitedRef = useRef(onExited);
+  onExitedRef.current = onExited;
+  const wasPresent = useRef(present);
 
   // Render-time sync: mount immediately on show; unmount immediately when
   // hiding without animation. An animated hide keeps us mounted until the
@@ -79,6 +84,11 @@ export function Reveal({ show, animate, className, children }: {
   }, [show]); // eslint-disable-line react-hooks/exhaustive-deps -- `animate` is sampled when `show` flips
 
   useLayoutEffect(() => () => anim.current?.cancel(), []);
+
+  useLayoutEffect(() => {
+    if (wasPresent.current && !present) onExitedRef.current?.();
+    wasPresent.current = present;
+  }, [present]);
 
   if (!present) return null;
   return <div ref={ref} className={className}>{children}</div>;
