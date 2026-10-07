@@ -326,6 +326,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (s.settings.get('claude_permission_mode') === null) throw new Error('Choose a Claude permission mode first');
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    // Idempotent: clicking an already-open project (or a tab the sidebar
+    // thinks might not be alive) used to re-enter here and throw "already
+    // spawned". Just return the index — the renderer re-attaches the stream.
+    if (s.ptyManager.isAlive(projectId, 0)) return { shellIndex: 0 };
     assertProjectPathExists(project);
     const cap = s.settings.get('keep_alive_cap');
     const alive = s.shells.list();
