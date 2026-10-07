@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { rootHueVar } from '@renderer/root-hue';
-import { abbreviatePath } from '@renderer/abbreviate-path';
 import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
@@ -363,7 +362,7 @@ function RootBlock({
         className="w-full text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] flex items-center gap-2.5"
       >
         <RootFolderGlyph color={rootHueVar(root.path)} />
-        <span className="truncate flex-1" title={root.path}>{abbreviatePath(root.path)}</span>
+        <span className="truncate flex-1" title={root.path}>{rootFolderName(root.path)}</span>
         <span className="text-[10px] opacity-70">
           {aliveInRoot > 0 ? `${aliveInRoot}/${projects.length}` : projects.length}
         </span>
@@ -495,6 +494,18 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
       <path d="M6 9l6 6 6-6" />
     </svg>
   );
+}
+
+/** Human-friendly folder name for a root — the trailing segment of the path.
+ * Dropping the `~/D/` prefix: single-letter parent abbreviations plus CSS
+ * truncation made the row read as "~/D/Pro" / "~/D/my" / etc. which users
+ * perceived as weird-char noise. The full absolute path still lives in the
+ * row's `title=` tooltip for anyone who wants to see where it points. */
+function rootFolderName(path: string): string {
+  const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
+  const trimmed = path.length > 1 ? path.replace(/[\\/]+$/u, '') : path;
+  const last = trimmed.split(sep).pop();
+  return last && last.length > 0 ? last : trimmed;
 }
 
 /** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
