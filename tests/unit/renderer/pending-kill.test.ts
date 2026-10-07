@@ -51,4 +51,53 @@ describe('pending kills', () => {
     p.mark(7, 2);
     expect(p.flushAll()).toEqual([{ projectId: 7, shellIndex: 2 }]);
   });
+
+  it('hides a marked shell from its project until it is gone from the alive list', () => {
+    const p = createPendingKills();
+    p.mark(7, 2);
+    p.mark(9, 1);
+    expect(p.hidden(7)).toEqual([2]);
+    expect(p.takeIfPending(7, 2)).toBe(true);
+    expect(p.hidden(7)).toEqual([2]);
+    p.settle(7, [0, 2]);
+    expect(p.hidden(7)).toEqual([2]);
+    p.settle(7, [0]);
+    expect(p.hidden(7)).toEqual([]);
+    expect(p.hidden(9)).toEqual([1]);
+  });
+
+  it('keeps a shell hidden while it still awaits its exit, whatever the alive list says', () => {
+    const p = createPendingKills();
+    p.mark(7, 2);
+    p.settle(7, [0]);
+    expect(p.hidden(7)).toEqual([2]);
+    expect(p.takeIfPending(7, 2)).toBe(true);
+  });
+
+  it('keeps flushed shells hidden until they are gone, and lets a reused index show again', () => {
+    const p = createPendingKills();
+    p.mark(7, 2);
+    p.flushAll();
+    expect(p.hidden(7)).toEqual([2]);
+    p.settle(7, [0]);
+    expect(p.hidden(7)).toEqual([]);
+    p.settle(7, [0, 2]);
+    expect(p.hidden(7)).toEqual([]);
+  });
+
+  it("settles only the given project's shells", () => {
+    const p = createPendingKills();
+    p.mark(9, 1);
+    p.takeIfPending(9, 1);
+    p.settle(7, []);
+    expect(p.hidden(9)).toEqual([1]);
+  });
+
+  it('un-hides a shell whose kill failed', () => {
+    const p = createPendingKills();
+    p.mark(7, 2);
+    p.takeIfPending(7, 2);
+    p.forget(7, 2);
+    expect(p.hidden(7)).toEqual([]);
+  });
 });

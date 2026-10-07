@@ -58,3 +58,22 @@ describe('ShellTabsBar layout (AC4a)', () => {
     expect(src.indexOf('tabbar-new-shell')).toBeLessThan(src.indexOf('<SplitPill'));
   });
 });
+
+describe('SplitPill spec values (AC1, AC3, AC4)', () => {
+  it('renders a 13px icon (AC1)', () => {
+    const svg = /<svg\b[^>]*>/.exec(render(false))![0];
+    expect(svg).toContain('width="13"');
+    expect(svg).toContain('height="13"');
+  });
+
+  it('uses --accent-soft-text for pressed text, never bare --accent (AC3)', () => {
+    const on = button(render(true))![0];
+    expect(on).toContain('text-[--accent-soft-text]');
+    expect(on).not.toContain('var(--accent)');
+  });
+
+  it('insets the strip 14px on the right (AC4)', () => {
+    const src = readFileSync('src/renderer/components/ShellTabsBar.tsx', 'utf8');
+    expect(src).toMatch(/className="flex items-center gap-1 pl-2 pr-\[14px\] py-1 /);
+  });
+});

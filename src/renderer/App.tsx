@@ -72,8 +72,8 @@ interface ProjectUiState {
 }
 
 /** Kills a shell whose split pane has left; a shell that is already gone is fine. */
-function killPendingShell(shell: PendingShell): void {
-  void api.invoke('shells:kill', shell).catch(() => undefined);
+function killPendingShell(shell: PendingShell, onFailed: () => void): void {
+  void api.invoke('shells:kill', shell).catch(onFailed);
 }
 
 /**
@@ -238,10 +238,14 @@ function MainApp() {
   // Same mark/take/flush bookkeeping as pending kills; activating only after the exit keeps one
   // shell from showing in both panes while the right one folds away.
   const [pendingActivations] = useState(createPendingKills);
+  // A shell activated by "To tab" takes focus once it is the left pane. Requested after the commit
+  // that swapped the left ShellTab, so the outgoing left terminal (also primary) cannot consume it.
+  const focusActivatedRef = useRef<number | null>(null);
   // A split closed just before the shell area unmounts never reports its exit, so kill it now.
   useEffect(() => () => {
-    for (const shell of pendingKills.flushAll()) killPendingShell(shell);
+    for (const shell of pendingKills.flushAll()) killPendingShell(shell, () => pendingKills.forget(shell.projectId, shell.shellIndex));
     pendingActivations.flushAll();
+    focusActivatedRef.current = null;
   }, [selected?.id, mainTab, pendingKills, pendingActivations]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
   /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
@@ -253,6 +257,14 @@ function MainApp() {
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
+  useEffect(() => {
+    if (selected) pendingKills.settle(selected.id, allProjectShells.map((s) => s.shellIndex));
+  }, [selected, allProjectShells, pendingKills]);
+  useEffect(() => {
+    const projectId = focusActivatedRef.current;
+    focusActivatedRef.current = null;
+    if (projectId != null && projectId === selected?.id) terminalFocus.requestProjectFocus(projectId);
+  }, [activeShellIndex, selected?.id]);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
     true,
@@ -583,10 +595,13 @@ function MainApp() {
               onMoveToTab: moveSplitToTab,
               onClose: () => closeSplit(true),
               onRightExited: (index) => {
-                if (pendingKills.takeIfPending(project.id, index)) killPendingShell({ projectId: project.id, shellIndex: index });
+                if (pendingKills.takeIfPending(project.id, index)) {
+                  killPendingShell({ projectId: project.id, shellIndex: index }, () => pendingKills.forget(project.id, index));
+                }
                 if (pendingActivations.takeIfPending(project.id, index)) {
+                  pendingActivations.forget(project.id, index);
+                  focusActivatedRef.current = project.id;
                   setActiveShellIndexFor(project.id, index);
-                  terminalFocus.requestProjectFocus(project.id);
                 }
               },
             }}
@@ -989,7 +1004,7 @@ function MainApp() {
             {selected && mainTab === 'shell' && (
               <ShellTabsBar
                 projectId={selected.id}
-                shells={stripShells(projectShells, rightShellIndex)}
+                shells={stripShells(projectShells, rightShellIndex, selected ? pendingKills.hidden(selected.id) : [])}
                 active={activeShellIndex}
                 onSelect={setActiveShellIndex}
                 onClose={killShell}

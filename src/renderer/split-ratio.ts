@@ -15,9 +15,9 @@ export function clampRatio(r: number): number {
   return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, r));
 }
 
-/** A persisted ratio made safe to render: the default for anything that is not a finite number, else clamped. */
+/** A persisted ratio made safe to render: an in-range number passes through, anything else is the default. */
 export function sanitizeRatio(r: unknown): number {
-  return typeof r === 'number' && Number.isFinite(r) ? clampRatio(r) : SPLIT_RATIO_DEFAULT;
+  return typeof r === 'number' && r >= SPLIT_RATIO_MIN && r <= SPLIT_RATIO_MAX ? r : SPLIT_RATIO_DEFAULT;
 }
 
 /** One keyboard step left (-1) or right (1), clamped and rounded to two decimals. */

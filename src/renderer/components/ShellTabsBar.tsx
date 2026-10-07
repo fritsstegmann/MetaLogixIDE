@@ -269,7 +269,7 @@ export function ShellTabsBar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   return (
-    <div className="flex items-center gap-1 px-2 py-1 text-xs shrink-0 overflow-visible">
+    <div className="flex items-center gap-1 pl-2 pr-[14px] py-1 text-xs shrink-0 overflow-visible">
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").

@@ -14,13 +14,14 @@ export function shellChipLabel(
 
 /**
  * Shells shown as chips in the tab strip. The split's right shell is not a
- * tab while it sits in the split; "To tab" clears `rightShellIndex` and it
- * reappears here.
+ * tab while it sits in the split ("To tab" clears `rightShellIndex` and it
+ * reappears here), and neither is any shell in `hidden` (a closed split's
+ * shell awaiting its kill). Shell 0 is never left out.
  */
 export function stripShells<T extends { readonly shellIndex: number }>(
   shells: readonly T[],
   rightShellIndex: number | null,
+  hidden: readonly number[] = [],
 ): T[] {
-  if (rightShellIndex === null || rightShellIndex === 0) return [...shells];
-  return shells.filter((s) => s.shellIndex !== rightShellIndex);
+  return shells.filter((s) => s.shellIndex === 0 || (s.shellIndex !== rightShellIndex && !hidden.includes(s.shellIndex)));
 }

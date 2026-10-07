@@ -37,10 +37,14 @@ export function nextEnabledIndex(items: ContextMenuItem[], from: number, dir: 1 
 }
 
 /** Opt-in menu keyboard for ContextMenu: refs for each item button, initial focus on the first enabled item, and an ArrowUp/ArrowDown handler. */
-function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean) {
+function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean, present: boolean) {
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const initialFocus = useRef(enabled ? nextEnabledIndex(items, -1, 1) : -1);
-  useEffect(() => { itemRefs.current[initialFocus.current]?.focus(); }, []);
+  const latest = useRef({ items, enabled });
+  latest.current = { items, enabled };
+  useEffect(() => {
+    const { items: current, enabled: on } = latest.current;
+    if (present && on) itemRefs.current[nextEnabledIndex(current, -1, 1)]?.focus();
+  }, [present]);
 
   function onMenuKeyDown(e: React.KeyboardEvent) {
     if (!enabled || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
@@ -56,9 +60,8 @@ function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean) {
 
 /** Floating menu at (x, y), clamped to the viewport; Escape or an outside click calls `onClose`, and choosing an item closes before running it. */
 export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) {
-  const { itemRefs, onMenuKeyDown } = useMenuKeyboard(items, autoFocus);
-
   const present = useIsPresent();
+  const { itemRefs, onMenuKeyDown } = useMenuKeyboard(items, autoFocus, present);
   const motionProps = menuMotion(useReducedMotion() ?? false);
 
   useEffect(() => {

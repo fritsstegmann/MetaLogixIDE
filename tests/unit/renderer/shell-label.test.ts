@@ -34,4 +34,17 @@ describe('stripShells', () => {
   it('never hides shell 0, even if it were the right index', () => {
     expect(stripShells(shells, 0).map((s) => s.shellIndex)).toEqual([0, 1, 3]);
   });
+
+  it('also leaves out shells awaiting their kill after a split close (AC59)', () => {
+    expect(stripShells(shells, null, [3]).map((s) => s.shellIndex)).toEqual([0, 1]);
+    expect(stripShells(shells, 1, [3]).map((s) => s.shellIndex)).toEqual([0]);
+  });
+
+  it('never hides shell 0 through the hidden list either', () => {
+    expect(stripShells(shells, null, [0, 1]).map((s) => s.shellIndex)).toEqual([0, 3]);
+  });
+
+  it('ignores hidden indices that are not listed', () => {
+    expect(stripShells(shells, null, [7]).map((s) => s.shellIndex)).toEqual([0, 1, 3]);
+  });
 });

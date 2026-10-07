@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { PresenceContext } from 'motion/react';
 import { ContextMenu } from '@renderer/components/ContextMenu';
 import { menuMotion } from '@renderer/menu-motion';
-import { MENU_ENTER_S, MENU_EXIT_S, MENU_FADE_MIN_S, MENU_SCALE_FROM } from '@renderer/motion-tokens';
+import { MENU_EASE, MENU_ENTER_S, MENU_EXIT_S, MENU_FADE_MIN_S, MENU_SCALE_FROM } from '@renderer/motion-tokens';
 
 describe('menuMotion (normal)', () => {
   const m = menuMotion(false);
@@ -37,6 +37,15 @@ describe('menuMotion (reduced)', () => {
     expect(m.initial).toEqual({ opacity: 0 });
     expect(m.animate).not.toHaveProperty('scale');
     expect(m.exit).not.toHaveProperty('scale');
+  });
+
+  it('fades evenly, not with the front-loaded menu curve, so the fade is perceptibly >=150ms', () => {
+    expect(m.animate.transition.ease).toBe('linear');
+    expect(m.exit.transition.ease).toBe('linear');
+  });
+
+  it('keeps the menu curve for normal motion', () => {
+    expect(menuMotion(false).animate.transition.ease).toBe(MENU_EASE);
   });
 
   it('fades for at least 150ms both ways', () => {

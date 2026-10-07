@@ -25,13 +25,14 @@ describe('sanitizeRatio', () => {
     },
   );
 
-  it('clamps out-of-range numbers', () => {
-    expect(sanitizeRatio(0.05)).toBe(0.15);
-    expect(sanitizeRatio(0.95)).toBe(0.85);
+  it.each([[2], [-1], [0.05], [0.95], [0.1499], [0.8501]])('resets the out-of-range %p to the default (AC11a)', (value) => {
+    expect(sanitizeRatio(value)).toBe(0.5);
   });
 
-  it('passes an in-range ratio through', () => {
+  it('passes an in-range ratio through, bounds included', () => {
     expect(sanitizeRatio(0.3)).toBe(0.3);
+    expect(sanitizeRatio(0.15)).toBe(0.15);
+    expect(sanitizeRatio(0.85)).toBe(0.85);
   });
 });
 
