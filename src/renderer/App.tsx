@@ -279,7 +279,7 @@ function MainApp() {
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
   const split = useSplitLifecycle({
-    selectedId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped,
+    selectedId: selected?.id ?? null, mainTab, aliveShells: allProjectShells, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped,
   });
   const { status: git } = useGitStatus(selected?.id ?? null);
   const diffCount = diffTabCount(git);

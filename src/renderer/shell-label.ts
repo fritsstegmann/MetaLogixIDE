@@ -25,3 +25,19 @@ export function stripShells<T extends { readonly shellIndex: number }>(
 ): T[] {
   return shells.filter((s) => s.shellIndex === 0 || (s.shellIndex !== rightShellIndex && !hidden.includes(s.shellIndex)));
 }
+
+/** A shell whose kill has settled, with the alive list the renderer held at that moment. */
+export interface SettledHide<L> {
+  readonly projectId: number;
+  readonly shellIndex: number;
+  readonly list: L;
+}
+
+/**
+ * Indices of `projectId` to keep out of the strip after their kill settled: hidden while the
+ * alive list is still the one seen at the kill (it may still list the dead shell), shown again
+ * from the next list on, which either lacks the index or lists a new shell that reused it.
+ */
+export function hiddenUntilListChanges<L>(hides: readonly SettledHide<L>[], projectId: number, list: L): number[] {
+  return hides.filter((h) => h.projectId === projectId && h.list === list).map((h) => h.shellIndex);
+}

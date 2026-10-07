@@ -2,13 +2,15 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api } from '../api';
 import type { MainTab } from '../main-tab';
 import { createPendingShells, killAndForget, type PendingShell } from '../pending-kill';
+import { hiddenUntilListChanges, type SettledHide } from '../shell-label';
 import type { SplitPanes } from '../components/ShellSplit';
 import { terminalFocus } from './useWindowTerminalFocus';
 
-/** What the split lifecycle reads from App: the selected project, the main tab, the split's shells and their setters. */
+/** What the split lifecycle reads from App: the selected project, the main tab, its alive-shell list, the split's shells and their setters. */
 export interface SplitLifecycleInput {
   selectedId: number | null;
   mainTab: MainTab;
+  aliveShells: unknown;
   activeShellIndex: number;
   rightShellIndex: number | null;
   setRightShellIndex: (index: number | null) => void;
@@ -26,14 +28,25 @@ export interface SplitLifecycle {
   paneActions: (projectId: number) => PaneActions;
 }
 
-/** The pending kill and activation sets, the kill itself, and the flush when the shell area unmounts. */
-function usePendingSplitShells(selectedId: number | null, mainTab: MainTab) {
+/**
+ * The pending kill and activation sets, the kill itself, and the flush when the shell area
+ * unmounts. A killed shell stays hidden past its kill until the alive list next changes, because
+ * the list the renderer holds when the kill resolves may still contain it.
+ */
+function usePendingSplitShells(selectedId: number | null, mainTab: MainTab, aliveShells: unknown) {
   const [kills] = useState(createPendingShells);
   const [activations] = useState(createPendingShells);
   const focusActivatedRef = useRef<number | null>(null);
+  const listRef = useRef(aliveShells);
+  listRef.current = aliveShells;
+  const settledRef = useRef<SettledHide<unknown>[]>([]);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const kill = useCallback((shell: PendingShell) => {
-    void killAndForget(kills, shell, (s) => api.invoke('shells:kill', s)).then(rerender);
+    const killed = (s: PendingShell) => api.invoke('shells:kill', s).then(() => {
+      const list = listRef.current;
+      settledRef.current = [...settledRef.current.filter((h) => h.list === list), { ...s, list }];
+    });
+    void killAndForget(kills, shell, killed).then(rerender);
   }, [kills]);
   // A split closed just before the shell area unmounts never reports its exit, so kill it now.
   useEffect(() => () => {
@@ -41,7 +54,10 @@ function usePendingSplitShells(selectedId: number | null, mainTab: MainTab) {
     for (const shell of activations.flushAll()) activations.forget(shell.projectId, shell.shellIndex);
     focusActivatedRef.current = null;
   }, [selectedId, mainTab, kills, activations, kill]);
-  return { kills, activations, kill, focusActivatedRef };
+  const hiddenShells = selectedId == null
+    ? []
+    : [...kills.hidden(selectedId), ...hiddenUntilListChanges(settledRef.current, selectedId, aliveShells)];
+  return { kills, activations, kill, focusActivatedRef, hiddenShells };
 }
 
 /**
@@ -49,14 +65,14 @@ function usePendingSplitShells(selectedId: number | null, mainTab: MainTab) {
  * kill once its fold-out finishes; "To tab" marks a non-popped shell for activation then. When a
  * right pane's exit completes its shell is killed or activated; when every exit has settled, any
  * shell still pending (a reopened pane that was queued and never mounted) is killed. A shell
- * pending its kill stays out of the tab strip until the kill settles. A shell activated by To tab
+ * pending its kill stays out of the tab strip until the alive list after its kill. A shell activated by To tab
  * takes focus in an effect after the commit that made it the left pane, so the outgoing left
  * terminal (also primary) cannot consume the request. Leaving the project or the Shell tab
  * flushes: pending kills run at once, pending activations are dropped.
  */
 export function useSplitLifecycle(input: SplitLifecycleInput): SplitLifecycle {
-  const { selectedId, mainTab, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped } = input;
-  const { kills, activations, kill, focusActivatedRef } = usePendingSplitShells(selectedId, mainTab);
+  const { selectedId, mainTab, aliveShells, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped } = input;
+  const { kills, activations, kill, focusActivatedRef, hiddenShells } = usePendingSplitShells(selectedId, mainTab, aliveShells);
   useEffect(() => {
     const projectId = focusActivatedRef.current;
     focusActivatedRef.current = null;
@@ -84,7 +100,7 @@ export function useSplitLifecycle(input: SplitLifecycleInput): SplitLifecycle {
   }
 
   return {
-    hiddenShells: selectedId == null ? [] : kills.hidden(selectedId),
+    hiddenShells,
     closeSplit,
     moveSplitToTab,
     paneActions: (projectId) => ({

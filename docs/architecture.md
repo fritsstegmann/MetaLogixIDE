@@ -254,7 +254,8 @@ and once its fold-out finishes it becomes the active tab and takes focus.
 Closing the split kills the right shell when its fold-out finishes; when
 all of the split's exits settle, any shell still awaiting a kill (for
 example one queued by a fast close, open, close) is killed too. A closing
-shell stays out of the strip until its kill settles.
+shell stays out of the strip until the first alive-shells list after its
+kill.
 
 | Layer | File | Responsibility |
 |---|---|---|
