@@ -19,7 +19,7 @@ export function gutterKeyStep(key: string): -1 | 1 | null {
 /**
  * Whitespace gutter between the split cards: a focusable window-splitter separator with a centred
  * grab pill. Mouse down starts a drag (the caller tracks the pointer); ArrowLeft/ArrowRight emit a
- * stepped ratio. Carries no data-testid so `split-right` stays the first one inside the Reveal.
+ * stepped ratio. Carries no data-testid so `split-right` stays the first one inside the fold container.
  */
 export function SplitGutter({ ratio, dragging, onDragStart, onRatioChange }: Props) {
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {

@@ -34,7 +34,7 @@ describe('SplitGutter', () => {
     expect(attr(separator(render()), 'tabindex')).toBe('0');
   });
 
-  it('carries no data-testid, so split-right stays the first one inside the Reveal', () => {
+  it('carries no data-testid, so split-right stays the first one inside the fold', () => {
     expect(render()).not.toContain('data-testid');
     expect(render(0.5, true)).not.toContain('data-testid');
   });

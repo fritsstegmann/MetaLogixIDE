@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { m, useIsPresent, useReducedMotion } from 'motion/react';
+import { menuMotion } from '../menu-motion';
 
 export interface ContextMenuItem {
   label: string;
@@ -56,11 +58,15 @@ function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean) {
 export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) {
   const { itemRefs, onMenuKeyDown } = useMenuKeyboard(items, autoFocus);
 
+  const present = useIsPresent();
+  const motionProps = menuMotion(useReducedMotion() ?? false);
+
   useEffect(() => {
+    if (!present) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, present]);
 
   // Clamp so the menu stays inside the viewport.
   const maxX = typeof window !== 'undefined' ? window.innerWidth - 220 : x;
@@ -70,13 +76,14 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) 
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div
-        className="popover fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl backdrop-blur-md py-1 text-sm"
+      {present && <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />}
+      <m.div
+        {...motionProps}
+        className={`fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl backdrop-blur-md py-1 text-sm${present ? '' : ' pointer-events-none'}`}
         // Grow out of the click point, even when clamping shifted the menu.
         style={{ left: clampedX, top: clampedY, transformOrigin: `${x - clampedX}px ${y - clampedY}px` }}
-        role="menu"
-        data-testid="context-menu"
+        role={present ? 'menu' : undefined}
+        data-testid={present ? 'context-menu' : 'context-menu-leaving'}
         onKeyDown={onMenuKeyDown}
       >
         {items.map((it, i) => (
@@ -101,7 +108,7 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) 
             {it.separatorAfter && <div className="my-1 h-px bg-[--border]" />}
           </div>
         ))}
-      </div>
+      </m.div>
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
@@ -42,7 +43,10 @@ import { useGitStatus } from './hooks/useGitStatus';
 import { terminalFocus, useWindowTerminalFocus } from './hooks/useWindowTerminalFocus';
 import { useReportViewedShells } from './hooks/useReportViewedShells';
 import { Tooltip } from './components/Tooltip';
-import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
+import { FoldPane } from './components/FoldPane';
+import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion';
+import { useTerminalGeometryHold } from './hooks/useTerminalGeometryHold';
+import { createPendingKills, type PendingShell } from './pending-kill';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
 import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
@@ -65,6 +69,28 @@ interface ProjectUiState {
   activeShellIndex: number;
   rightShellIndex: number | null;
   splitRatio: number;
+}
+
+/** Kills a shell whose split pane has left; a shell that is already gone is fine. */
+function killPendingShell(shell: PendingShell): void {
+  void api.invoke('shells:kill', shell).catch(() => undefined);
+}
+
+/**
+ * The sidebar fold's flags and terminal hold. `animate` is sampled when `open` flips: mouse
+ * toggles fold (holding terminal geometry until the fold completes), keyboard toggles are instant
+ * and take no hold. Returns the `custom` for the fold and its completion handler.
+ */
+function useSidebarFold(open: boolean, animate: boolean) {
+  const reduced = usePrefersReducedMotion();
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [folding, setFolding] = useState(false);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    setFolding(animate);
+  }
+  useTerminalGeometryHold(folding);
+  return { custom: { instant: !animate, reduced }, onFoldComplete: () => setFolding(false) };
 }
 
 function readPopout(): PopoutInfo | null {
@@ -207,6 +233,9 @@ function MainApp() {
   }, [projectKey, setProjectStates]);
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
+  const [pendingKills] = useState(createPendingKills);
+  // A split closed just before the shell area unmounts never reports its exit, so kill it now.
+  useEffect(() => () => { for (const shell of pendingKills.flushAll()) killPendingShell(shell); }, [selected?.id, mainTab, pendingKills]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
   /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
   const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
@@ -229,6 +258,7 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
+  const sidebarFold = useSidebarFold(sidebarOpen, sidebarAnimate);
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
@@ -544,7 +574,10 @@ function MainApp() {
               right: rightShellIndex != null ? splitPane(project.id, rightShellIndex) : null,
               path: project.path,
               onMoveToTab: moveSplitToTab,
-              onClose: () => void closeSplit(true),
+              onClose: () => closeSplit(true),
+              onRightExited: (index) => {
+                if (pendingKills.takeIfPending(project.id, index)) killPendingShell({ projectId: project.id, shellIndex: index });
+              },
             }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
@@ -675,17 +708,12 @@ function MainApp() {
     }
   }
 
-  /** Close the split. Kills the right pane's shell (it was auto-spawned for the split). `refocus` returns focus to the left terminal when the clicked control is about to unmount. */
-  async function closeSplit(refocus = false) {
+  /** Close the split. The right pane's shell (auto-spawned for the split) is killed once its fold-out finishes, so it folds away still live. `refocus` returns focus to the left terminal when the clicked control is about to unmount. */
+  function closeSplit(refocus = false) {
     if (!selected || rightShellIndex == null) return;
-    const idx = rightShellIndex;
+    pendingKills.mark(selected.id, rightShellIndex);
     setRightShellIndex(null);
     if (refocus) terminalFocus.requestProjectFocus(selected.id);
-    // Let the pane fold away with its shell still live, rather than showing
-    // an exited terminal on the way out.
-    await new Promise((r) => setTimeout(r, REVEAL_OUT_MS));
-    try { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: idx }); }
-    catch { /* fine — the shell may already be gone */ }
   }
 
   /** "To tab": take the right shell out of the split without killing it; it stays a chip (or in its popout window) and the left terminal keeps focus. */
@@ -762,91 +790,95 @@ function MainApp() {
           gitDirty={git.dirty ? Object.keys(git.files).length : undefined}
           taskCount={taskCount || undefined}
         />
-        <Reveal show={sidebarOpen} animate={sidebarAnimate} className="flex h-full min-h-0 shrink-0">
-          {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-              sits alongside it in its own resizable column instead of
-              replacing it, so the user never has to swap views just to pick
-              a different project. */}
-          <Sidebar
-            selectedProjectId={selected?.id ?? null}
-            onSelect={pick}
-            onNewProject={() => setNewProjectOpen(true)}
-            onEditEnv={editEnv}
-            width={sidebarWidth}
-          />
-          <ResizeHandle
-            value={sidebarWidth}
-            onChange={setSidebarWidth}
-            onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
-            min={SIDEBAR_WIDTH.min}
-            max={SIDEBAR_WIDTH.max}
-            side="left"
-          />
-          {activeView === 'chat' && (
-            <>
-              <div
-                data-view="chat"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <ChatTab
-                  projectId={selected?.id ?? 0}
-                  metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                  compact
-                />
-              </div>
+        <AnimatePresence initial={false} custom={sidebarFold.custom}>
+          {sidebarOpen && (
+            <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
+              {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
+                  sits alongside it in its own resizable column instead of
+                  replacing it, so the user never has to swap views just to pick
+                  a different project. */}
+              <Sidebar
+                selectedProjectId={selected?.id ?? null}
+                onSelect={pick}
+                onNewProject={() => setNewProjectOpen(true)}
+                onEditEnv={editEnv}
+                width={sidebarWidth}
+              />
               <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={300}
-                max={640}
+                value={sidebarWidth}
+                onChange={setSidebarWidth}
+                onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+                min={SIDEBAR_WIDTH.min}
+                max={SIDEBAR_WIDTH.max}
                 side="left"
               />
-            </>
+              {activeView === 'chat' && (
+                <>
+                  <div
+                    data-view="chat"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <ChatTab
+                      projectId={selected?.id ?? 0}
+                      metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                      compact
+                    />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={300}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+              {activeView === 'git' && (
+                <>
+                  <div
+                    data-view="git"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <GitPanel projectId={selected?.id ?? null} />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={280}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+              {activeView === 'tasks' && (
+                <>
+                  <div
+                    data-view="tasks"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <TasksPanel
+                      projectId={selected?.id ?? null}
+                      onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
+                    />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={280}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+            </FoldPane>
           )}
-          {activeView === 'git' && (
-            <>
-              <div
-                data-view="git"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <GitPanel projectId={selected?.id ?? null} />
-              </div>
-              <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={280}
-                max={640}
-                side="left"
-              />
-            </>
-          )}
-          {activeView === 'tasks' && (
-            <>
-              <div
-                data-view="tasks"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <TasksPanel
-                  projectId={selected?.id ?? null}
-                  onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                />
-              </div>
-              <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={280}
-                max={640}
-                side="left"
-              />
-            </>
-          )}
-        </Reveal>
+        </AnimatePresence>
         <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
           <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
@@ -960,7 +992,7 @@ function MainApp() {
                 onLaunchPlainTab={newPlainShellAsTab}
                 onLaunchCustom={(name, cmdLine, save) => void launchCustomCli(name, cmdLine, save, 'tab')}
                 splitOn={rightShellIndex != null}
-                onToggleSplit={() => (rightShellIndex != null ? void closeSplit() : void openSplit())}
+                onToggleSplit={() => (rightShellIndex != null ? closeSplit() : void openSplit())}
               />
             )}
             {selected ? mainBody(selected) : <EmptyState />}

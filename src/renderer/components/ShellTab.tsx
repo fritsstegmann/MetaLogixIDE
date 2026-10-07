@@ -13,7 +13,9 @@ import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewState } from './HoverPreview';
+import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
@@ -281,12 +283,14 @@ export function ShellTab({
     // Fit follow-ups catch flex parents that settle after our open, plus
     // any late-arriving font-metric changes. The ResizeObserver below
     // handles genuine size changes during the terminal's lifetime.
-    const late1 = window.setTimeout(synchronizeGeometry, 150);
-    const late2 = window.setTimeout(synchronizeGeometry, 400);
-    const onWinFocus = () => synchronizeGeometry();
-    window.addEventListener('focus', onWinFocus);
+    // Passive syncs skip while a pane fold holds geometry; its release runs the one refit.
+    const passiveSync = () => { if (!isTerminalGeometryHeld()) synchronizeGeometry(); };
+    const offHoldRelease = onTerminalGeometryRelease(() => synchronizeGeometry());
+    const late1 = window.setTimeout(passiveSync, 150);
+    const late2 = window.setTimeout(passiveSync, 400);
+    window.addEventListener('focus', passiveSync);
 
-    const ro = new ResizeObserver(() => synchronizeGeometry());
+    const ro = new ResizeObserver(passiveSync);
     if (containerRef.current) ro.observe(containerRef.current);
 
     // Intercept every copy from the terminal (Cmd+C, right-click Copy,
@@ -321,7 +325,8 @@ export function ShellTab({
       opened = false;
       window.clearTimeout(late1);
       window.clearTimeout(late2);
-      window.removeEventListener('focus', onWinFocus);
+      window.removeEventListener('focus', passiveSync);
+      offHoldRelease();
       ro.disconnect();
       media.removeEventListener('change', onScheme);
       themeObserver.disconnect();
@@ -483,63 +488,65 @@ export function ShellTab({
         state={hover}
         onOpen={(relPath, line) => { setHover(null); onOpenFileRef.current?.(relPath, line); }}
       />
-      {menu && (() => {
-        const term = termRef.current;
-        const hasSelection = !!term?.hasSelection();
-        const items: ContextMenuItem[] = [
-          {
-            label: 'Copy',
-            disabled: !hasSelection,
-            onClick: async () => {
-              const sel = term?.getSelection() ?? '';
-              if (!sel) return;
-              try {
-                await navigator.clipboard.writeText(sanitizeTerminalCopy(sel));
-                toast('Copied', { kind: 'success' });
-              } catch (e) {
-                toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-              }
+      <AnimatePresence>
+        {menu && (() => {
+          const term = termRef.current;
+          const hasSelection = !!term?.hasSelection();
+          const items: ContextMenuItem[] = [
+            {
+              label: 'Copy',
+              disabled: !hasSelection,
+              onClick: async () => {
+                const sel = term?.getSelection() ?? '';
+                if (!sel) return;
+                try {
+                  await navigator.clipboard.writeText(sanitizeTerminalCopy(sel));
+                  toast('Copied', { kind: 'success' });
+                } catch (e) {
+                  toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                }
+              },
             },
-          },
-          {
-            label: 'Copy all (visible scrollback)',
-            separatorAfter: true,
-            onClick: async () => {
-              const t = termRef.current;
-              if (!t) return;
-              const buf = t.buffer.active;
-              const lines: string[] = [];
-              for (let y = 0; y < buf.length; y++) {
-                const line = buf.getLine(y);
-                if (line) lines.push(line.translateToString(true));
-              }
-              try {
-                await navigator.clipboard.writeText(sanitizeTerminalCopy(lines.join('\n')));
-                toast(`Copied ${lines.length} lines`, { kind: 'success' });
-              } catch (e) {
-                toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-              }
+            {
+              label: 'Copy all (visible scrollback)',
+              separatorAfter: true,
+              onClick: async () => {
+                const t = termRef.current;
+                if (!t) return;
+                const buf = t.buffer.active;
+                const lines: string[] = [];
+                for (let y = 0; y < buf.length; y++) {
+                  const line = buf.getLine(y);
+                  if (line) lines.push(line.translateToString(true));
+                }
+                try {
+                  await navigator.clipboard.writeText(sanitizeTerminalCopy(lines.join('\n')));
+                  toast(`Copied ${lines.length} lines`, { kind: 'success' });
+                } catch (e) {
+                  toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                }
+              },
             },
-          },
-          {
-            label: 'Paste',
-            onClick: async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                if (text) void api.invoke('shells:write', { projectId, shellIndex, data: text });
-              } catch (e) {
-                toast('Paste failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-              }
+            {
+              label: 'Paste',
+              onClick: async () => {
+                try {
+                  const text = await navigator.clipboard.readText();
+                  if (text) void api.invoke('shells:write', { projectId, shellIndex, data: text });
+                } catch (e) {
+                  toast('Paste failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                }
+              },
             },
-          },
-          {
-            label: 'Clear selection',
-            disabled: !hasSelection,
-            onClick: () => { termRef.current?.clearSelection(); },
-          },
-        ];
-        return <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />;
-      })()}
+            {
+              label: 'Clear selection',
+              disabled: !hasSelection,
+              onClick: () => { termRef.current?.clearSelection(); },
+            },
+          ];
+          return <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />;
+        })()}
+      </AnimatePresence>
     </div>
   );
 }

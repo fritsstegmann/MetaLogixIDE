@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { AnimatePresence, m, useIsPresent, useReducedMotion } from 'motion/react';
+import { menuMotion } from '../menu-motion';
 import { toast } from '../hooks/useToasts';
 import { api } from '../api';
 import { Tooltip } from './Tooltip';
@@ -53,7 +55,17 @@ function NewShellMenu({
     })();
   }, [projectId]);
 
+  const present = useIsPresent();
+  const motionProps = menuMotion(useReducedMotion() ?? false);
+  const panelProps = {
+    ...motionProps,
+    'data-new-shell-menu': '1',
+    'data-testid': present ? undefined : 'new-shell-menu-leaving',
+    style: { transformOrigin: 'top left', pointerEvents: present ? undefined : ('none' as const) },
+  };
+
   useEffect(() => {
+    if (!present) return;
     function onDocClick(e: MouseEvent) {
       const t = e.target as HTMLElement | null;
       if (t && t.closest('[data-new-shell-menu="1"]')) return;
@@ -66,7 +78,7 @@ function NewShellMenu({
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onEsc);
     };
-  }, [onClose]);
+  }, [onClose, present]);
 
   async function removeProfile(name: string) {
     try {
@@ -77,8 +89,8 @@ function NewShellMenu({
 
   if (customOpen) {
     return (
-      <div
-        data-new-shell-menu="1"
+      <m.div
+        {...panelProps}
         className="absolute top-full left-0 mt-1 z-40 w-80 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden p-3 space-y-2 text-xs"
       >
         <div className="font-semibold text-sm">Run a custom command</div>
@@ -112,13 +124,13 @@ function NewShellMenu({
         <div className="text-[10px] text-[--text-muted]">
           Adds this as a new tab. To move it to a separate window afterwards, click the popout icon in the top bar.
         </div>
-      </div>
+      </m.div>
     );
   }
 
   return (
-    <div
-      data-new-shell-menu="1"
+    <m.div
+      {...panelProps}
       className="absolute top-full left-0 mt-1 z-40 w-72 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden"
     >
       <div className="px-3 py-2 border-b border-[--border]">
@@ -221,7 +233,7 @@ function NewShellMenu({
           <span className="opacity-60 font-mono">⌘T</span>
         </button>
       </div>
-    </div>
+    </m.div>
   );
 }
 
@@ -301,8 +313,10 @@ export function ShellTabsBar({
             <PlusIcon />
           </button>
         </Tooltip>
-        {menuOpen && (
+        <AnimatePresence>
+          {menuOpen && (
           <NewShellMenu
+            key="new-shell-menu"
             projectId={projectId}
             defaultCliName={defaultCliName}
             onDefaultChanged={onDefaultCliChanged}
@@ -314,7 +328,8 @@ export function ShellTabsBar({
             }}
             onClose={() => setMenuOpen(false)}
           />
-        )}
+          )}
+        </AnimatePresence>
       </div>
       <div className="flex-1" />
       <SplitPill on={splitOn} onToggle={onToggleSplit} />
