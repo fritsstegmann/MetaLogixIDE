@@ -102,6 +102,19 @@ function mergedCliProfiles(
   return [...list, ...globalProfiles.filter(p => !names.has(p.name))];
 }
 
+/**
+ * Pre-flight for every shell-launch IPC: the project's folder must exist on
+ * disk, otherwise node-pty's spawn would fail with ENOENT on cwd and the
+ * terminal used to end up as a silent blank cursor. Throwing here lets the
+ * renderer surface a specific, actionable message instead ("Project folder
+ * no longer exists at /path — remove it from the sidebar?").
+ */
+function assertProjectPathExists(project: { id: number; name: string; path: string }): void {
+  if (!existsSync(project.path)) {
+    throw new Error(`Project folder no longer exists at ${project.path} — remove the project from the sidebar or restore the folder.`);
+  }
+}
+
 export interface WindowHooks {
   createPopoutWindow: (projectId: number, shellIndex: number) => Promise<number>;
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
@@ -313,6 +326,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (s.settings.get('claude_permission_mode') === null) throw new Error('Choose a Claude permission mode first');
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    assertProjectPathExists(project);
     const cap = s.settings.get('keep_alive_cap');
     const alive = s.shells.list();
     if (alive.length >= cap) {
@@ -382,6 +396,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:launch-plain': async (s, { projectId }) => {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    assertProjectPathExists(project);
     // Pick the smallest unused shellIndex for this project. shellIndex 0 is
     // typically the Claude shell; ad-hoc terminals get 1, 2, …
     const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
@@ -414,6 +429,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:launch-cli': async (s, { projectId, profileName, argv, env, save }) => {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    assertProjectPathExists(project);
     // Resolve the argv: explicit inline wins, otherwise look up the profile
     // (project overrides > global defaults) by name.
     let resolvedArgv = argv;
