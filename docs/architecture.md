@@ -94,6 +94,34 @@ Mermaid diagrams render again on palette changes, including changes between
 palettes with the same light/dark appearance. Explicit diagram themes remain independent.
 The Command Palette also provides commands for all three palettes.
 
+Each palette card in Settings previews its own palette, whichever palette is
+active. The previews are literal colours in
+`src/renderer/components/settings/palette-swatches.ts`, one dark and one light
+set per palette; a card shows the set for the effective appearance. These are
+the only literal colours in Settings.
+
+### Settings dialog
+
+`src/renderer/components/Settings.tsx` is the dialog shell: an 820x640 modal
+(`role="dialog"`, `aria-modal`, labelled by its `h1`), the section nav, the
+version footer and the Done bar. Each section is its own module in
+`src/renderer/components/settings/`:
+
+| File | Responsibility |
+|---|---|
+| `GeneralPanel.tsx` | Appearance, Fonts, Workspace and Notifications sections. Loads and saves the General settings. |
+| `RootsPanel.tsx`, `LaunchPanel.tsx`, `MetaprojectPanel.tsx` | The other sections. |
+| `primitives.tsx` | `SettingsSection`, `SettingRow`, `SettingStack`, `WorkspaceNumber`, `Switch`, and the older `Header` and `Field`. |
+| `PaletteCards.tsx`, `palette-swatches.ts` | Palette cards (`aria-pressed` buttons) and their preview colours. |
+| `ModeControl.tsx`, `mode-keys.ts` | The Mode radiogroup; arrow keys move and apply the selection. |
+| `nav-icons.tsx` | Section nav buttons and their icons; the active item has `aria-current="page"`. |
+| `dialog-focus.ts`, `src/renderer/hooks/useDialogFocus.ts` | Focus moves to the panel on open, Tab stays inside the dialog, and focus returns to the opener on close. Escape is not intercepted. |
+| `version-label.ts`, `src/renderer/hooks/useAppVersion.ts` | Footer text from `app:get-version`; it shows the wordmark alone if the call fails. |
+
+Components below `GeneralPanel` take values and callbacks as props, so unit
+tests render them without a DOM. Real focus, layout and colour are covered by
+`tests/e2e/settings-board.spec.ts`.
+
 ### App chrome
 
 The chrome around the content (title bar, activity bar, sidebar columns and
@@ -110,6 +138,8 @@ appearances inherit it:
 |---|---|
 | `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
 | `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
+| `--surface-raised` | Floating lists over a dialog, such as the font list. It is the dialog surface mixed with white, so it is always lighter than the dialog. |
+| `--switch-off` | The track of a switch that is off. |
 | `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
 | `--hue-orange-text` | Small coloured text, such as the Diff count. |
 | `--hue-orange-soft`, `--hue-orange-soft-text`, `--badge-accent-text` | Activity-bar count badges: a soft hue fill with text that keeps 4.5:1 contrast. Light appearances mix the badge text almost fully toward `--text`. |
@@ -215,6 +245,49 @@ selected family with a bounded timeout, fits the terminal, clears stale glyph
 state, repaints all rows, and reports the resulting dimensions to the PTY
 (`src/renderer/terminal-font-update.ts:108-139`).
 
+### Split shell and motion
+
+The shell area shows one pane, or two side by side when the split is open.
+The split's right shell is not a tab: it has no chip in the strip while it
+sits in the split. **To tab** moves it into the strip without killing it,
+and once its fold-out finishes it becomes the active tab and takes focus.
+Closing the split kills the right shell when its fold-out finishes; when
+all of the split's exits settle, any shell still awaiting a kill (for
+example one queued by a fast close, open, close) is killed too. A closing
+shell stays out of the strip until the first alive-shells list after its
+kill.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Presentation | `src/renderer/components/ShellTabsBar.tsx`, `SplitPill.tsx` | The tab strip: chips, the new-shell menu, and the labelled **Split** toggle (`aria-pressed`). |
+| Presentation | `src/renderer/components/ShellSplit.tsx`, `SplitPaneHeader.tsx`, `SplitGutter.tsx`, `FoldPane.tsx` | Split mode: pane cards, headers (dot, label, abbreviated project path, To tab, Close), the focused-pane ring, and the resizable gutter (**Resize panes**, arrow keys move it by 2%). |
+| Logic | `src/renderer/shell-label.ts`, `split-ratio.ts`, `split-copy.ts` | Chip labels and which shells the strip hides; the ratio default, clamp and sanitising; exact test ids and copy. |
+| Logic | `src/renderer/pane-fold.ts`, `pending-kill.ts`, `terminal-geometry-hold.ts`, `menu-motion.ts`, `motion-tokens.ts` | Fold and menu transitions, shells awaiting a kill or an activation after their exit, the terminal size hold, and the shared durations and easings. |
+| Adapter | `src/renderer/hooks/useTerminalGeometryHold.ts`, `usePrefersReducedMotion.ts` | Holds terminal refits while a fold runs; reads the OS reduced-motion setting live. |
+| State | `src/renderer/hooks/useSplitLifecycle.ts`, `src/renderer/App.tsx` | The hook owns close, To tab, and the pending kill and activation sets with their flush and focus effects; App holds `rightShellIndex`, `splitRatio` and the sidebar fold, and wires the hook. |
+
+Rules:
+
+- Motion uses the `motion` package (pinned at 14.0.0) through a strict
+  `LazyMotion` with `domAnimation` in `main.tsx`, under
+  `MotionConfig reducedMotion="user"`. Only `m.*` elements are used.
+- A fold animates one CSS variable, `--fold`, on the folding pane's
+  container. The staying pane is `flex-1`, so it fills the row on every
+  frame: no gap and no end-of-fold jump. No clip-path or transform touches
+  a terminal, and none remains at rest.
+- Terminals hold their size during a fold and refit once at the end. One
+  shared 1000ms watchdog covers all holds and restarts on every hold or
+  mid-fold toggle. The left terminal is never remounted by a split open
+  or close.
+- Keyboard toggles (⌘B, ⌘\, palette commands) stay instant.
+- With reduced motion, panes and menus fade (at least 150ms) and the
+  layout changes in one step. The panes read the setting live because
+  motion's `useReducedMotion` reads it once per mount.
+- `ContextMenu` and the new-shell menu animate in and out. A leaving menu
+  drops its backdrop, role and test id and takes no pointer or keyboard
+  input; reopening during an exit reuses the same instance, and a menu
+  opened with `autoFocus` refocuses its first item.
+
 ### Terminal focus
 
 When a window gains OS focus, or the user switches project, the visible
@@ -255,6 +328,8 @@ Rules:
   click moves focus to the field.
 - In-app shell tab switches and main-tab (Files ↔ Shell) switches do not
   move focus.
+- Closing the split from its header returns focus to the left terminal.
+  **To tab** focuses the moved shell's terminal once it is the active pane.
 
 ### Claude notifications
 
@@ -278,7 +353,7 @@ or escape sequences for this.
 | Adapter | `src/main/notifications/os-notifications.ts` | Wraps Electron `Notification`. Keeps each instance referenced until it is clicked or closed. |
 | Composition | `src/main/notifications/install.ts` | Connects the Claude state tracker's `onHookApplied` stream, the notifier, windows and PTY exit events. Builds the click navigation. |
 | Presentation | `src/renderer/viewed-shells.ts`, `src/renderer/hooks/useReportViewedShells.ts` | Derive the shells on screen and report them on `notifications:viewed-shells`. |
-| Presentation | `src/renderer/components/Settings.tsx` | The two toggles in Settings → General. |
+| Presentation | `src/renderer/components/settings/GeneralPanel.tsx` | The two switches in Settings → General → Notifications. |
 
 Rules:
 
@@ -640,6 +715,11 @@ the whole side falls back to escaped plain text.
 
 ## Architectural Decisions
 
+- **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
+  old when added, inside the usual release-age window; it was accepted
+  because 14.0.0 equals 13.5.1 minus internal APIs, and older 13.x
+  releases lack the `AnimatePresence` fixes in 13.4.5 and 13.4.6.
+
 - **Mermaid loads lazily.** `mermaidRenderer.ts` reaches `mermaid` only
   through `import('mermaid')` (`mermaidRenderer.ts:52`). Vite puts it in a
   separate chunk. A document without diagrams does not load it.
@@ -736,7 +816,7 @@ the whole side falls back to escaped plain text.
   Settings session. After a failure, **Retry** or reopening the list requests
   it again. Exact-name entry and System default remain
   available when discovery is unsupported or denied
-  (`src/renderer/components/FontControl.tsx`, `src/renderer/components/Settings.tsx:30-53`).
+  (`src/renderer/components/FontControl.tsx`, `useFontDiscoverySession` in `src/renderer/components/Settings.tsx:48-74`).
   Option building, validation and the highlight live in the pure module
   `src/renderer/fonts/font-options.ts`. The highlight is stored as an option's
   identity, not an index, so it survives the list changing when discovery

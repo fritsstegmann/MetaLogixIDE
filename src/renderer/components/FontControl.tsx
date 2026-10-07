@@ -13,6 +13,7 @@ import type {
 } from '@shared/font-settings';
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
 import type { LocalFontAccessResult } from '@renderer/fonts/local-font-access';
+import { CheckIcon } from '@renderer/components/CheckIcon';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import {
   activeOptionIndex,
@@ -264,7 +265,7 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         onChange={(event) => picker.type(event.target.value)}
         onBlur={picker.blur}
         onKeyDown={(event) => handlers[event.key]?.(event)}
-        className="min-h-11 w-full rounded-lg bg-[--surface-field] py-2 pl-3 pr-9 text-[15px] text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
+        className="min-h-10 w-full rounded-[10px] bg-[--surface-field] py-2 pl-3 pr-9 text-sm text-[--text] placeholder:text-[--text-muted] transition-colors hover:bg-[--surface-active] focus-visible:rounded-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]/70 disabled:cursor-not-allowed disabled:opacity-50"
         style={{ fontFamily: buildFontFamilyStack(value, fallback) }}
         data-testid={ids.testInput}
       />
@@ -272,6 +273,22 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
       </span>
     </div>
+  );
+}
+
+function FontOptionLabel({ option, fallback }: {
+  readonly option: FontOption;
+  readonly fallback: string;
+}): React.JSX.Element {
+  if (option.kind === 'custom') return <span className="truncate">{FONT_COPY.customOption(option.family)}</span>;
+  const family = option.kind === 'default' ? null : option.family;
+  return (
+    <span
+      className={`truncate ${family === null ? 'text-[--text-muted]' : ''}`}
+      style={{ fontFamily: buildFontFamilyStack(family, fallback) }}
+    >
+      {family ?? FONT_COPY.defaultValue}
+    </span>
   );
 }
 
@@ -283,7 +300,6 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
   readonly fallback: string;
 }): React.JSX.Element {
   const selected = index === picker.selectedIndex;
-  const family = option.kind === 'default' ? null : option.family;
   return (
     <li
       id={optionId(ids, index)}
@@ -292,18 +308,14 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
       data-testid={option.kind === 'default' ? ids.testReset : undefined}
       onMouseMove={(e) => picker.hover(index, { x: e.screenX, y: e.screenY })}
       onClick={() => void picker.commit.choose(option)}
-      className={`flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-sm ${
-        index === picker.activeIndex ? 'bg-[--surface-active]' : ''
+      className={`flex h-[34px] cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-sm ${
+        index === picker.activeIndex ? 'bg-[--surface-hover]' : ''
       }`}
     >
-      <span aria-hidden className={`w-4 shrink-0 text-[--accent] ${selected ? '' : 'invisible'}`}>✓</span>
-      {option.kind === 'custom' ? (
-        <span className="truncate">{FONT_COPY.customOption(option.family)}</span>
-      ) : (
-        <span className="truncate" style={{ fontFamily: buildFontFamilyStack(family, fallback) }}>
-          {family ?? FONT_COPY.defaultValue}
-        </span>
-      )}
+      <span aria-hidden className={`inline-flex w-3.5 shrink-0 text-[--accent] ${selected ? '' : 'invisible'}`}>
+        {selected && <CheckIcon size={13} />}
+      </span>
+      <FontOptionLabel option={option} fallback={fallback} />
     </li>
   );
 }
@@ -344,7 +356,7 @@ function FontOptionList({ picker, ids, label, fallback, discovery, onRetry }: {
       id={ids.list}
       role="listbox"
       aria-label={`${label} options`}
-      className="popover absolute left-0 right-0 top-12 z-20 max-h-64 overflow-y-auto rounded-lg bg-[--panel-strong] p-1 shadow-xl ring-1 ring-black/10"
+      className="popover absolute left-0 right-0 top-[46px] z-20 max-h-64 overflow-y-auto rounded-xl bg-[--surface-raised] p-[5px] shadow-xl ring-1 ring-black/10"
       onMouseDown={(event) => event.preventDefault()}
     >
       {picker.options.map((option, index) => (
@@ -369,7 +381,7 @@ function FontPreview({ settingKey, label, value, fallback }: {
     >
       {settingKey === 'ui_font_family'
         ? 'The quick brown fox jumps over the lazy dog.'
-        : <>Aa 0O 1l → ~/project <span aria-label="private-use glyph sample">󰆍</span></>}
+        : <>Aa 0O 1l → ~/project <span role="img" aria-label="private-use glyph sample">󰆍</span></>}
     </div>
   );
 }
@@ -381,8 +393,8 @@ export function FontControl(props: Props): React.JSX.Element {
   const picker = useFontPicker(props);
   const { commit } = picker;
   return (
-    <div className="grid items-start gap-x-4 gap-y-1.5 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
-      <label htmlFor={ids.input} className="pt-2 text-sm text-[--text]">{label}</label>
+    <div className="grid items-start gap-x-4 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
+      <label htmlFor={ids.input} className="pt-2 text-sm font-medium text-[--text]">{label}</label>
       <div className="relative min-w-0 space-y-1.5">
         <FontInput picker={picker} ids={ids} settingKey={settingKey} value={value} fallback={fallback} />
         {picker.state.open && (

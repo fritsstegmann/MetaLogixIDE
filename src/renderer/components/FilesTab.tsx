@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import hljs from 'highlight.js/lib/common';
 import { api } from '@renderer/api';
 import { ResizeHandle } from './ResizeHandle';
+import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { MarkdownPreview } from './MarkdownPreview';
 import { langForPath } from '@renderer/diff/highlight-lang';
@@ -297,14 +298,17 @@ function FileTabBar({
           </div>
         );
       })}
-      {menu && (
-        <ContextMenu
-          x={menu.x}
-          y={menu.y}
-          items={tabMenuItems(menu.relPath)}
-          onClose={() => setMenu(null)}
-        />
-      )}
+      <AnimatePresence>
+        {menu && (
+          <ContextMenu
+            key="context-menu"
+            x={menu.x}
+            y={menu.y}
+            items={tabMenuItems(menu.relPath)}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -513,14 +517,17 @@ function FileTreePane({
           );
         })}
       </ul>
-      {menu && (
-        <ContextMenu
-          x={menu.x}
-          y={menu.y}
-          items={menu.entry ? rowItems(menu.entry) : bgItems}
-          onClose={closeMenu}
-        />
-      )}
+      <AnimatePresence>
+        {menu && (
+          <ContextMenu
+            key="context-menu"
+            x={menu.x}
+            y={menu.y}
+            items={menu.entry ? rowItems(menu.entry) : bgItems}
+            onClose={closeMenu}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
