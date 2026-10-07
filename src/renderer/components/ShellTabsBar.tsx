@@ -4,6 +4,8 @@ import { api } from '../api';
 import { Tooltip } from './Tooltip';
 import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { ShellTabDot } from './ShellTabDot';
+import { shellChipLabel } from '../shell-label';
+import { SPLIT_TESTIDS } from '../split-copy';
 import { PlusIcon, SplitIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
 
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
@@ -259,10 +261,7 @@ export function ShellTabsBar({
       <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
         {shells.map((s) => {
           // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
-          // When the same CLI runs twice, disambiguate with a #N suffix.
-          const dupes = shells.filter(x => x.launchName === s.launchName);
-          const suffix = dupes.length > 1 ? ` ${dupes.indexOf(s) + 1}` : '';
-          const label = `${s.launchName}${suffix}`;
+          const label = shellChipLabel(shells, s.shellIndex);
           const isActive = s.shellIndex === active;
           return (
             <div
@@ -295,7 +294,7 @@ export function ShellTabsBar({
         <button
           onClick={onToggleSplit}
           className={`shrink-0 w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong] ${splitOn ? 'text-[color:var(--accent)]' : 'text-[--text-muted] hover:text-[--text]'}`}
-          data-testid="tabbar-split"
+          data-testid={SPLIT_TESTIDS.toggle}
         >
           <SplitIcon />
         </button>
