@@ -37,6 +37,13 @@ interface Props {
    * sidebar, so the whole component fits inside the ~400 px side rail.
    */
   compact?: boolean;
+  /**
+   * Called when the user wants to close the chat panel without signing in
+   * (close button on the login card, Esc key). Used by the activity-bar
+   * host to switch back to the Projects view so the panel stops reopening
+   * on next launch.
+   */
+  onDismiss?: () => void;
 }
 
 /**
@@ -46,7 +53,7 @@ interface Props {
  *   2. Otherwise: list channels for the project, pick the first, load
  *      recent messages, subscribe to `channel_message` for incoming.
  */
-export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Props) {
+export function ChatTab({ projectId, metaprojectProjectId, compact = false, onDismiss }: Props) {
   const numericMpId = useMemo(() => {
     if (!metaprojectProjectId) return null;
     const n = Number(metaprojectProjectId.replace(/^[A-Za-z]+-/, ''));
@@ -260,7 +267,7 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false }: Pr
   }
 
   if (!status.loggedIn) {
-    return <LoginCard onLoggedIn={refreshStatus} />;
+    return <LoginCard onLoggedIn={refreshStatus} onDismiss={onDismiss} />;
   }
 
   // Only shown when the SELECTED local project isn't linked to a metaproject
@@ -791,7 +798,7 @@ function LinkPlugIcon() {
   );
 }
 
-function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
+function LoginCard({ onLoggedIn, onDismiss }: { onLoggedIn: () => void; onDismiss?: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
@@ -845,9 +852,34 @@ function LoginCard({ onLoggedIn }: { onLoggedIn: () => void }) {
       toast('Forgot saved metaproject password', { kind: 'info' });
     } catch { /* fine */ }
   }
+  // Esc dismisses the card when a dismiss handler is wired (lets the user
+  // close the chat panel without signing in). Without this, the panel is
+  // only closable via the Activity bar — and reopens on next launch because
+  // activeView is persisted.
+  useEffect(() => {
+    if (!onDismiss) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onDismiss]);
+
   return (
     <div className="h-full flex items-center justify-center p-6">
-      <div className="w-[360px] space-y-4 bg-[--panel-strong] border border-[--border] rounded-xl p-6 shadow-xl">
+      <div className="relative w-[360px] space-y-4 bg-[--panel-strong] border border-[--border] rounded-xl p-6 shadow-xl">
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            title="Close (Esc)"
+            aria-label="Close sign-in panel"
+            className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
+            data-testid="mp-login-dismiss"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
         <div className="text-center space-y-1.5">
           <div className="mx-auto w-10 h-10 rounded-md bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/30 flex items-center justify-center">
             <ChatBubbleIcon />

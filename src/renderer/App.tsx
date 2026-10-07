@@ -770,6 +770,7 @@ function MainApp() {
                   projectId={selected?.id ?? 0}
                   metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
                   compact
+                  onDismiss={() => setActiveView('projects')}
                 />
               </div>
               <ResizeHandle

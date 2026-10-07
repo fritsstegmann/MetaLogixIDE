@@ -102,6 +102,19 @@ function mergedCliProfiles(
   return [...list, ...globalProfiles.filter(p => !names.has(p.name))];
 }
 
+/**
+ * Pre-flight for every shell-launch IPC: the project's folder must exist on
+ * disk, otherwise node-pty's spawn would fail with ENOENT on cwd and the
+ * terminal used to end up as a silent blank cursor. Throwing here lets the
+ * renderer surface a specific, actionable message instead ("Project folder
+ * no longer exists at /path — remove it from the sidebar?").
+ */
+function assertProjectPathExists(project: { id: number; name: string; path: string }): void {
+  if (!existsSync(project.path)) {
+    throw new Error(`Project folder no longer exists at ${project.path} — remove the project from the sidebar or restore the folder.`);
+  }
+}
+
 export interface WindowHooks {
   createPopoutWindow: (projectId: number, shellIndex: number) => Promise<number>;
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
@@ -313,6 +326,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (s.settings.get('claude_permission_mode') === null) throw new Error('Choose a Claude permission mode first');
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    // Idempotent: clicking an already-open project (or a tab the sidebar
+    // thinks might not be alive) used to re-enter here and throw "already
+    // spawned". Just return the index — the renderer re-attaches the stream.
+    if (s.ptyManager.isAlive(projectId, 0)) return { shellIndex: 0 };
+    assertProjectPathExists(project);
     const cap = s.settings.get('keep_alive_cap');
     const alive = s.shells.list();
     if (alive.length >= cap) {
@@ -332,7 +350,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // conversation found", retry using the first variant instead. This
     // handles the case where the on-disk claude session was cleared.
     if (launch.variant === 'subsequent') {
-      const settlement = await new Promise<'ok' | 'no-session'>((resolveP) => {
+      const settlement = await new Promise<'ok' | 'no-session' | { error: string }>((resolveP) => {
         const timer = setTimeout(() => resolveP('ok'), 2500);
         const onExit = (ev: { projectId: number; shellIndex: number; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
           if (ev.projectId !== projectId || ev.shellIndex !== 0) return;
@@ -346,8 +364,18 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
           }
         };
         s.ptyManager.on('exit', onExit);
-        void s.ptyManager.spawn(projectId, 0, launch).catch(() => resolveP('ok'));
+        // Surface spawn failures instead of swallowing them — a missing
+        // `claude` binary used to end up as a blank terminal with no cause.
+        void s.ptyManager.spawn(projectId, 0, launch).catch((err: unknown) => {
+          clearTimeout(timer);
+          s.ptyManager.off('exit', onExit);
+          resolveP({ error: err instanceof Error ? err.message : String(err) });
+        });
       });
+
+      if (typeof settlement === 'object' && 'error' in settlement) {
+        throw new Error(`shell failed to start: ${settlement.error}`);
+      }
 
       if (settlement === 'no-session') {
         // Force the "first" variant: temporarily null out firstLaunchedAt
@@ -372,6 +400,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:launch-plain': async (s, { projectId }) => {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    assertProjectPathExists(project);
     // Pick the smallest unused shellIndex for this project. shellIndex 0 is
     // typically the Claude shell; ad-hoc terminals get 1, 2, …
     const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
@@ -404,6 +433,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'shells:launch-cli': async (s, { projectId, profileName, argv, env, save }) => {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
+    assertProjectPathExists(project);
     // Resolve the argv: explicit inline wins, otherwise look up the profile
     // (project overrides > global defaults) by name.
     let resolvedArgv = argv;
