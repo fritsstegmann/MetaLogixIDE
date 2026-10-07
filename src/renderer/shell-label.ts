@@ -11,3 +11,16 @@ export function shellChipLabel(
   const dupes = shells.filter((s) => s.launchName === shell.launchName);
   return dupes.length > 1 ? `${shell.launchName} ${dupes.indexOf(shell) + 1}` : shell.launchName;
 }
+
+/**
+ * Shells shown as chips in the tab strip. The split's right shell is not a
+ * tab while it sits in the split; "To tab" clears `rightShellIndex` and it
+ * reappears here.
+ */
+export function stripShells<T extends { readonly shellIndex: number }>(
+  shells: readonly T[],
+  rightShellIndex: number | null,
+): T[] {
+  if (rightShellIndex === null || rightShellIndex === 0) return [...shells];
+  return shells.filter((s) => s.shellIndex !== rightShellIndex);
+}

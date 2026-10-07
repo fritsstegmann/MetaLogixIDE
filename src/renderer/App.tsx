@@ -56,7 +56,7 @@ import { ShellTabsBar } from './components/ShellTabsBar';
 import { ShellSplit } from './components/ShellSplit';
 import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
-import { shellChipLabel } from './shell-label';
+import { shellChipLabel, stripShells } from './shell-label';
 
 
 interface PopoutInfo {
@@ -977,7 +977,7 @@ function MainApp() {
             {selected && mainTab === 'shell' && (
               <ShellTabsBar
                 projectId={selected.id}
-                shells={projectShells}
+                shells={stripShells(projectShells, rightShellIndex)}
                 active={activeShellIndex}
                 onSelect={setActiveShellIndex}
                 onClose={killShell}

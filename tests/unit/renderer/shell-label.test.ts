@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shellChipLabel } from '@renderer/shell-label';
+import { shellChipLabel, stripShells } from '@renderer/shell-label';
 
 const shells = [
   { shellIndex: 0, launchName: 'Claude' },
@@ -19,5 +19,19 @@ describe('shellChipLabel', () => {
 
   it('returns an empty string for an index not in the list', () => {
     expect(shellChipLabel(shells, 2)).toBe('');
+  });
+});
+
+describe('stripShells', () => {
+  it('leaves out the split right shell and keeps every other shell in order', () => {
+    expect(stripShells(shells, 1).map((s) => s.shellIndex)).toEqual([0, 3]);
+  });
+
+  it('shows every shell when no split is open', () => {
+    expect(stripShells(shells, null).map((s) => s.shellIndex)).toEqual([0, 1, 3]);
+  });
+
+  it('never hides shell 0, even if it were the right index', () => {
+    expect(stripShells(shells, 0).map((s) => s.shellIndex)).toEqual([0, 1, 3]);
   });
 });
