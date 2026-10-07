@@ -245,6 +245,49 @@ selected family with a bounded timeout, fits the terminal, clears stale glyph
 state, repaints all rows, and reports the resulting dimensions to the PTY
 (`src/renderer/terminal-font-update.ts:108-139`).
 
+### Split shell and motion
+
+The shell area shows one pane, or two side by side when the split is open.
+The split's right shell is not a tab: it has no chip in the strip while it
+sits in the split. **To tab** moves it into the strip without killing it,
+and once its fold-out finishes it becomes the active tab and takes focus.
+Closing the split kills the right shell when its fold-out finishes; when
+all of the split's exits settle, any shell still awaiting a kill (for
+example one queued by a fast close, open, close) is killed too. A closing
+shell stays out of the strip until the first alive-shells list after its
+kill.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Presentation | `src/renderer/components/ShellTabsBar.tsx`, `SplitPill.tsx` | The tab strip: chips, the new-shell menu, and the labelled **Split** toggle (`aria-pressed`). |
+| Presentation | `src/renderer/components/ShellSplit.tsx`, `SplitPaneHeader.tsx`, `SplitGutter.tsx`, `FoldPane.tsx` | Split mode: pane cards, headers (dot, label, abbreviated project path, To tab, Close), the focused-pane ring, and the resizable gutter (**Resize panes**, arrow keys move it by 2%). |
+| Logic | `src/renderer/shell-label.ts`, `split-ratio.ts`, `split-copy.ts` | Chip labels and which shells the strip hides; the ratio default, clamp and sanitising; exact test ids and copy. |
+| Logic | `src/renderer/pane-fold.ts`, `pending-kill.ts`, `terminal-geometry-hold.ts`, `menu-motion.ts`, `motion-tokens.ts` | Fold and menu transitions, shells awaiting a kill or an activation after their exit, the terminal size hold, and the shared durations and easings. |
+| Adapter | `src/renderer/hooks/useTerminalGeometryHold.ts`, `usePrefersReducedMotion.ts` | Holds terminal refits while a fold runs; reads the OS reduced-motion setting live. |
+| State | `src/renderer/hooks/useSplitLifecycle.ts`, `src/renderer/App.tsx` | The hook owns close, To tab, and the pending kill and activation sets with their flush and focus effects; App holds `rightShellIndex`, `splitRatio` and the sidebar fold, and wires the hook. |
+
+Rules:
+
+- Motion uses the `motion` package (pinned at 14.0.0) through a strict
+  `LazyMotion` with `domAnimation` in `main.tsx`, under
+  `MotionConfig reducedMotion="user"`. Only `m.*` elements are used.
+- A fold animates one CSS variable, `--fold`, on the folding pane's
+  container. The staying pane is `flex-1`, so it fills the row on every
+  frame: no gap and no end-of-fold jump. No clip-path or transform touches
+  a terminal, and none remains at rest.
+- Terminals hold their size during a fold and refit once at the end. One
+  shared 1000ms watchdog covers all holds and restarts on every hold or
+  mid-fold toggle. The left terminal is never remounted by a split open
+  or close.
+- Keyboard toggles (⌘B, ⌘\, palette commands) stay instant.
+- With reduced motion, panes and menus fade (at least 150ms) and the
+  layout changes in one step. The panes read the setting live because
+  motion's `useReducedMotion` reads it once per mount.
+- `ContextMenu` and the new-shell menu animate in and out. A leaving menu
+  drops its backdrop, role and test id and takes no pointer or keyboard
+  input; reopening during an exit reuses the same instance, and a menu
+  opened with `autoFocus` refocuses its first item.
+
 ### Terminal focus
 
 When a window gains OS focus, or the user switches project, the visible
@@ -285,6 +328,8 @@ Rules:
   click moves focus to the field.
 - In-app shell tab switches and main-tab (Files ↔ Shell) switches do not
   move focus.
+- Closing the split from its header returns focus to the left terminal.
+  **To tab** focuses the moved shell's terminal once it is the active pane.
 
 ### Claude notifications
 
@@ -669,6 +714,11 @@ the whole side falls back to escaped plain text.
 | `mermaid` | 11.17.2, exact pin | Diagrams. Version 12 requires Node 22, and the repo uses Node 20. |
 
 ## Architectural Decisions
+
+- **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
+  old when added, inside the usual release-age window; it was accepted
+  because 14.0.0 equals 13.5.1 minus internal APIs, and older 13.x
+  releases lack the `AnimatePresence` fixes in 13.4.5 and 13.4.6.
 
 - **Mermaid loads lazily.** `mermaidRenderer.ts` reaches `mermaid` only
   through `import('mermaid')` (`mermaidRenderer.ts:52`). Vite puts it in a

@@ -8,6 +8,7 @@ import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS } from '@renderer/sidebar-copy';
 import { addRootFromPicker, buildAddMenuItems, rescanRoots } from '@renderer/sidebar-add-menu';
+import { AnimatePresence } from 'motion/react';
 import { ContextMenu } from './ContextMenu';
 
 interface Props {
@@ -71,7 +72,9 @@ export function SidebarHeader({ filter, onFilterChange, onNewProject, roots, ref
       >
         <PlusIcon />
       </button>
-      {menuAt && <ContextMenu x={menuAt.x} y={menuAt.y} items={items} onClose={closeMenu} autoFocus />}
+      <AnimatePresence>
+        {menuAt && <ContextMenu key="context-menu" x={menuAt.x} y={menuAt.y} items={items} onClose={closeMenu} autoFocus />}
+      </AnimatePresence>
     </div>
   );
 }

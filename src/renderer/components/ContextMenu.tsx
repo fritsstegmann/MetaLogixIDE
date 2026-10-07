@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { m, useIsPresent, useReducedMotion } from 'motion/react';
+import { menuMotion } from '../menu-motion';
 
 export interface ContextMenuItem {
   label: string;
@@ -35,10 +37,14 @@ export function nextEnabledIndex(items: ContextMenuItem[], from: number, dir: 1 
 }
 
 /** Opt-in menu keyboard for ContextMenu: refs for each item button, initial focus on the first enabled item, and an ArrowUp/ArrowDown handler. */
-function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean) {
+function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean, present: boolean) {
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const initialFocus = useRef(enabled ? nextEnabledIndex(items, -1, 1) : -1);
-  useEffect(() => { itemRefs.current[initialFocus.current]?.focus(); }, []);
+  const latest = useRef({ items, enabled });
+  latest.current = { items, enabled };
+  useEffect(() => {
+    const { items: current, enabled: on } = latest.current;
+    if (present && on) itemRefs.current[nextEnabledIndex(current, -1, 1)]?.focus();
+  }, [present]);
 
   function onMenuKeyDown(e: React.KeyboardEvent) {
     if (!enabled || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
@@ -52,56 +58,82 @@ function useMenuKeyboard(items: ContextMenuItem[], enabled: boolean) {
   return { itemRefs, onMenuKeyDown };
 }
 
-/** Floating menu at (x, y), clamped to the viewport; Escape or an outside click calls `onClose`, and choosing an item closes before running it. */
-export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) {
-  const { itemRefs, onMenuKeyDown } = useMenuKeyboard(items, autoFocus);
-
+/** Closes on Escape while `active`; a leaving menu must not hold the listener. */
+function useEscapeClose(onClose: () => void, active: boolean) {
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, active]);
+}
 
-  // Clamp so the menu stays inside the viewport.
+/** Top-left of a menu at (x, y) clamped so it stays inside the viewport. */
+function clampToViewport(x: number, y: number, count: number): { left: number; top: number } {
   const maxX = typeof window !== 'undefined' ? window.innerWidth - 220 : x;
-  const maxY = typeof window !== 'undefined' ? window.innerHeight - items.length * 28 - 12 : y;
-  const clampedX = Math.min(x, maxX);
-  const clampedY = Math.min(y, maxY);
+  const maxY = typeof window !== 'undefined' ? window.innerHeight - count * 28 - 12 : y;
+  return { left: Math.min(x, maxX), top: Math.min(y, maxY) };
+}
+
+function itemTone(it: ContextMenuItem): string {
+  if (it.disabled) return 'text-[--text-muted] cursor-not-allowed opacity-60';
+  return it.danger ? 'text-[--danger] hover:bg-[--danger]/15' : 'text-[--text] hover:bg-[--panel]';
+}
+
+function MenuItemRow({ item, buttonRef, onChoose }: {
+  item: ContextMenuItem;
+  buttonRef: (el: HTMLButtonElement | null) => void;
+  onChoose: () => void;
+}) {
+  return (
+    <div>
+      <button
+        ref={buttonRef}
+        disabled={item.disabled}
+        onClick={onChoose}
+        className={`w-full text-left px-3 py-1 flex items-center justify-between gap-3 ${itemTone(item)}`}
+        role="menuitem"
+        data-testid={item.testId}
+      >
+        <span>{item.label}</span>
+        {item.hint && <span className="text-xs text-[--text-muted]">{item.hint}</span>}
+      </button>
+      {item.separatorAfter && <div className="my-1 h-px bg-[--border]" />}
+    </div>
+  );
+}
+
+/** Floating menu at (x, y), clamped to the viewport; Escape or an outside click calls `onClose`, and choosing an item closes before running it. While leaving it is inert: no backdrop, pointer or keyboard activation. */
+export function ContextMenu({ x, y, items, onClose, autoFocus = false }: Props) {
+  const present = useIsPresent();
+  const { itemRefs, onMenuKeyDown } = useMenuKeyboard(items, autoFocus, present);
+  const motionProps = menuMotion(useReducedMotion() ?? false);
+  useEscapeClose(onClose, present);
+  const { left, top } = clampToViewport(x, y, items.length);
+  const leavingProps = present ? {} : { inert: '' };
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div
-        className="popover fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl backdrop-blur-md py-1 text-sm"
+      {present && <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />}
+      <m.div
+        {...motionProps}
+        {...leavingProps}
+        className={`fixed z-50 min-w-[200px] rounded-md border border-[--border] bg-[--panel-strong] shadow-xl backdrop-blur-md py-1 text-sm${present ? '' : ' pointer-events-none'}`}
         // Grow out of the click point, even when clamping shifted the menu.
-        style={{ left: clampedX, top: clampedY, transformOrigin: `${x - clampedX}px ${y - clampedY}px` }}
-        role="menu"
-        data-testid="context-menu"
+        style={{ left, top, transformOrigin: `${x - left}px ${y - top}px` }}
+        role={present ? 'menu' : undefined}
+        data-testid={present ? 'context-menu' : 'context-menu-leaving'}
         onKeyDown={onMenuKeyDown}
       >
         {items.map((it, i) => (
-          <div key={i}>
-            <button
-              ref={(el) => { itemRefs.current[i] = el; }}
-              disabled={it.disabled}
-              onClick={() => { onClose(); it.onClick(); }}
-              className={`w-full text-left px-3 py-1 flex items-center justify-between gap-3 ${
-                it.disabled
-                  ? 'text-[--text-muted] cursor-not-allowed opacity-60'
-                  : it.danger
-                    ? 'text-[--danger] hover:bg-[--danger]/15'
-                    : 'text-[--text] hover:bg-[--panel]'
-              }`}
-              role="menuitem"
-              data-testid={it.testId}
-            >
-              <span>{it.label}</span>
-              {it.hint && <span className="text-xs text-[--text-muted]">{it.hint}</span>}
-            </button>
-            {it.separatorAfter && <div className="my-1 h-px bg-[--border]" />}
-          </div>
+          <MenuItemRow
+            key={i}
+            item={it}
+            buttonRef={(el) => { itemRefs.current[i] = el; }}
+            onChoose={() => { if (!present) return; onClose(); it.onClick(); }}
+          />
         ))}
-      </div>
+      </m.div>
     </>
   );
 }

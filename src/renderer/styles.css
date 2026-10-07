@@ -692,11 +692,6 @@ input::placeholder, textarea::placeholder {
   .toast { opacity: 0; transform: translateY(100%); }
 }
 
-/* Shell split: the left pane fills the row alone and only takes its ratio
- * while the right pane (divider + shell) is mounted next to it. */
-.split-left { width: 100%; }
-.split-left:not(:only-child) { width: var(--split-left); }
-
 /* Press feedback for primary actions — confirms the click landed. */
 .pressable {
   transition-property: color, background-color, border-color, filter, transform;
@@ -885,6 +880,10 @@ kbd {
   --surface-raised: color-mix(in oklab, var(--panel-strong) 92%, white);
   /* Off track of a switch. */
   --switch-off: color-mix(in oklab, var(--text) 22%, transparent);
+  /* Split shell: pane card surface, focused-pane ring, divider grab pill. */
+  --surface-pane: color-mix(in oklab, var(--panel-strong) 70%, var(--bg));
+  --pane-ring: color-mix(in srgb, var(--accent) 28%, transparent);
+  --split-grip: color-mix(in oklab, var(--text) 22%, transparent);
 
   --hue-yellow: var(--term-yellow, var(--hue-yellow-default));
   --hue-purple: var(--term-magenta, var(--hue-purple-default));

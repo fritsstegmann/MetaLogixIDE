@@ -10,6 +10,7 @@ import type { Project, Root } from '@shared/types';
 import type { ClaudeShellState } from '@shared/claude-state';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { StatusDot } from './StatusDot';
 import { ENV_COPY } from '@renderer/project-env-copy';
@@ -293,9 +294,11 @@ function ProjectRow({
           <RowXIcon />
         </button>
       )}
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
-      )}
+      <AnimatePresence>
+        {menu && (
+          <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
 import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
@@ -42,15 +43,21 @@ import { useGitStatus } from './hooks/useGitStatus';
 import { terminalFocus, useWindowTerminalFocus } from './hooks/useWindowTerminalFocus';
 import { useReportViewedShells } from './hooks/useReportViewedShells';
 import { Tooltip } from './components/Tooltip';
-import { Reveal, REVEAL_OUT_MS } from './components/Reveal';
+import { FoldPane } from './components/FoldPane';
+import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion';
+import { useTerminalGeometryHold } from './hooks/useTerminalGeometryHold';
+import { useSplitLifecycle } from './hooks/useSplitLifecycle';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
 import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
-import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { useApplyUiFont } from './fonts/use-apply-ui-font';
+import { XIcon } from './components/shell-icons';
+import { ShellTabsBar } from './components/ShellTabsBar';
+import { ShellSplit } from './components/ShellSplit';
+import { ShellTabDot } from './components/ShellTabDot';
+import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
+import { shellChipLabel, stripShells } from './shell-label';
 
-const piIconUrl = new URL('./assets/cli-icons/pi.svg', import.meta.url).href;
-const ompIconUrl = new URL('./assets/cli-icons/omp.svg', import.meta.url).href;
 
 interface PopoutInfo {
   projectId: number;
@@ -62,6 +69,23 @@ interface ProjectUiState {
   activeShellIndex: number;
   rightShellIndex: number | null;
   splitRatio: number;
+}
+
+/**
+ * The sidebar fold's flags and terminal hold. `animate` is sampled when `open` flips: mouse
+ * toggles fold (holding terminal geometry until the fold completes), keyboard toggles are instant
+ * and take no hold. Returns the `custom` for the fold and its completion handler.
+ */
+function useSidebarFold(open: boolean, animate: boolean) {
+  const reduced = usePrefersReducedMotion();
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [folding, setFolding] = useState(false);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    setFolding(animate);
+  }
+  useTerminalGeometryHold(folding, open);
+  return { custom: { instant: !animate, reduced }, onFoldComplete: () => setFolding(false) };
 }
 
 function readPopout(): PopoutInfo | null {
@@ -194,12 +218,12 @@ function MainApp() {
   const projectState = projectKey ? projectStates[projectKey] : undefined;
   const activeShellIndex = projectState?.activeShellIndex ?? 0;
   const rightShellIndex = projectState?.rightShellIndex ?? null;
-  const splitRatio = projectState?.splitRatio ?? 0.5;
+  const splitRatio = sanitizeRatio(projectState?.splitRatio);
   const patchProjectState = useCallback((patch: Partial<ProjectUiState>) => {
     if (!projectKey) return;
     setProjectStates((prev) => ({
       ...prev,
-      [projectKey]: { activeShellIndex: 0, rightShellIndex: null, splitRatio: 0.5, ...prev[projectKey], ...patch },
+      [projectKey]: { activeShellIndex: 0, rightShellIndex: null, splitRatio: SPLIT_RATIO_DEFAULT, ...prev[projectKey], ...patch },
     }));
   }, [projectKey, setProjectStates]);
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
@@ -210,7 +234,7 @@ function MainApp() {
     const key = String(projectId);
     setProjectStates((prev) => ({
       ...prev,
-      [key]: { rightShellIndex: null, splitRatio: 0.5, ...prev[key], activeShellIndex: idx },
+      [key]: { rightShellIndex: null, splitRatio: SPLIT_RATIO_DEFAULT, ...prev[key], activeShellIndex: idx },
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
@@ -226,6 +250,7 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
+  const sidebarFold = useSidebarFold(sidebarOpen, sidebarAnimate);
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
@@ -253,6 +278,9 @@ function MainApp() {
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
+  const split = useSplitLifecycle({
+    selectedId: selected?.id ?? null, mainTab, aliveShells: allProjectShells, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped,
+  });
   const { status: git } = useGitStatus(selected?.id ?? null);
   const diffCount = diffTabCount(git);
   // Once a NON-primary shell (idx > 0) is popped out into its own window,
@@ -518,6 +546,16 @@ function MainApp() {
     void pick(p);
   }
 
+  /** One split pane's shell: the chip's label and dot inputs, falling back to the full shell list for a popped right shell that has left the strip. */
+  function splitPane(projectId: number, index: number) {
+    return {
+      index,
+      label: shellChipLabel(projectShells, index) || shellChipLabel(allProjectShells, index),
+      dot: <ShellTabDot projectId={projectId} shellIndex={index} isActive={index === activeShellIndex} />,
+      popped: isPopped(projectId, index),
+    };
+  }
+
   function mainBody(project: Project) {
     switch (mainTab) {
       case 'shell':
@@ -526,13 +564,14 @@ function MainApp() {
             key={project.id}
             projectId={project.id}
             projectName={project.name}
-            leftIndex={activeShellIndex}
-            rightIndex={rightShellIndex}
+            panes={{
+              left: splitPane(project.id, activeShellIndex),
+              right: rightShellIndex != null ? splitPane(project.id, rightShellIndex) : null,
+              path: project.path,
+              ...split.paneActions(project.id),
+            }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
-            isPoppedLeft={isPopped(project.id, activeShellIndex)}
-            isPoppedRight={rightShellIndex != null && isPopped(project.id, rightShellIndex)}
-            onCloseSplit={closeSplit}
             onOpenFile={(relPath, line) => {
               setMainTab('files');
               setOpenInFiles({ relPath, line });
@@ -654,22 +693,10 @@ function MainApp() {
     try {
       const { shellIndex } = await api.invoke('shells:launch-plain', { projectId: selected.id });
       setRightShellIndex(shellIndex);
-      setSplitRatio(0.5);
+      setSplitRatio(SPLIT_RATIO_DEFAULT);
     } catch (e) {
       toast('Failed to open split', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     }
-  }
-
-  /** Close the split. Kills the right pane's shell (it was auto-spawned for the split). */
-  async function closeSplit() {
-    if (!selected || rightShellIndex == null) return;
-    const idx = rightShellIndex;
-    setRightShellIndex(null);
-    // Let the pane fold away with its shell still live, rather than showing
-    // an exited terminal on the way out.
-    await new Promise((r) => setTimeout(r, REVEAL_OUT_MS));
-    try { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: idx }); }
-    catch { /* fine — the shell may already be gone */ }
   }
 
   async function unloadCurrent() {
@@ -739,92 +766,96 @@ function MainApp() {
           gitDirty={git.dirty ? Object.keys(git.files).length : undefined}
           taskCount={taskCount || undefined}
         />
-        <Reveal show={sidebarOpen} animate={sidebarAnimate} className="flex h-full min-h-0 shrink-0">
-          {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-              sits alongside it in its own resizable column instead of
-              replacing it, so the user never has to swap views just to pick
-              a different project. */}
-          <Sidebar
-            selectedProjectId={selected?.id ?? null}
-            onSelect={pick}
-            onNewProject={() => setNewProjectOpen(true)}
-            onEditEnv={editEnv}
-            width={sidebarWidth}
-          />
-          <ResizeHandle
-            value={sidebarWidth}
-            onChange={setSidebarWidth}
-            onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
-            min={SIDEBAR_WIDTH.min}
-            max={SIDEBAR_WIDTH.max}
-            side="left"
-          />
-          {activeView === 'chat' && (
-            <>
-              <div
-                data-view="chat"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <ChatTab
-                  projectId={selected?.id ?? 0}
-                  metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                  compact
-                  onDismiss={() => setActiveView('projects')}
-                />
-              </div>
+        <AnimatePresence initial={false} custom={sidebarFold.custom}>
+          {sidebarOpen && (
+            <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
+              {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
+                  sits alongside it in its own resizable column instead of
+                  replacing it, so the user never has to swap views just to pick
+                  a different project. */}
+              <Sidebar
+                selectedProjectId={selected?.id ?? null}
+                onSelect={pick}
+                onNewProject={() => setNewProjectOpen(true)}
+                onEditEnv={editEnv}
+                width={sidebarWidth}
+              />
               <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={300}
-                max={640}
+                value={sidebarWidth}
+                onChange={setSidebarWidth}
+                onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+                min={SIDEBAR_WIDTH.min}
+                max={SIDEBAR_WIDTH.max}
                 side="left"
               />
-            </>
+              {activeView === 'chat' && (
+                <>
+                  <div
+                    data-view="chat"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <ChatTab
+                      projectId={selected?.id ?? 0}
+                      metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                      compact
+                      onDismiss={() => setActiveView('projects')}
+                    />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={300}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+              {activeView === 'git' && (
+                <>
+                  <div
+                    data-view="git"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <GitPanel projectId={selected?.id ?? null} />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={280}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+              {activeView === 'tasks' && (
+                <>
+                  <div
+                    data-view="tasks"
+                    className="section-panel h-full flex flex-col shrink-0"
+                    style={{ width: chatPanelWidth }}
+                  >
+                    <TasksPanel
+                      projectId={selected?.id ?? null}
+                      onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
+                    />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={280}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
+            </FoldPane>
           )}
-          {activeView === 'git' && (
-            <>
-              <div
-                data-view="git"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <GitPanel projectId={selected?.id ?? null} />
-              </div>
-              <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={280}
-                max={640}
-                side="left"
-              />
-            </>
-          )}
-          {activeView === 'tasks' && (
-            <>
-              <div
-                data-view="tasks"
-                className="section-panel h-full flex flex-col shrink-0"
-                style={{ width: chatPanelWidth }}
-              >
-                <TasksPanel
-                  projectId={selected?.id ?? null}
-                  onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                />
-              </div>
-              <ResizeHandle
-                value={chatPanelWidth}
-                onChange={setChatPanelWidth}
-                onReset={() => setChatPanelWidth(400)}
-                min={280}
-                max={640}
-                side="left"
-              />
-            </>
-          )}
-        </Reveal>
+        </AnimatePresence>
         <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
           <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
@@ -923,7 +954,7 @@ function MainApp() {
             {selected && mainTab === 'shell' && (
               <ShellTabsBar
                 projectId={selected.id}
-                shells={projectShells}
+                shells={stripShells(projectShells, rightShellIndex, split.hiddenShells)}
                 active={activeShellIndex}
                 onSelect={setActiveShellIndex}
                 onClose={killShell}
@@ -938,7 +969,7 @@ function MainApp() {
                 onLaunchPlainTab={newPlainShellAsTab}
                 onLaunchCustom={(name, cmdLine, save) => void launchCustomCli(name, cmdLine, save, 'tab')}
                 splitOn={rightShellIndex != null}
-                onToggleSplit={() => (rightShellIndex != null ? void closeSplit() : void openSplit())}
+                onToggleSplit={() => (rightShellIndex != null ? split.closeSplit() : void openSplit())}
               />
             )}
             {selected ? mainBody(selected) : <EmptyState />}
@@ -1174,449 +1205,6 @@ function ShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
-interface CliProfileEntry {
-  name: string;
-  argv: string[];
-  env?: Record<string, string>;
-  icon?: string;
-  scope: 'project' | 'global';
-}
-
-function NewShellMenu({
-  projectId,
-  defaultCliName,
-  onLaunchProfile,
-  onLaunchPlainTab,
-  onLaunchCustom,
-  onDefaultChanged,
-  onClose,
-}: {
-  projectId: number;
-  /** Current per-project auto-launch CLI (drives the star toggle). */
-  defaultCliName: string | null;
-  onLaunchProfile: (name: string) => void;
-  onLaunchPlainTab: () => void;
-  onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
-  /** Called when the star toggle sets/clears the folder-level default. */
-  onDefaultChanged: (name: string | null) => void;
-  onClose: () => void;
-}) {
-  const [profiles, setProfiles] = useState<CliProfileEntry[]>([]);
-  const [customOpen, setCustomOpen] = useState(false);
-  const [customName, setCustomName] = useState('');
-  const [customCmd, setCustomCmd] = useState('');
-  const [customSave, setCustomSave] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { profiles } = await api.invoke('shells:cli-profiles-list', { projectId });
-        setProfiles(profiles);
-      } catch { /* ignore */ }
-    })();
-  }, [projectId]);
-
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t && t.closest('[data-new-shell-menu="1"]')) return;
-      onClose();
-    }
-    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onEsc);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onEsc);
-    };
-  }, [onClose]);
-
-  async function removeProfile(name: string) {
-    try {
-      await api.invoke('shells:cli-profiles-remove', { projectId, name });
-      setProfiles(prev => prev.filter(p => p.name !== name));
-    } catch { /* ignore */ }
-  }
-
-  if (customOpen) {
-    return (
-      <div
-        data-new-shell-menu="1"
-        className="absolute top-full right-0 mt-1 z-40 w-80 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden p-3 space-y-2 text-xs"
-      >
-        <div className="font-semibold text-sm">Run a custom command</div>
-        <input
-          value={customName}
-          onChange={(e) => setCustomName(e.target.value)}
-          placeholder="Name (optional, e.g. Llama)"
-          className="w-full bg-[--panel] border border-[--border] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-[--accent]/60"
-          autoFocus
-        />
-        <input
-          value={customCmd}
-          onChange={(e) => setCustomCmd(e.target.value)}
-          placeholder='Command, e.g. `llama chat --model llama3`'
-          className="w-full bg-[--panel] border border-[--border] rounded px-2 py-1 font-mono outline-none focus:ring-1 focus:ring-[--accent]/60"
-        />
-        <label className="flex items-center gap-2 text-[--text-muted]">
-          <input type="checkbox" checked={customSave} onChange={(e) => setCustomSave(e.target.checked)} className="accent-[color:var(--accent)]" />
-          <span>Save to this project&apos;s CLI list</span>
-        </label>
-        <div className="flex gap-2">
-          <button
-            className="flex-1 px-2 py-1.5 rounded pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110 disabled:opacity-40"
-            disabled={!customCmd.trim()}
-            onClick={() => onLaunchCustom(customName.trim(), customCmd.trim(), customSave && !!customName.trim())}
-          >
-            Run
-          </button>
-          <button className="px-3 py-1.5 rounded border border-[--border] hover:bg-[--panel] text-[--text-muted]" onClick={() => setCustomOpen(false)}>Back</button>
-        </div>
-        <div className="text-[10px] text-[--text-muted]">
-          Adds this as a new tab. To move it to a separate window afterwards, click the popout icon in the top bar.
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      data-new-shell-menu="1"
-      className="absolute top-full right-0 mt-1 z-40 w-72 rounded-md border border-[--border] bg-[--panel-strong] shadow-xl overflow-hidden"
-    >
-      <div className="px-3 py-2 border-b border-[--border]">
-        <div className="text-[10px] uppercase tracking-wider text-[--text-muted] font-semibold">
-          Add a shell
-        </div>
-        <div className="text-[10px] text-[--text-muted] mt-0.5">
-          Opens as a new tab. Use the popout icon to move it to its own window.
-        </div>
-      </div>
-      {profiles.length === 0 && (
-        <div className="px-3 py-4 text-xs text-[--text-muted] text-center">
-          No CLIs configured yet. Add one below.
-        </div>
-      )}
-      {profiles.map((p) => {
-        const isDefault = defaultCliName === p.name;
-        return (
-          <div key={p.name} className="group flex items-stretch hover:bg-[--panel]">
-            <button
-              className="flex-1 text-left px-3 py-2 text-xs flex items-center gap-2"
-              onClick={() => onLaunchProfile(p.name)}
-              title={p.argv.join(' ')}
-            >
-              <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
-                {p.icon === 'builtin:pi' ? (
-                  <span
-                    className="w-5 h-5 bg-current"
-                    style={{
-                      maskImage: `url("${piIconUrl}")`,
-                      maskSize: 'contain',
-                      maskRepeat: 'no-repeat',
-                      maskPosition: 'center',
-                      WebkitMaskImage: `url("${piIconUrl}")`,
-                      WebkitMaskSize: 'contain',
-                      WebkitMaskRepeat: 'no-repeat',
-                      WebkitMaskPosition: 'center',
-                    }}
-                  />
-                ) : p.icon === 'builtin:omp' ? (
-                  <img src={ompIconUrl} alt="" className="w-5 h-5" />
-                ) : (
-                  p.icon ?? '▸'
-                )}
-              </span>
-              <span className="flex-1 truncate font-medium">{p.name}</span>
-              {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
-              {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
-            </button>
-            {/* Star: pin as this folder's auto-launch. Click again to clear. */}
-            <button
-              className={`px-2 flex items-center transition-colors ${isDefault
-                ? 'text-[color:var(--accent)] opacity-100'
-                : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
-              onClick={async () => {
-                try {
-                  await api.invoke('shells:set-default-cli', { projectId, name: isDefault ? null : p.name });
-                  onDefaultChanged(isDefault ? null : p.name);
-                  toast(isDefault ? `Cleared folder default` : `${p.name} will auto-launch in this folder`, { kind: 'success', timeoutMs: 1400 });
-                } catch (e) {
-                  toast('Could not set default', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-                }
-              }}
-              title={isDefault ? 'Clear folder default (fall back to global)' : `Make ${p.name} the auto-launch for this folder`}
-              aria-label={isDefault ? 'Clear folder default' : `Set ${p.name} as folder default`}
-            >
-              {isDefault ? <StarFilledIcon /> : <StarIcon />}
-            </button>
-            {p.scope === 'project' && (
-              <button
-                className="px-2 opacity-0 group-hover:opacity-60 hover:opacity-100 hover:text-[--danger] flex items-center"
-                onClick={() => removeProfile(p.name)}
-                title="Remove from this project"
-              >
-                <XIcon />
-              </button>
-            )}
-          </div>
-        );
-      })}
-      <div className="border-t border-[--border]">
-        <button
-          onClick={() => setCustomOpen(true)}
-          className="w-full text-left px-3 py-2 text-xs hover:bg-[--panel] flex items-center gap-2 text-[--text-muted] hover:text-[--text]"
-        >
-          <span className="w-5 text-center text-base leading-none">＋</span>
-          <span>Add a custom command…</span>
-        </button>
-      </div>
-      <div className="border-t border-[--border]">
-        <button
-          onClick={onLaunchPlainTab}
-          className="w-full text-left px-3 py-2 text-xs hover:bg-[--panel] flex items-center justify-between"
-          title="Opens your login shell ($SHELL) at the project's directory"
-        >
-          <span className="flex items-center gap-2">
-            <span className="w-5 text-center text-base leading-none">⌨️</span>
-            <span>Terminal</span>
-          </span>
-          <span className="opacity-60 font-mono">⌘T</span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface ShellTabsBarItem {
-  projectId: number;
-  shellIndex: number;
-  pinned: boolean;
-  startedAt: string | null;
-  lastActiveAt: string | null;
-  launchName: string;
-}
-
-function ShellTabsBar({
-  projectId, shells, active, onSelect, onClose,
-  defaultCliName, onDefaultCliChanged,
-  onLaunchProfile, onLaunchPlainTab, onLaunchCustom,
-  splitOn, onToggleSplit,
-}: {
-  projectId: number;
-  shells: ShellTabsBarItem[];
-  active: number;
-  onSelect: (idx: number) => void;
-  onClose: (idx: number) => void;
-  /** Current per-folder auto-launch CLI, forwarded to NewShellMenu's star toggle. */
-  defaultCliName: string | null;
-  onDefaultCliChanged: (name: string | null) => void;
-  onLaunchProfile: (name: string) => void;
-  onLaunchPlainTab: () => void;
-  onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
-  /** True when the split view is active — the toggle icon reflects it. */
-  splitOn: boolean;
-  onToggleSplit: () => void;
-}) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  return (
-    <div className="flex items-center gap-1 px-2 py-1 text-xs shrink-0 overflow-visible">
-      <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
-        {shells.map((s) => {
-          // Show the name of the running CLI (e.g. "Claude", "Llama", "Terminal").
-          // When the same CLI runs twice, disambiguate with a #N suffix.
-          const dupes = shells.filter(x => x.launchName === s.launchName);
-          const suffix = dupes.length > 1 ? ` ${dupes.indexOf(s) + 1}` : '';
-          const label = `${s.launchName}${suffix}`;
-          const isActive = s.shellIndex === active;
-          return (
-            <div
-              key={s.shellIndex}
-              data-testid={SHELL_TAB_TEST_ID}
-              data-shell-index={s.shellIndex}
-              className={`group flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md cursor-pointer whitespace-nowrap
-                ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}
-              onClick={() => onSelect(s.shellIndex)}
-            >
-              <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />
-              <span className={`${isActive ? 'text-[--text] font-medium' : 'text-[--text-muted]'}`}>{label}</span>
-              {s.shellIndex !== 0 && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); onClose(s.shellIndex); }}
-                  className="ml-0.5 opacity-0 group-hover:opacity-70 hover:opacity-100 hover:text-[--danger] w-4 h-4 flex items-center justify-center rounded"
-                  title={`Close ${label}`}
-                >
-                  <XIcon />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {/* Split-view toggle. Opens a right pane with an auto-spawned plain
-          shell, so the user can watch Claude on the left and run one-off
-          commands on the right without leaving the main window. */}
-      <Tooltip label={splitOn ? 'Close split' : 'Split shell right'}>
-        <button
-          onClick={onToggleSplit}
-          className={`shrink-0 w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong] ${splitOn ? 'text-[color:var(--accent)]' : 'text-[--text-muted] hover:text-[--text]'}`}
-          data-testid="tabbar-split"
-        >
-          <SplitIcon />
-        </button>
-      </Tooltip>
-      {/* Add button lives at the RIGHT END of the tab strip. Click opens a
-          menu of CLIs; the selected one is added as another tab. To put it
-          in its own window instead, use the popout icon in the top toolbar
-          (it moves the currently-active tab out). */}
-      <div className="relative shrink-0">
-        <Tooltip label="Add a shell" shortcut="⌘T">
-          <button
-            onClick={() => setMenuOpen((v) => !v)}
-            className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
-            data-testid="tabbar-new-shell"
-          >
-            <PlusIcon />
-          </button>
-        </Tooltip>
-        {menuOpen && (
-          <NewShellMenu
-            projectId={projectId}
-            defaultCliName={defaultCliName}
-            onDefaultChanged={onDefaultCliChanged}
-            onLaunchProfile={(name) => { setMenuOpen(false); onLaunchProfile(name); }}
-            onLaunchPlainTab={() => { setMenuOpen(false); onLaunchPlainTab(); }}
-            onLaunchCustom={(name, cmdLine, save) => {
-              setMenuOpen(false);
-              onLaunchCustom(name, cmdLine, save);
-            }}
-            onClose={() => setMenuOpen(false)}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** One tab strip dot. Its own component so the per-shell state hook has a stable call site across a `.map()` whose length varies (D1: grey static when idle and inactive). */
-function ShellTabDot({ projectId, shellIndex, isActive }: { projectId: number; shellIndex: number; isActive: boolean }) {
-  const state = useShellClaudeState(projectId, shellIndex);
-  return <StatusDot state={state} inactiveWhenIdle={!isActive} />;
-}
-
-function ShellSplit({
-  projectId, projectName,
-  leftIndex, rightIndex,
-  ratio, onRatioChange,
-  isPoppedLeft, isPoppedRight,
-  onCloseSplit, onOpenFile,
-}: {
-  projectId: number;
-  projectName: string;
-  leftIndex: number;
-  rightIndex: number | null;           // null = single shell, no split
-  ratio: number;                       // 0..1, share of horizontal space for LEFT
-  onRatioChange: (r: number) => void;
-  isPoppedLeft: boolean;
-  isPoppedRight: boolean;
-  onCloseSplit: () => void;
-  onOpenFile: (relPath: string, line: number | null) => void;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [dragging, setDragging] = useState(false);
-  // Keep rendering the last right shell while its pane animates out.
-  const lastRight = useRef(rightIndex);
-  if (rightIndex != null) lastRight.current = rightIndex;
-  const shownRight = rightIndex ?? lastRight.current;
-
-  useEffect(() => {
-    if (!dragging) return;
-    function onMove(e: MouseEvent) {
-      const el = wrapRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const r = (e.clientX - rect.left) / rect.width;
-      // Clamp so neither pane collapses.
-      onRatioChange(Math.max(0.15, Math.min(0.85, r)));
-    }
-    function onUp() { setDragging(false); }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [dragging, onRatioChange]);
-
-  const leftPercent = `${(ratio * 100).toFixed(2)}%`;
-  // The left pane is always the same element with the same ShellTab key, so
-  // opening or closing the split never remounts its terminal. It only takes
-  // `--split-left` while the right pane is present (see .split-left in CSS).
-  return (
-    <div ref={wrapRef} className="h-full w-full flex min-h-0">
-      <div className="split-left min-h-0 min-w-0 relative" style={{ '--split-left': leftPercent } as React.CSSProperties}>
-        {isPoppedLeft
-          ? <PoppedPlaceholder projectId={projectId} shellIndex={leftIndex} name={projectName} />
-          : <ShellTab
-              key={`${projectId}:${leftIndex}`}
-              projectId={projectId}
-              shellIndex={leftIndex}
-              primary
-              onOpenFile={onOpenFile}
-            />
-        }
-      </div>
-      {/* Split toggles are click-only, so they always animate. */}
-      <Reveal show={rightIndex != null} animate className="flex-1 flex min-h-0 min-w-0">
-        {/* Draggable divider — 4 px hit target, 1 px visible line. */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={() => setDragging(true)}
-          className={`shrink-0 w-1 cursor-col-resize ${dragging ? 'bg-[color:var(--accent)]/60' : 'bg-[--surface-hover] hover:bg-[color:var(--accent)]/40'}`}
-        />
-        {shownRight != null && (
-          <div className="flex-1 min-h-0 min-w-0 relative" data-testid="split-right">
-            <button
-              onClick={onCloseSplit}
-              title="Close split (returns to single shell view)"
-              className="absolute top-1 right-1 z-10 w-6 h-6 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--danger] hover:bg-[--panel-strong]"
-            >
-              <XIcon />
-            </button>
-            {isPoppedRight
-              ? <PoppedPlaceholder projectId={projectId} shellIndex={shownRight} name={projectName} />
-              : <ShellTab
-                  key={`${projectId}:${shownRight}:right`}
-                  projectId={projectId}
-                  shellIndex={shownRight}
-                  onOpenFile={onOpenFile}
-                />
-            }
-          </div>
-        )}
-      </Reveal>
-    </div>
-  );
-}
-
-function PoppedPlaceholder({ projectId, shellIndex, name }: { projectId: number; shellIndex: number; name: string }) {
-  return (
-    <div className="h-full flex items-center justify-center p-8 text-center">
-      <div className="max-w-md space-y-3">
-        <div className="text-sm text-[--text-muted]">Shell is running in a separate window</div>
-        <div className="text-lg font-semibold">{name}</div>
-        <button
-          onClick={async () => { await api.invoke('windows:return-shell', { projectId, shellIndex }); }}
-          className="text-sm px-4 py-1.5 rounded-md pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110"
-          data-testid="return-popout"
-        >
-          Bring back to this window
-        </button>
-      </div>
-    </div>
-  );
-}
 
 function EmptyState() {
   const { roots } = useRoots();
@@ -1669,48 +1257,6 @@ function WelcomeOnboarding() {
         </div>
       </div>
     </div>
-  );
-}
-
-function XIcon() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
-
-function SplitIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <line x1="12" y1="4" x2="12" y2="20" />
-    </svg>
-  );
-}
-
-function StarIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-    </svg>
-  );
-}
-function StarFilledIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-    </svg>
   );
 }
 
