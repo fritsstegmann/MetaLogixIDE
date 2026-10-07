@@ -234,8 +234,15 @@ function MainApp() {
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
   const [pendingKills] = useState(createPendingKills);
+  // Shells moved "To tab" that become the active tab once the right pane's fold-out finishes.
+  // Same mark/take/flush bookkeeping as pending kills; activating only after the exit keeps one
+  // shell from showing in both panes while the right one folds away.
+  const [pendingActivations] = useState(createPendingKills);
   // A split closed just before the shell area unmounts never reports its exit, so kill it now.
-  useEffect(() => () => { for (const shell of pendingKills.flushAll()) killPendingShell(shell); }, [selected?.id, mainTab, pendingKills]);
+  useEffect(() => () => {
+    for (const shell of pendingKills.flushAll()) killPendingShell(shell);
+    pendingActivations.flushAll();
+  }, [selected?.id, mainTab, pendingKills, pendingActivations]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
   /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
   const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
@@ -577,6 +584,10 @@ function MainApp() {
               onClose: () => closeSplit(true),
               onRightExited: (index) => {
                 if (pendingKills.takeIfPending(project.id, index)) killPendingShell({ projectId: project.id, shellIndex: index });
+                if (pendingActivations.takeIfPending(project.id, index)) {
+                  setActiveShellIndexFor(project.id, index);
+                  terminalFocus.requestProjectFocus(project.id);
+                }
               },
             }}
             ratio={splitRatio}
@@ -716,9 +727,10 @@ function MainApp() {
     if (refocus) terminalFocus.requestProjectFocus(selected.id);
   }
 
-  /** "To tab": take the right shell out of the split without killing it; it stays a chip (or in its popout window) and the left terminal keeps focus. */
+  /** "To tab": take the right shell out of the split without killing it. Once its fold-out finishes it becomes the active tab and takes focus; a popped-out shell stays in its window and the left terminal keeps focus. */
   function moveSplitToTab() {
     if (!selected || rightShellIndex == null) return;
+    if (!isPopped(selected.id, rightShellIndex)) pendingActivations.mark(selected.id, rightShellIndex);
     setRightShellIndex(null);
     terminalFocus.requestProjectFocus(selected.id);
   }
