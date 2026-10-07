@@ -907,20 +907,20 @@ test.describe('markdown preview: diagram theme', () => {
     // Settings — its own useTheme instance.
     await win.getByTestId('settings-open').click();
     const settings = win.getByTestId('settings-modal');
-    await settings.getByRole('button', { name: 'Light', exact: true }).click();
+    await settings.getByRole('radio', { name: 'Light', exact: true }).click();
     await expect(win.locator('html')).toHaveAttribute('data-theme', 'light');
     expect((await expectTheme('light')).plain).toBe(light.plain);
 
     // System mode follows the OS preference.
     await win.emulateMedia({ colorScheme: 'dark' });
-    await settings.getByRole('button', { name: /^System/ }).click();
+    await settings.getByRole('radio', { name: /^System/ }).click();
     await expect(win.locator('html')).not.toHaveAttribute('data-theme', /.+/);
     expect((await expectTheme('dark')).plain).toBe(dark.plain);
     await win.emulateMedia({ colorScheme: 'light' });
     const systemLight = await expectTheme('light');
     expect(systemLight.plain).toBe(light.plain);
     expect(systemLight.forest).toBe(dark.forest);
-    await settings.getByRole('button', { name: 'Dark', exact: true }).click();
+    await settings.getByRole('radio', { name: 'Dark', exact: true }).click();
     await expectTheme('dark');
     let previousFill = dark.plain;
     for (const name of ['Catppuccin', 'Rosé Pine']) {

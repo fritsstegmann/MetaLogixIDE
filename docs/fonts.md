@@ -1,6 +1,6 @@
 # Fonts
 
-MetaLogix IDE has separate font preferences for application text and terminal text. Open **Settings → General → Fonts** to change them (`src/renderer/components/Settings.tsx:300-341`).
+MetaLogix IDE has separate font preferences for application text and terminal text. Open **Settings → General → Fonts** to change them (`src/renderer/components/settings/GeneralPanel.tsx:240-278`).
 
 ## UI font
 
