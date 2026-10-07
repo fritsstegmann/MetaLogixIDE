@@ -332,7 +332,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // conversation found", retry using the first variant instead. This
     // handles the case where the on-disk claude session was cleared.
     if (launch.variant === 'subsequent') {
-      const settlement = await new Promise<'ok' | 'no-session'>((resolveP) => {
+      const settlement = await new Promise<'ok' | 'no-session' | { error: string }>((resolveP) => {
         const timer = setTimeout(() => resolveP('ok'), 2500);
         const onExit = (ev: { projectId: number; shellIndex: number; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
           if (ev.projectId !== projectId || ev.shellIndex !== 0) return;
@@ -346,8 +346,18 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
           }
         };
         s.ptyManager.on('exit', onExit);
-        void s.ptyManager.spawn(projectId, 0, launch).catch(() => resolveP('ok'));
+        // Surface spawn failures instead of swallowing them — a missing
+        // `claude` binary used to end up as a blank terminal with no cause.
+        void s.ptyManager.spawn(projectId, 0, launch).catch((err: unknown) => {
+          clearTimeout(timer);
+          s.ptyManager.off('exit', onExit);
+          resolveP({ error: err instanceof Error ? err.message : String(err) });
+        });
       });
+
+      if (typeof settlement === 'object' && 'error' in settlement) {
+        throw new Error(`shell failed to start: ${settlement.error}`);
+      }
 
       if (settlement === 'no-session') {
         // Force the "first" variant: temporarily null out firstLaunchedAt

@@ -91,6 +91,12 @@ export function ShellTab({
   const [hover, setHover] = useState<HoverPreviewState | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // When the PTY exits (early launch failure, user ran `exit`, binary crashed)
+  // we show a React-state overlay with the exit code + a Re-launch button. The
+  // overlay lives outside the xterm buffer so a late-arriving snapshot that
+  // calls term.reset() can't wipe it. `null` while running.
+  const [exitInfo, setExitInfo] = useState<{ code: number | null } | null>(null);
+  const [relaunching, setRelaunching] = useState(false);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
   const primaryRef = useRef(primary);
@@ -392,11 +398,29 @@ export function ShellTab({
     projectId,
     shellIndex,
     (data) => {
+      // Any new data means we're alive again — clear a stale exit overlay.
+      if (exitInfo) setExitInfo(null);
       if (snapshotReady.current) termRef.current?.write(data);
       else pendingLive.current += data;
     },
-    () => { termRef.current?.write('\r\n[shell exited]\r\n'); },
+    (code) => {
+      termRef.current?.write('\r\n[shell exited]\r\n');
+      setExitInfo({ code });
+    },
   );
+
+  const relaunch = useCallback(async () => {
+    if (relaunching) return;
+    setRelaunching(true);
+    try {
+      await api.invoke('shells:launch', { projectId });
+      setExitInfo(null);
+    } catch (e) {
+      toast('Re-launch failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally {
+      setRelaunching(false);
+    }
+  }, [projectId, relaunching]);
 
   // Outer div = padding + background. Inner div = pure terminal viewport,
   // so xterm's own geometry math sees an element with no padding or extra chrome.
@@ -447,6 +471,32 @@ export function ShellTab({
       className="relative w-full h-full min-h-0 px-3 pt-2 pb-3 bg-transparent focus:outline-none"
     >
       <div ref={termHostRef} className="w-full h-full" />
+      {exitInfo && (
+        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
+            <span className="font-medium">
+              Shell exited{typeof exitInfo.code === 'number' ? ` (code ${exitInfo.code})` : ''}
+            </span>
+            <button
+              onClick={relaunch}
+              disabled={relaunching}
+              className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
+              data-testid="shell-relaunch"
+            >
+              {relaunching && <span className="mp-spinner" aria-hidden />}
+              <span>{relaunching ? 'Re-launching…' : 'Re-launch'}</span>
+            </button>
+            <button
+              onClick={() => setExitInfo(null)}
+              title="Dismiss"
+              className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
+              data-testid="shell-exit-dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       {dropActive && (
         <div className="absolute inset-2 pointer-events-none rounded-md border-2 border-dashed border-[color:var(--accent)] bg-[color:var(--accent)]/10 flex items-center justify-center text-xs text-[--text] font-medium">
           Drop to paste path
