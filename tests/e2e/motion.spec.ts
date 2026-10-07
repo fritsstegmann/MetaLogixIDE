@@ -16,7 +16,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { SPLIT_TESTIDS } from '../../src/renderer/split-copy';
 import { SIDEBAR_TESTIDS } from '../../src/renderer/sidebar-copy';
-import { launch, openProject, projectIdByName, projectRow, type Launched } from './helpers/focus';
+import { launch, openProject, projectIdByName, projectRow, marker, type Launched } from './helpers/focus';
 import {
   sampleDuring, contentWidth, frameLog, recordIpc, ipcLog, recordKeydowns, keydownTimes, transformParts,
   startFrames, collectFrames, type Frame,
@@ -598,5 +598,122 @@ test('AC55–AC57: under reduced motion panes and menus fade in place and layout
     await assertMenuMotion(win, 'reduced new-shell', NEW_SHELL, () => plus.click(), () => win.keyboard.press('Escape'), true);
     const add = win.getByTestId(SIDEBAR_TESTIDS.addButton);
     await assertMenuMotion(win, 'reduced sidebar +', CTX_ANY, () => add.click(), () => win.keyboard.press('Escape'), true);
+  });
+});
+
+/* ─────────────────────────────── gate regressions ─────────────────────────────── */
+
+test('AC48/AC47 regression: close → open → close inside one fold-out leaves no right shell alive', async () => {
+  await withApp(['alpha'], async (h) => {
+    const { win } = h;
+    const pill = win.getByTestId(SPLIT_TESTIDS.toggle);
+    const pressed = (v: 'true' | 'false') => win.waitForFunction(({ sel, v }) =>
+      document.querySelector(sel)?.getAttribute('aria-pressed') === v, { sel: SPLIT_TARGETS.pill, v }, { polling: 'raf' });
+
+    // Positive control: close → settle → open keeps the reopened shell; a normal close kills it.
+    await openSplit(win, 'alpha');
+    await pill.click();
+    await expect.poll(() => aliveIndices(win, 'alpha'), { message: 'normal close kills' }).toEqual([0]);
+    await waitSettled(win);
+    const reopened = await openSplit(win, 'alpha');
+    await win.waitForTimeout(800);
+    expect(await aliveIndices(win, 'alpha'), 'positive control: a reopened shell stays alive').toEqual([0, reopened]);
+
+    // Triple toggle inside the exit of `reopened`.
+    await recordIpc(h.app);
+    await startFrames(win, SPLIT_TARGETS, 3000);
+    await pill.click();
+    await pressed('false');
+    await pill.click();
+    await pressed('true');
+    await pill.click();
+    await pressed('false');
+    const frames = await collectFrames(win);
+    const log = `\nframes:\n${frameLog(frames, [['fold', 'present'], ['fold', 'w'], ['pill', 'pressed'], ['right', 'count']])}`;
+    // Precondition: the reopen and the second close both landed while the first pane was still folding out.
+    const i1 = frames.findIndex((f) => f.s.pill!.pressed === 'false');
+    const i2 = frames.findIndex((f, i) => i > i1 && f.s.pill!.pressed === 'true');
+    const i3 = frames.findIndex((f, i) => i > i2 && f.s.pill!.pressed === 'false');
+    expect([i1, i2, i3].every((i) => i >= 0), `precondition: three toggles sampled${log}`).toBe(true);
+    expect(frames[i3]!.s.fold!.present && frames[i3]!.s.fold!.w > 0.5, `precondition: the second close landed during the first exit${log}`).toBe(true);
+    expect(Math.max(...frames.map((f) => f.s.right!.count)), `never two right panes${log}`).toBeLessThanOrEqual(1);
+
+    await waitSettled(win);
+    await expect.poll(() => aliveIndices(win, 'alpha'), { timeout: 3000, message: `no right shell left alive${log}` }).toEqual([0]);
+    const killed = (await ipcLog(h.app)).filter((c) => c.ch === 'shells:kill').map((c) => (c.req as { shellIndex: number }).shellIndex);
+    expect(killed, 'the first pane\'s shell was killed').toContain(reopened);
+    expect(killed.length, 'both right shells were killed').toBe(2);
+    await win.waitForTimeout(400);
+    await expect(win.locator('[data-testid="shell-tab-button"]:not([data-shell-index="0"])'), 'no chip for either shell').toHaveCount(0);
+    await expect(win.getByTestId(SPLIT_TESTIDS.right)).toHaveCount(0);
+    await expect(pill).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+test('leaving menus are inert to the keyboard: Enter during the exit does not run the focused item', async () => {
+  await withApp(['alpha'], async (h) => {
+    const { app, win } = h;
+    const projectId = await projectIdByName(win, 'alpha');
+
+    // NewShellMenu: positive control — Enter on the open menu launches one shell.
+    const plus = win.getByTestId('tabbar-new-shell');
+    const terminalItem = win.locator(`${NEW_SHELL} button`, { hasText: 'Terminal' });
+    await recordIpc(app);
+    await plus.click();
+    await terminalItem.focus();
+    await win.keyboard.press('Enter');
+    await expect.poll(async () => (await ipcLog(app)).filter((c) => c.ch === 'shells:launch-plain').length,
+      { message: 'positive control: Enter on the open menu runs the item' }).toBe(1);
+    await win.waitForTimeout(500);
+    expect((await ipcLog(app)).filter((c) => c.ch === 'shells:launch-plain').length, 'runs it once').toBe(1);
+    await expect(win.locator(NEW_SHELL)).toHaveCount(0);
+
+    // Escape, then Enter while the menu is leaving.
+    const alive = await aliveIndices(win, 'alpha');
+    await recordIpc(app);
+    await recordKeydowns(win);
+    await plus.click();
+    await expect(win.locator(NEW_SHELL)).toBeVisible();
+    await waitSettled(win);
+    await terminalItem.focus();
+    await startFrames(win, { leaving: '[data-testid="new-shell-menu-leaving"]' }, 500);
+    await win.keyboard.press('Escape');
+    await win.keyboard.press('Enter');
+    let frames = await collectFrames(win);
+    let enterAt = (await keydownTimes(win)).filter((k) => k.key === 'Enter').at(-1)!.t;
+    expect(frames.some((f) => f.s.leaving!.present && f.t >= enterAt), `precondition: Enter landed while the menu was leaving\n${frameLog(frames, [['leaving', 'present']])}`).toBe(true);
+    await win.waitForTimeout(600);
+    expect((await ipcLog(app)).filter((c) => c.ch === 'shells:launch-plain'), 'NewShellMenu: no shell launched from the leaving menu').toEqual([]);
+    expect(await aliveIndices(win, 'alpha')).toEqual(alive);
+
+    // ContextMenu (terminal menu, Paste): positive control, then Escape + Enter during the exit.
+    const mark = marker('paste');
+    await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), mark);
+    const pastes = async () => (await ipcLog(app)).filter((c) => c.ch === 'shells:write'
+      && (c.req as { projectId: number; data: string }).projectId === projectId && (c.req as { data: string }).data === mark).length;
+    const pasteItem = win.getByRole('menuitem', { name: 'Paste' });
+    await recordIpc(app);
+    await win.locator(`${LEFT} .xterm`).click({ button: 'right' });
+    await expect(win.getByTestId('context-menu')).toBeVisible();
+    await pasteItem.focus();
+    await win.keyboard.press('Enter');
+    await expect.poll(pastes, { message: 'positive control: Enter on the open menu pastes' }).toBe(1);
+    await win.waitForTimeout(400);
+    expect(await pastes(), 'pastes once').toBe(1);
+
+    await recordIpc(app);
+    await win.locator(`${LEFT} .xterm`).click({ button: 'right' });
+    await expect(win.getByTestId('context-menu')).toBeVisible();
+    await waitSettled(win);
+    await pasteItem.focus();
+    await startFrames(win, { leaving: '[data-testid="context-menu-leaving"]' }, 500);
+    await win.keyboard.press('Escape');
+    await win.keyboard.press('Enter');
+    await win.keyboard.press('Space');
+    frames = await collectFrames(win);
+    enterAt = (await keydownTimes(win)).filter((k) => k.key === ' ').at(-1)!.t;
+    expect(frames.some((f) => f.s.leaving!.present && f.t >= enterAt), `precondition: Enter/Space landed while the menu was leaving\n${frameLog(frames, [['leaving', 'present']])}`).toBe(true);
+    await win.waitForTimeout(600);
+    expect(await pastes(), 'ContextMenu: no paste from the leaving menu').toBe(0);
   });
 });
