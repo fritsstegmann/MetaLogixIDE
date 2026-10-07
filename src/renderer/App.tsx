@@ -46,7 +46,7 @@ import { Tooltip } from './components/Tooltip';
 import { FoldPane } from './components/FoldPane';
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion';
 import { useTerminalGeometryHold } from './hooks/useTerminalGeometryHold';
-import { createPendingKills, type PendingShell } from './pending-kill';
+import { useSplitLifecycle } from './hooks/useSplitLifecycle';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
 import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
@@ -71,11 +71,6 @@ interface ProjectUiState {
   splitRatio: number;
 }
 
-/** Kills a shell whose split pane has left; a shell that is already gone is fine. */
-function killPendingShell(shell: PendingShell, onFailed: () => void): void {
-  void api.invoke('shells:kill', shell).catch(onFailed);
-}
-
 /**
  * The sidebar fold's flags and terminal hold. `animate` is sampled when `open` flips: mouse
  * toggles fold (holding terminal geometry until the fold completes), keyboard toggles are instant
@@ -89,7 +84,7 @@ function useSidebarFold(open: boolean, animate: boolean) {
     setPrevOpen(open);
     setFolding(animate);
   }
-  useTerminalGeometryHold(folding);
+  useTerminalGeometryHold(folding, open);
   return { custom: { instant: !animate, reduced }, onFoldComplete: () => setFolding(false) };
 }
 
@@ -233,20 +228,6 @@ function MainApp() {
   }, [projectKey, setProjectStates]);
   const setActiveShellIndex = useCallback((idx: number) => patchProjectState({ activeShellIndex: idx }), [patchProjectState]);
   const setRightShellIndex = useCallback((idx: number | null) => patchProjectState({ rightShellIndex: idx }), [patchProjectState]);
-  const [pendingKills] = useState(createPendingKills);
-  // Shells moved "To tab" that become the active tab once the right pane's fold-out finishes.
-  // Same mark/take/flush bookkeeping as pending kills; activating only after the exit keeps one
-  // shell from showing in both panes while the right one folds away.
-  const [pendingActivations] = useState(createPendingKills);
-  // A shell activated by "To tab" takes focus once it is the left pane. Requested after the commit
-  // that swapped the left ShellTab, so the outgoing left terminal (also primary) cannot consume it.
-  const focusActivatedRef = useRef<number | null>(null);
-  // A split closed just before the shell area unmounts never reports its exit, so kill it now.
-  useEffect(() => () => {
-    for (const shell of pendingKills.flushAll()) killPendingShell(shell, () => pendingKills.forget(shell.projectId, shell.shellIndex));
-    pendingActivations.flushAll();
-    focusActivatedRef.current = null;
-  }, [selected?.id, mainTab, pendingKills, pendingActivations]);
   const setSplitRatio = useCallback((r: number) => patchProjectState({ splitRatio: r }), [patchProjectState]);
   /** Sets the active shell of a named project. `setActiveShellIndex` is bound to the render's selected project, so it writes to the previous project when called right after a switch. */
   const setActiveShellIndexFor = useCallback((projectId: number, idx: number) => {
@@ -257,14 +238,6 @@ function MainApp() {
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
-  useEffect(() => {
-    if (selected) pendingKills.settle(selected.id, allProjectShells.map((s) => s.shellIndex));
-  }, [selected, allProjectShells, pendingKills]);
-  useEffect(() => {
-    const projectId = focusActivatedRef.current;
-    focusActivatedRef.current = null;
-    if (projectId != null && projectId === selected?.id) terminalFocus.requestProjectFocus(projectId);
-  }, [activeShellIndex, selected?.id]);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
     true,
@@ -305,6 +278,9 @@ function MainApp() {
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
+  const split = useSplitLifecycle({
+    selectedId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex, setRightShellIndex, setActiveShellIndexFor, isPopped,
+  });
   const { status: git } = useGitStatus(selected?.id ?? null);
   const diffCount = diffTabCount(git);
   // Once a NON-primary shell (idx > 0) is popped out into its own window,
@@ -592,18 +568,7 @@ function MainApp() {
               left: splitPane(project.id, activeShellIndex),
               right: rightShellIndex != null ? splitPane(project.id, rightShellIndex) : null,
               path: project.path,
-              onMoveToTab: moveSplitToTab,
-              onClose: () => closeSplit(true),
-              onRightExited: (index) => {
-                if (pendingKills.takeIfPending(project.id, index)) {
-                  killPendingShell({ projectId: project.id, shellIndex: index }, () => pendingKills.forget(project.id, index));
-                }
-                if (pendingActivations.takeIfPending(project.id, index)) {
-                  pendingActivations.forget(project.id, index);
-                  focusActivatedRef.current = project.id;
-                  setActiveShellIndexFor(project.id, index);
-                }
-              },
+              ...split.paneActions(project.id),
             }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
@@ -732,22 +697,6 @@ function MainApp() {
     } catch (e) {
       toast('Failed to open split', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     }
-  }
-
-  /** Close the split. The right pane's shell (auto-spawned for the split) is killed once its fold-out finishes, so it folds away still live. `refocus` returns focus to the left terminal when the clicked control is about to unmount. */
-  function closeSplit(refocus = false) {
-    if (!selected || rightShellIndex == null) return;
-    pendingKills.mark(selected.id, rightShellIndex);
-    setRightShellIndex(null);
-    if (refocus) terminalFocus.requestProjectFocus(selected.id);
-  }
-
-  /** "To tab": take the right shell out of the split without killing it. Once its fold-out finishes it becomes the active tab and takes focus; a popped-out shell stays in its window and the left terminal keeps focus. */
-  function moveSplitToTab() {
-    if (!selected || rightShellIndex == null) return;
-    if (!isPopped(selected.id, rightShellIndex)) pendingActivations.mark(selected.id, rightShellIndex);
-    setRightShellIndex(null);
-    terminalFocus.requestProjectFocus(selected.id);
   }
 
   async function unloadCurrent() {
@@ -1004,7 +953,7 @@ function MainApp() {
             {selected && mainTab === 'shell' && (
               <ShellTabsBar
                 projectId={selected.id}
-                shells={stripShells(projectShells, rightShellIndex, selected ? pendingKills.hidden(selected.id) : [])}
+                shells={stripShells(projectShells, rightShellIndex, split.hiddenShells)}
                 active={activeShellIndex}
                 onSelect={setActiveShellIndex}
                 onClose={killShell}
@@ -1019,7 +968,7 @@ function MainApp() {
                 onLaunchPlainTab={newPlainShellAsTab}
                 onLaunchCustom={(name, cmdLine, save) => void launchCustomCli(name, cmdLine, save, 'tab')}
                 splitOn={rightShellIndex != null}
-                onToggleSplit={() => (rightShellIndex != null ? closeSplit() : void openSplit())}
+                onToggleSplit={() => (rightShellIndex != null ? split.closeSplit() : void openSplit())}
               />
             )}
             {selected ? mainBody(selected) : <EmptyState />}

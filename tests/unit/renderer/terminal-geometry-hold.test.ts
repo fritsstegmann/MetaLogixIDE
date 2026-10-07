@@ -76,7 +76,7 @@ describe('terminal geometry hold', () => {
     expect(cb).toHaveBeenCalledTimes(2);
   });
 
-  it("a hold's watchdog releases only that hold", () => {
+  it('a new hold restarts the watchdog for every outstanding hold', () => {
     const g = createTerminalGeometryHold();
     const cb = vi.fn();
     g.onRelease(cb);
@@ -89,6 +89,40 @@ describe('terminal geometry hold', () => {
     vi.advanceTimersByTime(HOLD_WATCHDOG_MS / 2);
     expect(g.isHeld()).toBe(false);
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('renew restarts the watchdog, so a chain of toggles keeps its hold', () => {
+    const g = createTerminalGeometryHold();
+    const cb = vi.fn();
+    g.onRelease(cb);
+    g.hold();
+    vi.advanceTimersByTime(HOLD_WATCHDOG_MS * 0.8);
+    g.renew();
+    vi.advanceTimersByTime(HOLD_WATCHDOG_MS * 0.7);
+    expect(g.isHeld()).toBe(true);
+    expect(cb).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(HOLD_WATCHDOG_MS * 0.3);
+    expect(g.isHeld()).toBe(false);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('renew without a hold does nothing', () => {
+    const g = createTerminalGeometryHold();
+    const cb = vi.fn();
+    g.onRelease(cb);
+    g.renew();
+    vi.advanceTimersByTime(HOLD_WATCHDOG_MS * 2);
+    expect(g.isHeld()).toBe(false);
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('a release from before the watchdog fired cannot end a later hold', () => {
+    const g = createTerminalGeometryHold();
+    const stale = g.hold();
+    vi.advanceTimersByTime(HOLD_WATCHDOG_MS);
+    g.hold();
+    stale();
+    expect(g.isHeld()).toBe(true);
   });
 
   it('stops notifying after unsubscribe', () => {

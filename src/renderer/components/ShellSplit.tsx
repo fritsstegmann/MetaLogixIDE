@@ -18,7 +18,7 @@ export interface SplitPane {
   popped: boolean;
 }
 
-/** What the split shows and does: left pane, right pane (null = single shell), project path for the headers, the right pane's actions, and the report that a right pane's fold-out has finished. */
+/** What the split shows and does: left pane, right pane (null = single shell), project path for the headers, the right pane's actions, and the reports that one right pane's fold-out has finished and that every exit has settled. */
 export interface SplitPanes {
   left: SplitPane;
   right: SplitPane | null;
@@ -26,6 +26,7 @@ export interface SplitPanes {
   onMoveToTab: () => void;
   onClose: () => void;
   onRightExited: (index: number) => void;
+  onExitsSettled: () => void;
 }
 
 interface Props {
@@ -90,7 +91,7 @@ function usePaneMode(right: SplitPane | null) {
     setOpening(rightIndex != null);
     if (prevRight == null) setFocused('left');
   }
-  useTerminalGeometryHold(opening || exiting);
+  useTerminalGeometryHold(opening || exiting, rightIndex);
   const reduced = usePrefersReducedMotion();
   const paneMode = right != null || exiting;
   return {
@@ -156,7 +157,7 @@ export function ShellSplit({ projectId, projectName, panes, ratio, onRatioChange
         )}
         <PaneBody {...body} pane={panes.left} primary rightKey={false} />
       </div>
-      <AnimatePresence initial={false} mode="wait" custom={custom} onExitComplete={onExited}>
+      <AnimatePresence initial={false} mode="wait" custom={custom} onExitComplete={() => { onExited(); panes.onExitsSettled(); }}>
         {right && (
           <FoldPane
             key={right.index}
