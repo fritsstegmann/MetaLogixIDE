@@ -251,7 +251,10 @@ The shell area shows one pane, or two side by side when the split is open.
 The split's right shell is not a tab: it has no chip in the strip while it
 sits in the split. **To tab** moves it into the strip without killing it,
 and once its fold-out finishes it becomes the active tab and takes focus.
-Closing the split kills the right shell when its fold-out finishes.
+Closing the split kills the right shell when its fold-out finishes; when
+all of the split's exits settle, any shell still awaiting a kill (for
+example one queued by a fast close, open, close) is killed too. A closing
+shell stays out of the strip until its kill settles.
 
 | Layer | File | Responsibility |
 |---|---|---|
@@ -260,7 +263,7 @@ Closing the split kills the right shell when its fold-out finishes.
 | Logic | `src/renderer/shell-label.ts`, `split-ratio.ts`, `split-copy.ts` | Chip labels and which shells the strip hides; the ratio default, clamp and sanitising; exact test ids and copy. |
 | Logic | `src/renderer/pane-fold.ts`, `pending-kill.ts`, `terminal-geometry-hold.ts`, `menu-motion.ts`, `motion-tokens.ts` | Fold and menu transitions, shells awaiting a kill or an activation after their exit, the terminal size hold, and the shared durations and easings. |
 | Adapter | `src/renderer/hooks/useTerminalGeometryHold.ts`, `usePrefersReducedMotion.ts` | Holds terminal refits while a fold runs; reads the OS reduced-motion setting live. |
-| State | `src/renderer/App.tsx` | `rightShellIndex`, `splitRatio`, the To tab and close handlers, and the sidebar fold. |
+| State | `src/renderer/hooks/useSplitLifecycle.ts`, `src/renderer/App.tsx` | The hook owns close, To tab, and the pending kill and activation sets with their flush and focus effects; App holds `rightShellIndex`, `splitRatio` and the sidebar fold, and wires the hook. |
 
 Rules:
 
@@ -271,16 +274,18 @@ Rules:
   container. The staying pane is `flex-1`, so it fills the row on every
   frame: no gap and no end-of-fold jump. No clip-path or transform touches
   a terminal, and none remains at rest.
-- Terminals hold their size during a fold and refit once at the end
-  (1000ms watchdog). The left terminal is never remounted by a split open
+- Terminals hold their size during a fold and refit once at the end. One
+  shared 1000ms watchdog covers all holds and restarts on every hold or
+  mid-fold toggle. The left terminal is never remounted by a split open
   or close.
 - Keyboard toggles (⌘B, ⌘\, palette commands) stay instant.
 - With reduced motion, panes and menus fade (at least 150ms) and the
   layout changes in one step. The panes read the setting live because
   motion's `useReducedMotion` reads it once per mount.
 - `ContextMenu` and the new-shell menu animate in and out. A leaving menu
-  drops its backdrop, role and test id and takes no clicks; reopening
-  during an exit reuses the same instance and refocuses its first item.
+  drops its backdrop, role and test id and takes no pointer or keyboard
+  input; reopening during an exit reuses the same instance, and a menu
+  opened with `autoFocus` refocuses its first item.
 
 ### Terminal focus
 
