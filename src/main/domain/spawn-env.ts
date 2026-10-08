@@ -20,7 +20,7 @@ export interface SpawnEnvInput {
 }
 
 export interface SpawnEnv {
-  /** Overlay for `PtyManager.spawn`: template env ⊕ interpolated project variables. */
+  /** Overlay for `PtyManager.spawn`: interpolated app-wide variables ⊕ template env ⊕ interpolated project variables. */
   env: Record<string, string>;
   /** inherited ⊕ env — the lookup for `${env.NAME}` in template argv (AC13). */
   lookup: Record<string, string>;
