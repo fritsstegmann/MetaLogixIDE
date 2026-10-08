@@ -19,7 +19,7 @@ function props(over: Partial<ListProps> = {}): ListProps {
   return {
     rows: ROWS,
     load: 'ready',
-    reveal: { isRevealed: () => false, toggle: vi.fn(), clearAll: vi.fn() },
+    reveal: { isRevealed: () => false, toggle: vi.fn(), hide: vi.fn(), clearAll: vi.fn() },
     onCopy: vi.fn(),
     onOpenAppEnv: vi.fn(),
     ...over,
@@ -162,6 +162,7 @@ describe('InheritedEnvList rows (AC17-AC19)', () => {
       reveal: {
         isRevealed: (key) => key === 'app:GITHUB_TOKEN',
         toggle: vi.fn(),
+        hide: vi.fn(),
         clearAll: vi.fn(),
       },
     });

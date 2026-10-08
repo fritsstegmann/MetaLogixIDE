@@ -4,16 +4,20 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   EnvEditor,
   EnvRowEditor,
+  discardEnvDraft,
+  maskIfStoredRekeyed,
   envErrorDetail,
+  rowActions,
   saveEnvRows,
   type EnvRowActions,
   type EnvSource,
 } from '@renderer/components/env/EnvEditor';
 import { EnvValueField } from '@renderer/components/env/EnvValueField';
+import { createRevealTimers, rowRevealKey } from '@renderer/env-reveal';
 import type { EnvDraft, EnvDrafts } from '@renderer/hooks/useEnvDrafts';
 import { toastBus, type Toast } from '@renderer/hooks/useToasts';
 import type { RevealState } from '@renderer/hooks/useRevealState';
-import type { EnvRow } from '@renderer/project-env-rows';
+import { rowsFromEnv, type EnvRow } from '@renderer/project-env-rows';
 import { APP_ENV_COPY, APP_ENV_TESTIDS, ENV_COPY, ENV_TESTIDS } from '@renderer/project-env-copy';
 
 type Props = Record<string, unknown> & { children?: ReactNode };
@@ -22,7 +26,12 @@ type RowProps = Parameters<typeof EnvRowEditor>[0];
 type FieldProps = Parameters<typeof EnvValueField>[0];
 
 const STORED = { API_URL: 'https://prod.example', GITHUB_TOKEN: 'ghp_SECRETVALUE' };
-const masked: RevealState = { isRevealed: () => false, toggle: vi.fn(), clearAll: vi.fn() };
+const masked: RevealState = {
+  isRevealed: () => false,
+  toggle: vi.fn(),
+  hide: vi.fn(),
+  clearAll: vi.fn(),
+};
 
 function fakeDrafts(draft?: EnvDraft): EnvDrafts {
   return { get: () => draft, set: vi.fn(), clear: vi.fn(), isDirty: () => false };
@@ -124,7 +133,14 @@ describe('EnvEditor rows', () => {
         { key: 3, name: 'A', value: 'a' },
         { key: 8, name: 'B', value: 'b' },
       ],
-      { reveal: { isRevealed: (k) => k === 'row:8', toggle: vi.fn(), clearAll: vi.fn() } },
+      {
+        reveal: {
+          isRevealed: (k) => k === 'row:8',
+          toggle: vi.fn(),
+          hide: vi.fn(),
+          clearAll: vi.fn(),
+        },
+      },
     );
     const [first, second] = rowsOf(html);
     expect(tag(first ?? '', 'input', ENV_TESTIDS.value)).toContain('type="password"');
@@ -300,7 +316,7 @@ describe('EnvRowEditor actions (AC26, AC28, AC29)', () => {
       problem: null,
       reasonId: 'reason-5',
       actions: {
-        reveal: { isRevealed: () => false, toggle: vi.fn(), clearAll: vi.fn() },
+        reveal: { isRevealed: () => false, toggle: vi.fn(), hide: vi.fn(), clearAll: vi.fn() },
         onCopy: vi.fn(),
         onChange: vi.fn(),
         onRemove: vi.fn(),
@@ -356,7 +372,7 @@ describe('saveEnvRows', () => {
   ];
 
   function reveal(): RevealState {
-    return { isRevealed: () => true, toggle: vi.fn(), clearAll: vi.fn() };
+    return { isRevealed: () => true, toggle: vi.fn(), hide: vi.fn(), clearAll: vi.fn() };
   }
 
   function lastToast(): Toast | undefined {
@@ -410,5 +426,142 @@ describe('envErrorDetail', () => {
   it('drops the leading "Error: " and keeps the rest', () => {
     expect(envErrorDetail(new Error('bad "KEY"'))).toBe('bad "KEY"');
     expect(envErrorDetail('plain')).toBe('plain');
+  });
+});
+
+describe('a new row is never shown revealed (AC20, G3)', () => {
+  function liveReveal(): RevealState {
+    return createRevealTimers({ onChange: () => undefined });
+  }
+
+  function editorRows(start: EnvRow[], reveal: RevealState) {
+    let rows = start;
+    const set = (next: EnvRow[]) => {
+      rows = next;
+    };
+    return {
+      get rows() {
+        return rows;
+      },
+      set,
+      act: () => rowActions(rows, set, vi.fn(), reveal),
+    };
+  }
+
+  function revealedOnScreen(row: EnvRow, reveal: RevealState): boolean {
+    const actions: EnvRowActions = {
+      reveal,
+      onCopy: vi.fn(),
+      onChange: vi.fn(),
+      onRemove: vi.fn(),
+    };
+    const el = elements(EnvRowEditor({ row, n: 1, problem: null, reasonId: 'r', actions })).find(
+      (e) => e.type === EnvValueField,
+    );
+    return (el?.props as unknown as FieldProps).revealed;
+  }
+
+  function toggleOnScreen(row: EnvRow, reveal: RevealState) {
+    const actions: EnvRowActions = {
+      reveal,
+      onCopy: vi.fn(),
+      onChange: vi.fn(),
+      onRemove: vi.fn(),
+    };
+    const el = elements(EnvRowEditor({ row, n: 1, problem: null, reasonId: 'r', actions })).find(
+      (e) => e.type === EnvValueField,
+    );
+    (el?.props as unknown as FieldProps).onToggle();
+  }
+
+  it('remove a revealed row, then Add: the new blank row is masked', () => {
+    const reveal = liveReveal();
+    const ed = editorRows(rowsFromEnv({ A: 'a', B: 'secret-b' }), reveal);
+    const rowB = ed.rows[1]!;
+    toggleOnScreen(rowB, reveal);
+    expect(revealedOnScreen(rowB, reveal)).toBe(true);
+    ed.act().onRemove(rowB.key);
+    ed.act().onAdd();
+    const added = ed.rows.at(-1)!;
+    expect(added).toMatchObject({ name: '', value: '' });
+    expect(revealedOnScreen(added, reveal)).toBe(false);
+  });
+
+  it('removing a revealed row leaves the other revealed rows revealed', () => {
+    const reveal = liveReveal();
+    const ed = editorRows(rowsFromEnv({ A: 'a', B: 'b' }), reveal);
+    const [rowA, rowB] = ed.rows as [EnvRow, EnvRow];
+    toggleOnScreen(rowA, reveal);
+    toggleOnScreen(rowB, reveal);
+    ed.act().onRemove(rowB.key);
+    expect(revealedOnScreen(rowA, reveal)).toBe(true);
+  });
+
+  it('add, reveal, Discard, then Add: the new blank row is masked', () => {
+    const reveal = liveReveal();
+    const drafts = fakeDrafts();
+    const src = source({ drafts, stored: {} });
+    const ed = editorRows(rowsFromEnv(src.stored), reveal);
+    ed.act().onAdd();
+    toggleOnScreen(ed.rows[0]!, reveal);
+    expect(revealedOnScreen(ed.rows[0]!, reveal)).toBe(true);
+    discardEnvDraft(src, reveal);
+    expect(drafts.clear).toHaveBeenCalledWith(7);
+    ed.set(rowsFromEnv(src.stored));
+    ed.act().onAdd();
+    expect(revealedOnScreen(ed.rows.at(-1)!, reveal)).toBe(false);
+  });
+
+  it('Discard masks the restored stored rows too', () => {
+    const reveal = liveReveal();
+    const src = source();
+    const stored = rowsFromEnv(src.stored);
+    toggleOnScreen(stored[1]!, reveal);
+    discardEnvDraft(src, reveal);
+    expect(revealedOnScreen(stored[1]!, reveal)).toBe(false);
+  });
+});
+
+describe('maskIfStoredRekeyed: a stored map that changes under the shown rows masks them (AC20, G3)', () => {
+  const BEFORE = { A: 'a', B: 'secret-b' };
+
+  function revealedRow1(): RevealState {
+    const reveal = createRevealTimers({ onChange: () => undefined });
+    reveal.toggle(rowRevealKey(1));
+    return reveal;
+  }
+
+  it('re-ordered stored map with no draft: the previously revealed row is masked', () => {
+    const reveal = revealedRow1();
+    const after = { B: 'secret-b', A: 'a' };
+    maskIfStoredRekeyed(BEFORE, after, false, reveal);
+    expect(rowsFromEnv(after)[1]?.name).toBe('A');
+    expect(reveal.isRevealed(rowRevealKey(1))).toBe(false);
+  });
+
+  it('an added, removed or changed entry with no draft masks too', () => {
+    const afters: Record<string, string>[] = [
+      { ...BEFORE, C: 'c' },
+      { A: 'a' },
+      { A: 'a', B: 'other' },
+    ];
+    for (const after of afters) {
+      const reveal = revealedRow1();
+      maskIfStoredRekeyed(BEFORE, after, false, reveal);
+      expect(reveal.isRevealed(rowRevealKey(1))).toBe(false);
+    }
+  });
+
+  it('the same entries in a new object (a re-render or re-read) keep the reveal', () => {
+    const reveal = revealedRow1();
+    maskIfStoredRekeyed(BEFORE, { ...BEFORE }, false, reveal);
+    maskIfStoredRekeyed(BEFORE, BEFORE, false, reveal);
+    expect(reveal.isRevealed(rowRevealKey(1))).toBe(true);
+  });
+
+  it('keeps the reveal while a draft supplies the rows, since its keys do not move', () => {
+    const reveal = revealedRow1();
+    maskIfStoredRekeyed(BEFORE, { B: 'secret-b', A: 'a' }, true, reveal);
+    expect(reveal.isRevealed(rowRevealKey(1))).toBe(true);
   });
 });

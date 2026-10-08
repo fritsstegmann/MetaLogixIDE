@@ -5,10 +5,19 @@
  * focus logic; loading, persisting, reveal state and copying are the
  * caller's, so it never talks to main.
  */
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { toast } from '@renderer/hooks/useToasts';
 import type { EnvDraftKey, EnvDrafts } from '@renderer/hooks/useEnvDrafts';
 import type { RevealState } from '@renderer/hooks/useRevealState';
+import { rowRevealKey } from '@renderer/env-reveal';
 import { APP_ENV_COPY, APP_ENV_TESTIDS, ENV_COPY, ENV_TESTIDS } from '@renderer/project-env-copy';
 import {
   addRow,
@@ -21,7 +30,14 @@ import {
   type EnvRow,
   type EnvRowProblem,
 } from '@renderer/project-env-rows';
-import { ENV_FOCUS_RING, ENV_ICON_BUTTON, ENV_INPUT_CLASS, EnvValueField } from './EnvValueField';
+import {
+  ENV_FOCUS_RING,
+  ENV_ICON_BUTTON,
+  ENV_INPUT_CLASS,
+  ENV_RAW_TEXT,
+  EnvValueField,
+  type EnvValueLabels,
+} from './EnvValueField';
 
 export type EnvLoad = 'loading' | 'ready' | 'failed';
 
@@ -102,11 +118,20 @@ export function envErrorDetail(e: unknown): string {
   return String(e).replace(/^Error:\s*/, '');
 }
 
+function rowValueLabels(n: number): EnvValueLabels {
+  return {
+    value: ENV_COPY.valueLabel(n),
+    reveal: ENV_COPY.revealLabel(n),
+    hide: ENV_COPY.hideLabel(n),
+    copy: ENV_COPY.copyLabel(n),
+  };
+}
+
 /** One editable row: name, masked value with reveal and copy, then remove, and the row's reason under them. */
 export function EnvRowEditor({ row, n, problem, reasonId, actions }: RowProps) {
   const valueBad = problem === 'nul';
   const nameBad = problem !== null && !valueBad;
-  const revealKey = `row:${row.key}`;
+  const revealKey = rowRevealKey(row.key);
   return (
     <li className="space-y-1" data-testid={ENV_TESTIDS.row}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -116,9 +141,7 @@ export function EnvRowEditor({ row, n, problem, reasonId, actions }: RowProps) {
           aria-label={ENV_COPY.nameLabel(n)}
           aria-invalid={nameBad || undefined}
           aria-describedby={nameBad ? reasonId : undefined}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
+          {...ENV_RAW_TEXT}
           data-row-key={row.key}
           className={`${ENV_INPUT_CLASS} ${nameBad ? 'border-[--danger]' : 'border-[--border]'} sm:w-[38%] sm:flex-none`}
           data-testid={ENV_TESTIDS.name}
@@ -126,12 +149,7 @@ export function EnvRowEditor({ row, n, problem, reasonId, actions }: RowProps) {
         <div className="flex min-w-0 items-center gap-1 sm:flex-1">
           <EnvValueField
             value={row.value}
-            labels={{
-              value: ENV_COPY.valueLabel(n),
-              reveal: ENV_COPY.revealLabel(n),
-              hide: ENV_COPY.hideLabel(n),
-              copy: ENV_COPY.copyLabel(n),
-            }}
+            labels={rowValueLabels(n)}
             revealed={actions.reveal.isRevealed(revealKey)}
             onToggle={() => actions.reveal.toggle(revealKey)}
             onCopy={() => actions.onCopy(row.value)}
@@ -159,10 +177,13 @@ export function EnvRowEditor({ row, n, problem, reasonId, actions }: RowProps) {
   );
 }
 
+// useLayoutEffect runs before paint; the static-markup unit renders have no DOM, where it only warns.
+const useBeforePaintEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
+
 /** Moves focus to a row's name input or the Add button after the render that follows `request`. */
 function usePendingFocus(panel: React.RefObject<HTMLElement>, add: React.RefObject<HTMLElement>) {
   const [pending, request] = useState<PendingFocus>(null);
-  useEffect(() => {
+  useBeforePaintEffect(() => {
     if (!pending) return;
     if (pending.kind === 'add') add.current?.focus();
     else
@@ -239,8 +260,48 @@ function useSaveEnv(source: EnvSource, reveal: RevealState) {
   };
 }
 
-/** Add and remove, moving focus to the new row, the next row, or Add. */
-function rowActions(rows: EnvRow[], setRows: SetRows, requestFocus: (f: PendingFocus) => void) {
+function sameEntries(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ea = Object.entries(a);
+  const eb = Object.entries(b);
+  return ea.length === eb.length && ea.every(([k, v], i) => eb[i]?.[0] === k && eb[i]?.[1] === v);
+}
+
+/** Masks every value when the rows on screen come from the stored map (`hasDraft` false) and `next` differs from `prev` in any entry or in order, since the rows then re-key. An equal map in a new object masks nothing. */
+export function maskIfStoredRekeyed(
+  prev: Record<string, string>,
+  next: Record<string, string>,
+  hasDraft: boolean,
+  reveal: RevealState,
+): void {
+  if (!hasDraft && !sameEntries(prev, next)) reveal.clearAll();
+}
+
+/** Runs `maskIfStoredRekeyed` before paint whenever `stored` changes, so a re-keyed row is never painted revealed. */
+function useMaskOnStoredChange(
+  stored: Record<string, string>,
+  hasDraft: boolean,
+  reveal: RevealState,
+) {
+  const prev = useRef(stored);
+  useBeforePaintEffect(() => {
+    maskIfStoredRekeyed(prev.current, stored, hasDraft, reveal);
+    prev.current = stored;
+  }, [stored, hasDraft, reveal]);
+}
+
+/** Drops the draft and masks every value, since the stored rows it falls back to reuse the draft's row keys. */
+export function discardEnvDraft(source: EnvSource, reveal: RevealState): void {
+  source.drafts.clear(source.draftKey);
+  reveal.clearAll();
+}
+
+/** Add and remove, moving focus to the new row, the next row, or Add; a removed row's reveal is dropped so a later row reusing its key starts masked. */
+export function rowActions(
+  rows: EnvRow[],
+  setRows: SetRows,
+  requestFocus: (f: PendingFocus) => void,
+  reveal: RevealState,
+) {
   return {
     onAdd: () => {
       const next = addRow(rows);
@@ -250,6 +311,7 @@ function rowActions(rows: EnvRow[], setRows: SetRows, requestFocus: (f: PendingF
     onRemove: (key: number) => {
       const at = rows.findIndex((r) => r.key === key);
       const next = removeRow(rows, key);
+      reveal.hide(rowRevealKey(key));
       setRows(next);
       requestFocus(focusTarget(next[Math.min(at, next.length - 1)]));
     },
@@ -270,6 +332,7 @@ function useEnvEditor(source: EnvSource, reveal: RevealState) {
   const addRef = useRef<HTMLButtonElement>(null);
   const requestFocus = usePendingFocus(panelRef, addRef);
   const draft = drafts.get(draftKey);
+  useMaskOnStoredChange(stored, draft !== undefined, reveal);
   const rows = draft?.rows ?? storedRows;
   const baseline = load === 'ready' ? stored : (draft?.stored ?? stored);
   const setRows: SetRows = (next) => drafts.set(draftKey, { stored: baseline, rows: next });
@@ -281,10 +344,78 @@ function useEnvEditor(source: EnvSource, reveal: RevealState) {
     addRef,
     saveDisabled: load !== 'ready' || !canSave(rows),
     onChange: (key: number, patch: RowPatch) => setRows(updateRow(rows, key, patch)),
-    ...rowActions(rows, setRows, requestFocus),
+    ...rowActions(rows, setRows, requestFocus, reveal),
     onSave: () => void save(rows),
-    onDiscard: () => drafts.clear(draftKey),
+    onDiscard: () => discardEnvDraft(source, reveal),
   };
+}
+
+type Look = (typeof SCOPES)[keyof typeof SCOPES];
+
+function EnvHeading({
+  titleId,
+  look,
+  subtitle,
+}: {
+  titleId: string;
+  look: Look;
+  subtitle: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <h2 id={titleId} className={look.heading}>
+        {look.title}
+      </h2>
+      <p className={look.subtitle}>{subtitle}</p>
+    </div>
+  );
+}
+
+interface RowsListProps {
+  rows: EnvRow[];
+  problems: Array<EnvRowProblem | null>;
+  idPrefix: string;
+  actions: EnvRowActions;
+}
+
+function EnvRowsList({ rows, problems, idPrefix, actions }: RowsListProps) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="space-y-2">
+      {rows.map((row, i) => (
+        <EnvRowEditor
+          key={row.key}
+          row={row}
+          n={i + 1}
+          problem={problems[i] ?? null}
+          reasonId={`${idPrefix}reason-${row.key}`}
+          actions={actions}
+        />
+      ))}
+    </ul>
+  );
+}
+
+interface AddButtonProps {
+  buttonRef: React.RefObject<HTMLButtonElement>;
+  disabled: boolean;
+  onAdd: () => void;
+}
+
+function EnvAddButton({ buttonRef, disabled, onAdd }: AddButtonProps) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      onClick={onAdd}
+      disabled={disabled}
+      className={`text-sm px-3 py-1.5 rounded-md border border-[--border] text-[--text] hover:bg-[--panel] disabled:opacity-50 ${ENV_FOCUS_RING}`}
+      data-testid={ENV_TESTIDS.add}
+    >
+      <span aria-hidden>+ </span>
+      {ENV_COPY.addRow}
+    </button>
+  );
 }
 
 function onPanelKeyDown(e: React.KeyboardEvent) {
@@ -318,43 +449,24 @@ export function EnvEditor({ source, scope, subtitle, reveal, onCopy, children }:
       data-testid={look.panelTestId}
     >
       <div className={look.body}>
-        <div className="min-w-0">
-          <h2 id={`${id}title`} className={look.heading}>
-            {look.title}
-          </h2>
-          <p className={look.subtitle}>{subtitle}</p>
-        </div>
+        <EnvHeading titleId={`${id}title`} look={look} subtitle={subtitle} />
         <EnvNotices />
         {source.load === 'ready' && editor.rows.length === 0 && (
           <p className="text-sm text-[--text-muted]" data-testid={look.emptyTestId}>
             {look.emptyState}
           </p>
         )}
-        {editor.rows.length > 0 && (
-          <ul className="space-y-2">
-            {editor.rows.map((row, i) => (
-              <EnvRowEditor
-                key={row.key}
-                row={row}
-                n={i + 1}
-                problem={editor.problems[i] ?? null}
-                reasonId={`${id}reason-${row.key}`}
-                actions={actions}
-              />
-            ))}
-          </ul>
-        )}
-        <button
-          ref={editor.addRef}
-          type="button"
-          onClick={editor.onAdd}
+        <EnvRowsList
+          rows={editor.rows}
+          problems={editor.problems}
+          idPrefix={id}
+          actions={actions}
+        />
+        <EnvAddButton
+          buttonRef={editor.addRef}
           disabled={source.load !== 'ready'}
-          className={`text-sm px-3 py-1.5 rounded-md border border-[--border] text-[--text] hover:bg-[--panel] disabled:opacity-50 ${ENV_FOCUS_RING}`}
-          data-testid={ENV_TESTIDS.add}
-        >
-          <span aria-hidden>+ </span>
-          {ENV_COPY.addRow}
-        </button>
+          onAdd={editor.onAdd}
+        />
         <EnvActions
           saveDisabled={editor.saveDisabled}
           onDiscard={editor.onDiscard}

@@ -37,6 +37,13 @@ export const ENV_INPUT_CLASS =
 /** Tertiary icon-only button used for reveal, copy and remove. */
 export const ENV_ICON_BUTTON = `shrink-0 w-8 h-8 flex items-center justify-center rounded-md text-[--text-muted] hover:bg-[--panel] disabled:opacity-40 disabled:pointer-events-none ${ENV_FOCUS_RING}`;
 
+/** Attributes that keep the browser from rewriting env names and values as they are typed. */
+export const ENV_RAW_TEXT = {
+  spellCheck: false,
+  autoCapitalize: 'off',
+  autoCorrect: 'off',
+} as const;
+
 const ROW_BUTTON = `${ENV_ICON_BUTTON} hover:text-[--text]`;
 
 const READONLY_INPUT_CLASS =
@@ -77,12 +84,26 @@ export function EnvValueField({
         aria-invalid={reasonId ? true : undefined}
         aria-describedby={reasonId}
         autoComplete="off"
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
+        {...ENV_RAW_TEXT}
         className={`flex-1 ${inputClass(Boolean(onChange), Boolean(reasonId))}`}
         data-testid={testId}
       />
+      <EnvRowButtons
+        value={value}
+        labels={labels}
+        revealed={revealed}
+        onToggle={onToggle}
+        onCopy={onCopy}
+      />
+    </div>
+  );
+}
+
+type ButtonsProps = Pick<Props, 'value' | 'labels' | 'revealed' | 'onToggle' | 'onCopy'>;
+
+function EnvRowButtons({ value, labels, revealed, onToggle, onCopy }: ButtonsProps) {
+  return (
+    <>
       <Tooltip label={revealed ? ENV_COPY.hideTooltip : ENV_COPY.revealTooltip} focusable>
         <button
           type="button"
@@ -106,7 +127,7 @@ export function EnvValueField({
           <CopyIcon />
         </button>
       </Tooltip>
-    </div>
+    </>
   );
 }
 

@@ -5,7 +5,7 @@ import { isDraftDirty, type EnvRow } from '@renderer/project-env-rows';
 export const APP_ENV_DRAFT_KEY = 'app' as const;
 export type EnvDraftKey = number | typeof APP_ENV_DRAFT_KEY;
 
-/** Unsaved Env tab edits for one project, with the stored map they are compared against. */
+/** Unsaved edits for one draft key (a project's Env tab or the app-wide editor), with the stored map they are compared against. */
 export interface EnvDraft {
   stored: Record<string, string>;
   rows: EnvRow[];
@@ -26,26 +26,26 @@ export interface EnvDrafts {
 export function useEnvDrafts(): EnvDrafts {
   const [drafts, setDrafts] = useState<ReadonlyMap<EnvDraftKey, EnvDraft>>(() => new Map());
 
-  const set = useCallback((projectId: EnvDraftKey, draft: EnvDraft) => {
-    setDrafts((prev) => new Map(prev).set(projectId, draft));
+  const set = useCallback((key: EnvDraftKey, draft: EnvDraft) => {
+    setDrafts((prev) => new Map(prev).set(key, draft));
   }, []);
 
-  const clear = useCallback((projectId: EnvDraftKey) => {
+  const clear = useCallback((key: EnvDraftKey) => {
     setDrafts((prev) => {
-      if (!prev.has(projectId)) return prev;
+      if (!prev.has(key)) return prev;
       const next = new Map(prev);
-      next.delete(projectId);
+      next.delete(key);
       return next;
     });
   }, []);
 
   return useMemo(
     () => ({
-      get: (projectId: EnvDraftKey) => drafts.get(projectId),
+      get: (key: EnvDraftKey) => drafts.get(key),
       set,
       clear,
-      isDirty: (projectId: EnvDraftKey) => {
-        const draft = drafts.get(projectId);
+      isDirty: (key: EnvDraftKey) => {
+        const draft = drafts.get(key);
         return draft !== undefined && isDraftDirty(draft.rows, draft.stored);
       },
     }),

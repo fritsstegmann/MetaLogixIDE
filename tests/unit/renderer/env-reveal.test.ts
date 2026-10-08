@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRevealTimers, REVEAL_TIMEOUT_MS } from '@renderer/env-reveal';
+import { createRevealTimers, REVEAL_TIMEOUT_MS, rowRevealKey } from '@renderer/env-reveal';
 
 describe('env reveal timers', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('REVEAL_TIMEOUT_MS is 39 seconds (D1)', () => {
     expect(REVEAL_TIMEOUT_MS).toBe(39_000);
@@ -72,6 +76,41 @@ describe('env reveal timers', () => {
     expect(t.isRevealed('row:0')).toBe(false);
     expect(t.isRevealed('row:1')).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('hide masks one key at once, cancels its timer and leaves the others revealed', () => {
+    const onChange = vi.fn();
+    const t = createRevealTimers({ onChange });
+    t.toggle('row:0');
+    t.toggle('row:1');
+    onChange.mockClear();
+    t.hide('row:0');
+    expect(t.isRevealed('row:0')).toBe(false);
+    expect(t.isRevealed('row:1')).toBe(true);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('hide of a masked key changes nothing and does not notify', () => {
+    const onChange = vi.fn();
+    const t = createRevealTimers({ onChange });
+    t.hide('row:0');
+    expect(t.isRevealed('row:0')).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('a key revealed again after hide gets a fresh full timeout', () => {
+    const t = createRevealTimers({ onChange: vi.fn() });
+    t.toggle('row:0');
+    vi.advanceTimersByTime(30_000);
+    t.hide('row:0');
+    t.toggle('row:0');
+    vi.advanceTimersByTime(REVEAL_TIMEOUT_MS - 100);
+    expect(t.isRevealed('row:0')).toBe(true);
+  });
+
+  it('rowRevealKey namespaces an editable row key as row:<key>', () => {
+    expect(rowRevealKey(3)).toBe('row:3');
   });
 
   it('respects a custom timeoutMs', () => {

@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
-import { GeneralPanel } from '@renderer/components/settings/GeneralPanel';
-import { RootsPanel } from '@renderer/components/settings/RootsPanel';
-import { LaunchPanel } from '@renderer/components/settings/LaunchPanel';
-import { MetaprojectPanel } from '@renderer/components/settings/MetaprojectPanel';
-import { EnvironmentPanel } from '@renderer/components/settings/EnvironmentPanel';
+import { SettingsSectionPanel } from '@renderer/components/settings/SettingsSectionPanel';
 import { SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
 import { versionLabel } from '@renderer/components/settings/version-label';
 import { useAppVersion } from '@renderer/hooks/useAppVersion';
@@ -126,18 +122,12 @@ function SettingsDialog({
             envUnsaved={envDrafts.isDirty(APP_ENV_DRAFT_KEY)}
             version={version}
           />
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-7 pt-1 sm:pl-3 sm:pr-7">
-            {section === 'general' && (
-              <GeneralPanel
-                fontDiscovery={fontDiscovery}
-                onLoadInstalledFonts={onLoadInstalledFonts}
-              />
-            )}
-            {section === 'roots' && <RootsPanel />}
-            {section === 'launch' && <LaunchPanel />}
-            {section === 'env' && <EnvironmentPanel drafts={envDrafts} />}
-            {section === 'metaproject' && <MetaprojectPanel />}
-          </div>
+          <SettingsSectionPanel
+            section={section}
+            envDrafts={envDrafts}
+            fontDiscovery={fontDiscovery}
+            onLoadInstalledFonts={onLoadInstalledFonts}
+          />
         </div>
         <SettingsFooter onClose={onClose} />
       </div>

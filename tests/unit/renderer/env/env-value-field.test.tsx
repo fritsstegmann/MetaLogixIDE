@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EnvValueField, type EnvValueLabels } from '@renderer/components/env/EnvValueField';
+import { Tooltip } from '@renderer/components/Tooltip';
 import { ENV_COPY, ENV_TESTIDS } from '@renderer/project-env-copy';
 
 type Props = Record<string, unknown> & { children?: ReactNode };
@@ -36,6 +37,9 @@ function render(over: Partial<FieldProps> = {}): string {
 function elements(node: ReactNode): ReactElement<Props>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement<Props>(node)) return [];
+  if (typeof node.type === 'function' && node.type !== Tooltip) {
+    return [node, ...elements((node.type as (p: Props) => ReactNode)(node.props))];
+  }
   return [node, ...elements(node.props.children)];
 }
 
