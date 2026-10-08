@@ -7,7 +7,13 @@ import type { EnvDrafts } from '@renderer/hooks/useEnvDrafts';
 import { useRevealState } from '@renderer/hooks/useRevealState';
 import { toast } from '@renderer/hooks/useToasts';
 import { ENV_COPY } from '@renderer/project-env-copy';
-import { EnvEditor, envErrorDetail, type EnvLoad, type EnvSource } from './env/EnvEditor';
+import {
+  EnvEditor,
+  envErrorDetail,
+  useMaskOnStoredChange,
+  type EnvLoad,
+  type EnvSource,
+} from './env/EnvEditor';
 import { InheritedEnvList } from './env/InheritedEnvList';
 
 interface Props {
@@ -55,12 +61,15 @@ function useStoredEnv(projectId: number): {
  * until Save, which persists `{ env }` alone through `projects:update-config`.
  * One reveal state covers both lists and is dropped on unmount, so leaving
  * the tab masks every value. The inherited list follows the saved app-wide
- * map live; `onOpenAppEnv` opens Settings → Environment.
+ * map live, and any change to that map masks every value before paint, so an
+ * inherited row keyed by a re-added name never shows revealed.
+ * `onOpenAppEnv` opens Settings → Environment.
  */
 export function ProjectEnvTab({ projectId, projectName, drafts, onOpenAppEnv }: Props) {
   const { stored, setStored, load } = useStoredEnv(projectId);
   const appEnv = useAppEnv();
   const reveal = useRevealState();
+  useMaskOnStoredChange(appEnv.stored, false, reveal);
   const source: EnvSource = {
     draftKey: projectId,
     drafts,

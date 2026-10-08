@@ -33,6 +33,7 @@ function InheritedRow({ row, n, reveal, onCopy }: RowProps) {
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
         <span
           className="min-w-0 truncate px-2.5 font-mono text-sm text-[--text-muted] sm:w-[38%] sm:flex-none"
+          title={row.name}
           data-testid={ENV_TESTIDS.inheritedName}
         >
           {row.name}

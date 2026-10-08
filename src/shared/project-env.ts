@@ -1,7 +1,8 @@
 /**
- * Name and value rules for per-project environment variables. One source of
- * truth for the editor (inline row reasons) and the `projects:update-config`
- * IPC boundary (reject before write).
+ * Name and value rules for project and app-wide environment variables. One
+ * source of truth for both editors (inline row reasons) and the
+ * `projects:update-config` and `settings:set-app-env` IPC boundaries (reject
+ * before write).
  */
 
 /** Names with this prefix (case-insensitive) are reserved for the app's own variables. */

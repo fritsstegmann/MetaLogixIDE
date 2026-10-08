@@ -277,7 +277,7 @@ export function maskIfStoredRekeyed(
 }
 
 /** Runs `maskIfStoredRekeyed` before paint whenever `stored` changes, so a re-keyed row is never painted revealed. */
-function useMaskOnStoredChange(
+export function useMaskOnStoredChange(
   stored: Record<string, string>,
   hasDraft: boolean,
   reveal: RevealState,

@@ -516,9 +516,11 @@ Rules:
 - Both editors mask every value by default, as a password field does.
   Names are not masked. Each row has a reveal button and a copy button.
   A revealed value masks again after 39 seconds. Each row has its own
-  timer. A save that succeeds, leaving the editor, selecting another
-  project and closing Settings mask every value. Reveal state is not
-  stored.
+  timer. Removing a row masks that row. Discard, a save that succeeds, a
+  change to the stored map while no draft is open, leaving the editor,
+  selecting another project and closing Settings mask every value. In the
+  project Env tab, a change to the saved app-wide map also masks every
+  value, including the inherited rows. Reveal state is not stored.
 - Masking only hides values on screen. Values are stored as plain text in
   the local SQLite database, and the renderer holds them in memory.
 - Copy writes the raw value, with `${…}` tokens not expanded. Copy works
