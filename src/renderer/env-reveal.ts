@@ -21,6 +21,34 @@ export interface RevealTimersOptions {
 }
 
 export function createRevealTimers(opts: RevealTimersOptions): RevealTimers {
-  void opts;
-  throw new Error('createRevealTimers not implemented');
+  const timeoutMs = opts.timeoutMs ?? REVEAL_TIMEOUT_MS;
+  const timers = new Map<RevealKey, ReturnType<typeof setTimeout>>();
+
+  function hide(key: RevealKey) {
+    const timer = timers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timers.delete(key);
+    }
+  }
+
+  return {
+    toggle(key: RevealKey) {
+      if (timers.has(key)) {
+        hide(key);
+      } else {
+        timers.set(key, setTimeout(() => {
+          timers.delete(key);
+          opts.onChange();
+        }, timeoutMs));
+      }
+      opts.onChange();
+    },
+    isRevealed(key: RevealKey) {
+      return timers.has(key);
+    },
+    clearAll() {
+      for (const key of [...timers.keys()]) hide(key);
+    },
+  };
 }

@@ -1,11 +1,29 @@
-import type { RevealKey } from '@renderer/env-reveal';
+import { useEffect, useMemo, useState } from 'react';
+import { createRevealTimers, type RevealKey } from '@renderer/env-reveal';
 
 export interface RevealState {
   isRevealed(key: RevealKey): boolean;
   toggle(key: RevealKey): void;
+  /** Masks every value and cancels every timer, e.g. after a save re-keys the rows. */
+  clearAll(): void;
 }
 
 /** Per-row reveal state for one mounted editor; every value masks again on unmount (AC25). */
 export function useRevealState(): RevealState {
-  throw new Error('useRevealState not implemented');
+  const [, bump] = useState(0);
+  const timers = useMemo(
+    () => createRevealTimers({ onChange: () => bump((n) => n + 1) }),
+    [],
+  );
+
+  useEffect(() => () => timers.clearAll(), [timers]);
+
+  return useMemo(
+    () => ({
+      isRevealed: (key: RevealKey) => timers.isRevealed(key),
+      toggle: (key: RevealKey) => { timers.toggle(key); },
+      clearAll: () => { timers.clearAll(); bump((n) => n + 1); },
+    }),
+    [timers],
+  );
 }

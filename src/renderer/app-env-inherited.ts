@@ -11,7 +11,9 @@ export function inheritedRows(
   appEnv: Readonly<Record<string, string>>,
   projectSaved: Readonly<Record<string, string>> | undefined,
 ): InheritedEnvRow[] {
-  void appEnv;
-  void projectSaved;
-  throw new Error('inheritedRows not implemented');
+  return Object.entries(appEnv).map(([name, value]) => ({
+    name,
+    value,
+    overridden: projectSaved !== undefined && Object.prototype.hasOwnProperty.call(projectSaved, name),
+  }));
 }

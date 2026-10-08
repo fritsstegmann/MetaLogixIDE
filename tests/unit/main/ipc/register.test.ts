@@ -52,7 +52,7 @@ describe('registerIpc', () => {
       'projects:update-config', 'projects:recents',
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
-      'settings:get', 'settings:set', 'settings:set-font', 'settings:set-claude-permission-mode',
+      'settings:get', 'settings:set', 'settings:set-font', 'settings:set-app-env', 'settings:set-claude-permission-mode',
       'files:tree', 'app:ping', 'notifications:viewed-shells', 'claude-state:list',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
@@ -89,6 +89,104 @@ describe('registerIpc', () => {
     await expect(ipc.handlers.get('settings:set')!({}, { key, value: 'Bypass Font' })).rejects.toThrow();
     expect(setSpy).not.toHaveBeenCalled();
     expect(settings.get(key)).toBeNull();
+  });
+
+  it('settings:set rejects key app_env without writing (bypass of settings:set-app-env, AC4)', async () => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    const setSpy = vi.spyOn(settings, 'set');
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+    await expect(
+      ipc.handlers.get('settings:set')!({}, { key: 'app_env', value: { X: '1' } }),
+    ).rejects.toThrow();
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(settings.get('app_env')).toEqual({});
+  });
+
+  describe('settings:set-app-env (AC4, AC6)', () => {
+    it('a valid save replaces the whole map, returns { env }, and emits exactly one keyed settings:changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { OLD: '1' });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-app-env')!({}, { env: { NEW: '1' } }),
+      ).resolves.toEqual({ env: { NEW: '1' } });
+      expect(settings.get('app_env')).toEqual({ NEW: '1' });
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'app_env' } }]);
+    });
+
+    it('an empty map clears the stored app env', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { OLD: '1' });
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env: {} })).resolves.toEqual({
+        env: {},
+      });
+      expect(settings.get('app_env')).toEqual({});
+    });
+
+    it.each([
+      ['invalid name', { 'MY-VAR': 'x' }],
+      ['reserved name', { METAIDE_HOOK_TOKEN: 'x' }],
+      ['reserved __proto__ name', JSON.parse('{"__proto__": "x"}') as unknown],
+      ['NUL value', { TOKEN: 'S3CRET\0' }],
+      ['non-object request', 'not-a-map'],
+      ['non-string value', { TOKEN: { nested: 'S3CRET' } }],
+    ])('rejects %s, writes nothing, and emits nothing', async (_label, env) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { KEEP: '1' });
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env })).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('app_env')).toEqual({ KEEP: '1' });
+      expect(events).toEqual([]);
+    });
+
+    it('rejects a custom-prototype map and names the key, never the value', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const env = Object.create({ A: 'x' }) as Record<string, string>;
+      env.TOKEN = 'S3CRET';
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env })).rejects.toThrow();
+      expect(settings.get('app_env')).toEqual({});
+    });
+
+    it('the error names the offending key and never contains the value', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set-app-env')!({}, { env: { TOKEN: 'S3CRET\0' } }),
+      ).rejects.toThrow(/TOKEN/);
+      try {
+        await ipc.handlers.get('settings:set-app-env')!({}, { env: { TOKEN: 'S3CRET\0' } });
+      } catch (e) {
+        expect((e as Error).message).not.toContain('S3CRET');
+      }
+    });
   });
 
   it('settings:set-font normalizes, persists, returns, then emits one keyed change event', async () => {
@@ -567,6 +665,93 @@ describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
     const rows = rig.shells.list();
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows)).not.toContain('S3CRET');
+  });
+});
+
+describe('app-wide env at every spawn site (AC9, AC10, AC16)', () => {
+  it('shells:launch (first) carries the app var with no project vars', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch (subsequent) carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.spawned(0).variant).toBe('subsequent');
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch no-session fallback carries the app var on the retry', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    rig.ptyManager.spawn.mockImplementationOnce(async () => {
+      const onExit = rig.ptyManager.on.mock.calls.filter((c) => c[0] === 'exit').at(-1)![1] as (
+        ev: unknown,
+      ) => void;
+      onExit({
+        projectId: rig.a.id,
+        shellIndex: 0,
+        code: 1,
+        uptimeMs: 100,
+        earlyOutput: 'No conversation found to continue',
+      });
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(2);
+    expect(rig.spawned(1).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-plain carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-cli profile carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.updateConfig(rig.a.id, { cliProfiles: [{ name: 'prof', argv: ['node'] }] });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, profileName: 'prof' });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-cli inline argv carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, argv: ['codex'] });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('tasks:run carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('AC10 — a project value of the same name wins over the app value at one site', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.setEnv(rig.a.id, { X: 'proj' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'proj' });
+  });
+
+  it('AC16 — changing app_env between two spawns changes only the second', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'before' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    rig.settings.set('app_env', { X: 'after' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'before' });
+    expect(rig.spawned(1).env).toStrictEqual({ X: 'after' });
   });
 });
 
