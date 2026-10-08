@@ -736,6 +736,37 @@ test('project Env tab lists app-wide variables read-only, updates live, marks sa
   }
 });
 
+test('inherited row stays masked after its name is removed and re-added with a new value within the reveal window (AC19, AC20)', async ({}, testInfo) => {
+  testInfo.setTimeout(60_000);
+  h = await launch([PROJECT_A]);
+  const { win } = h;
+  await openProject(win, PROJECT_A);
+  await openEnvTab(win);
+
+  const app0 = await openAppEnv(win);
+  await addRow(app0, 1, 'FOO', 'old-secret');
+  await saveAppAndWait(win, { FOO: 'old-secret' });
+  await closeSettings(win);
+
+  // Positive control: FOO is actually revealed before the Settings edits, so the
+  // masked check below would fail if the reveal state were never keyed to the row.
+  await inheritedReveal(win, 1).click();
+  await expectRevealed(inheritedValue(win, 1));
+  await expect(inheritedReveal(win, 1)).toHaveAccessibleName(ENV_COPY.inheritedHideLabel(1));
+
+  const app1 = await openAppEnv(win);
+  await app1.getByLabel(ENV_COPY.removeLabel(1), { exact: true }).click();
+  await saveAppAndWait(win, {});
+  await addRow(app1, 1, 'FOO', 'new-secret');
+  await saveAppAndWait(win, { FOO: 'new-secret' });
+  await closeSettings(win);
+
+  // FOO reappears with the new value; it must be masked again, not still revealed.
+  await expect(inheritedValue(win, 1)).toHaveValue('new-secret');
+  await expectMasked(inheritedValue(win, 1));
+  await expect(inheritedReveal(win, 1)).toHaveAccessibleName(ENV_COPY.inheritedRevealLabel(1));
+});
+
 // ── Masking, reveal, editing while masked: AC20, AC21, AC26 ──────────────────
 
 for (const editor of EDITORS) {
