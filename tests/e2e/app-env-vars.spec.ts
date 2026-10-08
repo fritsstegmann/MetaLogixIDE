@@ -790,6 +790,56 @@ for (const editor of EDITORS) {
   });
 }
 
+// ── Row-slot reuse after reveal: AC20 regression ─────────────────────────────
+
+for (const editor of EDITORS) {
+  test(`${editor.label}: remove a revealed row then Add reuses its slot masked (AC20)`, async ({}, testInfo) => {
+    testInfo.setTimeout(60_000);
+    h = await launch([PROJECT_A]);
+    const { win } = h;
+    const panel = await editor.open(win);
+    await addRow(panel, 1, 'ONE', 'one');
+    await addRow(panel, 2, 'TWO', 'two');
+
+    // Positive control: row 2 is actually revealed, proving the type=password check
+    // below would fail if the bug reopened — type stays 'text' until masked back.
+    await revealButton(panel, 2).click();
+    await expectRevealed(valueInput(panel, 2));
+    await expect(revealButton(panel, 2)).toHaveAccessibleName(ENV_COPY.hideLabel(2));
+
+    await panel.getByLabel(ENV_COPY.removeLabel(2), { exact: true }).click();
+    await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(1);
+    await panel.getByTestId(ENV_TESTIDS.add).click();
+
+    const fresh = valueInput(panel, 2);
+    await expect(fresh).toHaveValue('');
+    await expectMasked(fresh);
+    await expect(revealButton(panel, 2)).toHaveAccessibleName(ENV_COPY.revealLabel(2));
+  });
+
+  test(`${editor.label}: reveal an added row, Discard, then Add reuses its slot masked (AC20)`, async ({}, testInfo) => {
+    testInfo.setTimeout(60_000);
+    h = await launch([PROJECT_A]);
+    const { win } = h;
+    const panel = await editor.open(win);
+    await addRow(panel, 1, 'ONE', 'one');
+
+    // Positive control: row 1 is actually revealed before the Discard.
+    await revealButton(panel, 1).click();
+    await expectRevealed(valueInput(panel, 1));
+    await expect(revealButton(panel, 1)).toHaveAccessibleName(ENV_COPY.hideLabel(1));
+
+    await panel.getByTestId(ENV_TESTIDS.discard).click();
+    await expect(panel.getByTestId(ENV_TESTIDS.row)).toHaveCount(0);
+    await panel.getByTestId(ENV_TESTIDS.add).click();
+
+    const fresh = valueInput(panel, 1);
+    await expect(fresh).toHaveValue('');
+    await expectMasked(fresh);
+    await expect(revealButton(panel, 1)).toHaveAccessibleName(ENV_COPY.revealLabel(1));
+  });
+}
+
 // ── Copy: AC28–AC32 ──────────────────────────────────────────────────────────
 
 for (const editor of EDITORS) {
