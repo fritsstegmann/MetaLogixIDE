@@ -606,6 +606,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.settings.set(request.key, parsed.value);
     return { value: parsed.value };
   },
+  'settings:set-app-env': async () => {
+    throw new Error('settings:set-app-env not implemented');
+  },
   'settings:set-claude-permission-mode': async (s, { mode }) => {
     if (!isClaudePermissionMode(mode)) throw new Error(`invalid Claude permission mode (expected 'auto' or 'bypass')`);
     const changedKeys = applyClaudePermissionMode(s.settings, mode);

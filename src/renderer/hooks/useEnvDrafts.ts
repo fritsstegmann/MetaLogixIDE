@@ -1,6 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { isDraftDirty, type EnvRow } from '@renderer/project-env-rows';
 
+/** Draft key for the app-wide (Settings → Environment) editor; project drafts are keyed by project id. */
+export const APP_ENV_DRAFT_KEY = 'app' as const;
+export type EnvDraftKey = number | typeof APP_ENV_DRAFT_KEY;
+
 /** Unsaved Env tab edits for one project, with the stored map they are compared against. */
 export interface EnvDraft {
   stored: Record<string, string>;
@@ -8,25 +12,25 @@ export interface EnvDraft {
 }
 
 export interface EnvDrafts {
-  get: (projectId: number) => EnvDraft | undefined;
-  set: (projectId: number, draft: EnvDraft) => void;
-  clear: (projectId: number) => void;
-  isDirty: (projectId: number) => boolean;
+  get: (key: EnvDraftKey) => EnvDraft | undefined;
+  set: (key: EnvDraftKey, draft: EnvDraft) => void;
+  clear: (key: EnvDraftKey) => void;
+  isDirty: (key: EnvDraftKey) => boolean;
 }
 
 /**
- * Per-project Env tab drafts, held in memory only: they survive switching
+ * Per-project Env tab drafts and the app-wide draft (`APP_ENV_DRAFT_KEY`), held in memory only: they survive switching
  * tabs or projects and are gone on app close. Save and Discard call `clear`;
  * `isDirty` drives the tab's unsaved marker via the pure `isDraftDirty`.
  */
 export function useEnvDrafts(): EnvDrafts {
-  const [drafts, setDrafts] = useState<ReadonlyMap<number, EnvDraft>>(() => new Map());
+  const [drafts, setDrafts] = useState<ReadonlyMap<EnvDraftKey, EnvDraft>>(() => new Map());
 
-  const set = useCallback((projectId: number, draft: EnvDraft) => {
+  const set = useCallback((projectId: EnvDraftKey, draft: EnvDraft) => {
     setDrafts((prev) => new Map(prev).set(projectId, draft));
   }, []);
 
-  const clear = useCallback((projectId: number) => {
+  const clear = useCallback((projectId: EnvDraftKey) => {
     setDrafts((prev) => {
       if (!prev.has(projectId)) return prev;
       const next = new Map(prev);
@@ -37,10 +41,10 @@ export function useEnvDrafts(): EnvDrafts {
 
   return useMemo(
     () => ({
-      get: (projectId: number) => drafts.get(projectId),
+      get: (projectId: EnvDraftKey) => drafts.get(projectId),
       set,
       clear,
-      isDirty: (projectId: number) => {
+      isDirty: (projectId: EnvDraftKey) => {
         const draft = drafts.get(projectId);
         return draft !== undefined && isDraftDirty(draft.rows, draft.stored);
       },
