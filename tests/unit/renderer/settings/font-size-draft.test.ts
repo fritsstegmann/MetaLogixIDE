@@ -47,28 +47,55 @@ describe('onCommit', () => {
 });
 
 describe('onStep', () => {
-  it('increments and commits immediately', () => {
-    const result = onStep(14, 'in');
+  it('increments the saved size and commits immediately when the field holds no unsaved edit', () => {
+    const result = onStep(initialDraft(14), 14, 'in');
     expect(result.commit).toBe(15);
     expect(result.state).toEqual({ draft: '15', editing: false });
   });
 
-  it('decrements and commits immediately', () => {
-    const result = onStep(14, 'out');
+  it('decrements the saved size and commits immediately when the field holds no unsaved edit', () => {
+    const result = onStep(initialDraft(14), 14, 'out');
     expect(result.commit).toBe(13);
     expect(result.state).toEqual({ draft: '13', editing: false });
   });
 
   it('is a no-op with no commit at the maximum bound', () => {
-    const result = onStep(28, 'in');
+    const result = onStep(initialDraft(28), 28, 'in');
     expect(result.commit).toBeNull();
     expect(result.state).toEqual({ draft: '28', editing: false });
   });
 
   it('is a no-op with no commit at the minimum bound', () => {
-    const result = onStep(9, 'out');
+    const result = onStep(initialDraft(9), 9, 'out');
     expect(result.commit).toBeNull();
     expect(result.state).toEqual({ draft: '9', editing: false });
+  });
+
+  it('steps from the unsaved typed draft, not the stale saved size, when the draft is a valid whole number (gate 7b Low)', () => {
+    const editing = onInput('20').state;
+    const result = onStep(editing, 14, 'in');
+    expect(result.commit).toBe(21);
+    expect(result.state).toEqual({ draft: '21', editing: false });
+  });
+
+  it('clamps an out-of-range unsaved draft before stepping from it', () => {
+    const editing = onInput('40').state;
+    const result = onStep(editing, 14, 'out');
+    expect(result.commit).toBe(27);
+    expect(result.state).toEqual({ draft: '27', editing: false });
+  });
+
+  it('ignores an invalid unsaved draft and steps from the saved size instead', () => {
+    const editing = onInput('abc').state;
+    const result = onStep(editing, 14, 'in');
+    expect(result.commit).toBe(15);
+    expect(result.state).toEqual({ draft: '15', editing: false });
+  });
+
+  it('ignores a draft left over from before the field was focused (editing false) and steps from the saved size', () => {
+    const result = onStep({ draft: '20', editing: false }, 14, 'in');
+    expect(result.commit).toBe(15);
+    expect(result.state).toEqual({ draft: '15', editing: false });
   });
 });
 

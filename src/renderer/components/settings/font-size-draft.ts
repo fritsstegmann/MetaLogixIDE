@@ -37,10 +37,12 @@ export function onCommit(raw: string, saved: number): DraftOutcome {
   return { state: { draft: String(clamped), editing: false }, commit: clamped };
 }
 
-/** Arrow key or stepper button (AC2): saves immediately, clamped at the bounds (no-op at a bound). Resolved immediately, so `editing` is false — it never blocks a later external update the way a held-open typed edit would. */
-export function onStep(current: number, direction: 'in' | 'out'): DraftOutcome {
-  const next = stepTerminalFontSize(current, direction);
-  if (next === current) return { state: { draft: String(current), editing: false }, commit: null };
+/** Arrow key or stepper button (AC2): saves immediately, clamped at the bounds (no-op at a bound). Steps from the visible draft, clamped into range, when the field holds an uncommitted edit that parses as a whole number — so a step never silently discards typed-but-unsaved text (gate 7b Low); otherwise it steps from the saved size, as before. Resolved immediately, so `editing` is false — it never blocks a later external update the way a held-open typed edit would. */
+export function onStep(state: DraftState, saved: number, direction: 'in' | 'out'): DraftOutcome {
+  const draftNumber = state.editing ? parseWholeNumber(state.draft) : null;
+  const base = draftNumber === null ? saved : clampTerminalFontSize(draftNumber);
+  const next = stepTerminalFontSize(base, direction);
+  if (next === saved) return { state: { draft: String(next), editing: false }, commit: null };
   return { state: { draft: String(next), editing: false }, commit: next };
 }
 
