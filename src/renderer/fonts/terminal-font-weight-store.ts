@@ -1,21 +1,32 @@
-/** Framework-free, per-window store for the shared terminal font weight, kept in sync with the main-process settings store through injected ports. */
+/** Framework-free, per-window store for the shared terminal weight pair (normal and bold), kept in sync with the main-process settings store through injected ports. */
 import { FONT_COPY } from '@renderer/fonts/font-contract';
 import {
+  TERMINAL_BOLD_WEIGHT_DEFAULT,
+  TERMINAL_BOLD_WEIGHT_KEY,
   TERMINAL_FONT_WEIGHT_DEFAULT,
   TERMINAL_FONT_WEIGHT_KEY,
-  parseTerminalFontWeight,
+  derivedBoldWeight,
+  isValidBoldWeight,
+  resolveTerminalWeights,
   type TerminalFontWeight,
+  type TerminalWeights,
 } from '@shared/terminal-font-weight';
 
-export interface TerminalFontWeightSnapshot {
-  readonly weight: TerminalFontWeight;
+export interface TerminalFontWeightSnapshot extends TerminalWeights {
   readonly ready: boolean;
+}
+
+/** The raw stored values, unvalidated. */
+export interface StoredTerminalWeights {
+  readonly weight: unknown;
+  readonly boldWeight: unknown;
 }
 
 /** IO the store needs; the provider adapts the IPC api and toasts to these. */
 export interface TerminalFontWeightPorts {
-  loadStored(): Promise<unknown>;
-  save(value: TerminalFontWeight): Promise<unknown>;
+  loadStored(): Promise<StoredTerminalWeights>;
+  saveWeight(value: TerminalFontWeight): Promise<unknown>;
+  saveBoldWeight(value: TerminalFontWeight): Promise<unknown>;
   onSettingsChanged(listener: (key: string) => void): () => void;
   notifySaveFailed(message: string): void;
   reportError(context: string, error: unknown): void;
@@ -25,51 +36,55 @@ export interface TerminalFontWeightStore {
   getSnapshot(): TerminalFontWeightSnapshot;
   subscribe(listener: () => void): () => void;
   setWeight(next: TerminalFontWeight): void;
+  setBoldWeight(next: TerminalFontWeight): void;
   connect(): () => void;
 }
 
+const WATCHED_KEYS: readonly string[] = [TERMINAL_FONT_WEIGHT_KEY, TERMINAL_BOLD_WEIGHT_KEY];
+
 /**
- * Creates the store. `connect` loads the stored weight (nothing stored means the 400 default, with no
- * write; an invalid stored value is reported and left untouched) and follows `settings:changed`; it
- * returns the disconnect. `setWeight` applies optimistically and persists; a failed save reports once
- * and reverts to the re-read stored value. Every async publish is version-guarded so a stale read can
- * never overwrite a newer weight.
+ * Creates the store. `connect` loads the stored pair, resolving it with `resolveTerminalWeights`
+ * (each invalid value is reported once and left untouched; nothing is ever written on load), and
+ * re-syncs on `settings:changed` for either key; it returns the disconnect. `setWeight` applies the
+ * weight with its derived bold optimistically and saves the weight; `setBoldWeight` applies a bold
+ * heavier than the weight and saves it. A failed save reports once, toasts its own copy, and reverts
+ * to the re-read stored pair. Every async publish is version-guarded so a stale read never wins.
  */
 export function createTerminalFontWeightStore(ports: TerminalFontWeightPorts): TerminalFontWeightStore {
-  let snapshot: TerminalFontWeightSnapshot = { weight: TERMINAL_FONT_WEIGHT_DEFAULT, ready: false };
+  let snapshot: TerminalFontWeightSnapshot = {
+    weight: TERMINAL_FONT_WEIGHT_DEFAULT,
+    boldWeight: TERMINAL_BOLD_WEIGHT_DEFAULT,
+    ready: false,
+  };
   let version = 0;
   let connected = false;
   const listeners = new Set<() => void>();
 
   function publish(next: TerminalFontWeightSnapshot): void {
-    if (next.weight === snapshot.weight && next.ready === snapshot.ready) return;
+    if (next.weight === snapshot.weight && next.boldWeight === snapshot.boldWeight && next.ready === snapshot.ready) return;
     snapshot = next;
     listeners.forEach((listener) => listener());
-  }
-
-  async function resolveStored(): Promise<TerminalFontWeight> {
-    const stored = await ports.loadStored();
-    if (stored === null) return TERMINAL_FONT_WEIGHT_DEFAULT;
-    const parsed = parseTerminalFontWeight(stored);
-    if (!parsed.ok) throw new Error(`invalid persisted ${TERMINAL_FONT_WEIGHT_KEY}: ${parsed.error}`);
-    return parsed.value;
   }
 
   async function sync(): Promise<void> {
     const syncVersion = ++version;
     try {
-      const weight = await resolveStored();
-      if (connected && syncVersion === version) publish({ weight, ready: true });
+      const stored = await ports.loadStored();
+      const { weight, boldWeight, errors } = resolveTerminalWeights(stored.weight, stored.boldWeight);
+      errors.forEach((error) => ports.reportError('terminal font weight load', new Error(error)));
+      if (connected && syncVersion === version) publish({ weight, boldWeight, ready: true });
     } catch (error) {
       if (connected && syncVersion === version) publish({ ...snapshot, ready: true });
       ports.reportError('terminal font weight load failed', error);
     }
   }
 
-  function persist(value: TerminalFontWeight): void {
-    ports.save(value).catch((error: unknown) => {
+  function apply(next: TerminalWeights, save: () => Promise<unknown>, failedCopy: string): void {
+    version += 1;
+    publish({ ...next, ready: true });
+    save().catch((error: unknown) => {
       ports.reportError('terminal font weight save failed', error);
-      ports.notifySaveFailed(FONT_COPY.terminalWeightSaveFailed);
+      ports.notifySaveFailed(failedCopy);
       return sync();
     });
   }
@@ -84,14 +99,16 @@ export function createTerminalFontWeightStore(ports: TerminalFontWeightPorts): T
     },
     setWeight(next) {
       if (!snapshot.ready || next === snapshot.weight) return;
-      version += 1;
-      publish({ weight: next, ready: true });
-      persist(next);
+      apply({ weight: next, boldWeight: derivedBoldWeight(next) }, () => ports.saveWeight(next), FONT_COPY.terminalWeightSaveFailed);
+    },
+    setBoldWeight(next) {
+      if (!snapshot.ready || next === snapshot.boldWeight || !isValidBoldWeight(snapshot.weight, next)) return;
+      apply({ weight: snapshot.weight, boldWeight: next }, () => ports.saveBoldWeight(next), FONT_COPY.terminalBoldSaveFailed);
     },
     connect() {
       connected = true;
       const off = ports.onSettingsChanged((key) => {
-        if (key === TERMINAL_FONT_WEIGHT_KEY) void sync();
+        if (WATCHED_KEYS.includes(key)) void sync();
       });
       void sync();
       return () => {

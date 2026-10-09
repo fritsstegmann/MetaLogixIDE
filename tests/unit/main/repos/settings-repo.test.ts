@@ -171,6 +171,34 @@ describe('SettingsRepo', () => {
     });
   });
 
+  // Test-after against the DEFAULT_SETTINGS default already added in setup (settings-repo.ts); these
+  // confirm the seeding behaviour (not the IPC validation, which lives in register.test.ts).
+  describe('terminal bold weight (AC3, AC8)', () => {
+    it('a fresh seed gives terminal_bold_weight === null', () => {
+      const repo = seed();
+      expect(repo.get('terminal_bold_weight')).toBeNull();
+    });
+
+    it('an existing DB whose row is already 900 keeps 900 after seedDefaults (INSERT OR IGNORE)', () => {
+      const repo = seed();
+      repo.set('terminal_bold_weight', 900);
+      repo.seedDefaults();
+      expect(repo.get('terminal_bold_weight')).toBe(900);
+    });
+
+    it('an upgraded install with no prior row adds the null default without touching unrelated settings', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('theme', JSON.stringify('light'));
+      const repo = new SettingsRepo(db);
+
+      repo.seedDefaults();
+
+      expect(repo.get('terminal_bold_weight')).toBeNull();
+      expect(repo.get('theme')).toBe('light');
+    });
+  });
+
   it('AC1 — fresh seed leaves claude_permission_mode null', () => {
     const repo = seed();
     expect(repo.get('claude_permission_mode')).toBeNull();

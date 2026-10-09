@@ -20,6 +20,7 @@ import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
 import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-context';
 import { terminalFontWeightOptions } from '@renderer/terminal-font-weight-apply';
+import type { TerminalWeights } from '@shared/terminal-font-weight';
 import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
@@ -94,9 +95,9 @@ export function ShellTab({
   fontSizeRef.current = fontSize;
   const fontSizeReadyRef = useRef(fontSizeReady);
   fontSizeReadyRef.current = fontSizeReady;
-  const { weight: fontWeight, ready: fontWeightReady } = useTerminalFontWeight();
-  const fontWeightRef = useRef(fontWeight);
-  fontWeightRef.current = fontWeight;
+  const { weight: fontWeight, boldWeight, ready: fontWeightReady } = useTerminalFontWeight();
+  const fontWeightsRef = useRef<TerminalWeights>({ weight: fontWeight, boldWeight });
+  fontWeightsRef.current = { weight: fontWeight, boldWeight };
   const fontWeightReadyRef = useRef(fontWeightReady);
   fontWeightReadyRef.current = fontWeightReady;
   const { terminalFontFamily } = useFontSettings();
@@ -125,7 +126,7 @@ export function ShellTab({
       // Menlo bitmap fallback on some setups and looks pixelated.
       fontFamily: buildFontFamilyStack(terminalFontFamilyRef.current, TERMINAL_FONT_FALLBACK),
       fontSize: fontSizeRef.current,
-      ...terminalFontWeightOptions(fontWeightRef.current),
+      ...terminalFontWeightOptions(fontWeightsRef.current),
       lineHeight: 1.25,
       letterSpacing: 0,
       cursorBlink: true,
@@ -380,8 +381,8 @@ export function ShellTab({
   // Weight changes repaint without remeasuring: xterm's cell size ignores weight, so the PTY keeps its geometry.
   useEffect(() => {
     if (!termRef.current) return;
-    termRef.current.options = terminalFontWeightOptions(fontWeight);
-  }, [fontWeight]);
+    termRef.current.options = terminalFontWeightOptions({ weight: fontWeight, boldWeight });
+  }, [fontWeight, boldWeight]);
 
   useEffect(() => {
     const updater = fontUpdaterRef.current;

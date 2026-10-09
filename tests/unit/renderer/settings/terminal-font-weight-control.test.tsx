@@ -1,18 +1,38 @@
-/** Contract tests for the terminal font weight Settings row: label, hint, accessible native select with the nine named weights, current value, and selection saving through the shared store (AC1, AC2, AC12). */
+/** Contract tests for the terminal weight Settings rows: the font weight and bold weight native selects — labels, hints, accessible names, test ids, offered choices, current value, disabled state, and selection saving through the shared store (AC1, AC2, AC12). */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isValidElement, type ReactNode } from 'react';
+import { isValidElement, type JSX, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
-import { TerminalFontWeightControl } from '@renderer/components/settings/TerminalFontWeightControl';
+import { TerminalBoldWeightControl, TerminalFontWeightControl } from '@renderer/components/settings/TerminalFontWeightControl';
 import type { TerminalFontWeight } from '@shared/terminal-font-weight';
 
 vi.mock('react', async (orig) => ({ ...(await orig<typeof import('react')>()), useId: () => 'weight-id' }));
 
-const hookState: { weight: TerminalFontWeight; ready: boolean; setWeight: (w: TerminalFontWeight) => void } = {
+interface HookState {
+  weight: TerminalFontWeight;
+  boldWeight: TerminalFontWeight;
+  ready: boolean;
+  setWeight: (w: TerminalFontWeight) => void;
+  setBoldWeight: (w: TerminalFontWeight) => void;
+}
+
+const hookState: HookState = {
   weight: 400,
+  boldWeight: 700,
   ready: true,
   setWeight: vi.fn(),
+  setBoldWeight: vi.fn(),
 };
+
+function resetHook(): void {
+  hookState.weight = 400;
+  hookState.boldWeight = 700;
+  hookState.ready = true;
+  hookState.setWeight = vi.fn();
+  hookState.setBoldWeight = vi.fn();
+}
+
+type Control = () => JSX.Element;
 
 vi.mock('@renderer/fonts/terminal-font-weight-context', () => ({
   useTerminalFontWeight: () => hookState,
@@ -30,8 +50,8 @@ const EXPECTED_OPTIONS: ReadonlyArray<readonly [string, string]> = [
   ['900', 'Black (900)'],
 ];
 
-function render(): string {
-  return renderToStaticMarkup(<TerminalFontWeightControl />);
+function render(Component: Control = TerminalFontWeightControl): string {
+  return renderToStaticMarkup(<Component />);
 }
 
 function selectTag(html: string): string {
@@ -65,28 +85,25 @@ function findSelectOnChange(node: ReactNode): ((e: { target: { value: string } }
   }
   if (!isValidElement<SelectProps>(node)) return undefined;
   if (node.type === 'select') return node.props.onChange;
+  if (typeof node.type === 'function') return findSelectOnChange((node.type as (props: SelectProps) => ReactNode)(node.props));
   return findSelectOnChange(node.props.children);
 }
 
-function choose(value: string): void {
-  const onChange = findSelectOnChange(TerminalFontWeightControl());
+function choose(value: string, Component: Control = TerminalFontWeightControl): void {
+  const onChange = findSelectOnChange(Component());
   expect(onChange).toBeTypeOf('function');
   onChange?.({ target: { value } });
 }
 
 describe('TerminalFontWeightControl markup', () => {
-  beforeEach(() => {
-    hookState.weight = 400;
-    hookState.ready = true;
-    hookState.setWeight = vi.fn();
-  });
+  beforeEach(resetHook);
 
   it('shows the terminal-weight label and the exact hint (AC1)', () => {
     const html = render();
     expect(html).toContain(`>${FONT_COPY.terminalWeightLabel}<`);
     expect(html).toContain(`>${FONT_COPY.terminalWeightHint}<`);
     expect(FONT_COPY.terminalWeightHint).toBe(
-      'Bold text is drawn 200 heavier, from 700 up to 900. Fonts without this weight use the nearest one.',
+      'Changing this also sets bold to 200 heavier, up to 900. Fonts without this weight use the nearest one.',
     );
   });
 
@@ -113,10 +130,7 @@ describe('TerminalFontWeightControl markup', () => {
 });
 
 describe('TerminalFontWeightControl selection', () => {
-  beforeEach(() => {
-    hookState.weight = 400;
-    hookState.setWeight = vi.fn();
-  });
+  beforeEach(resetHook);
 
   it.each([['100', 100], ['700', 700], ['900', 900]] as const)('saves %s immediately as the number %i (AC2)', (raw, weight) => {
     choose(raw);
@@ -127,5 +141,89 @@ describe('TerminalFontWeightControl selection', () => {
   it.each([['450'], ['abc'], [''], ['1000']])('ignores an unparseable or out-of-set value %j', (raw) => {
     choose(raw);
     expect(hookState.setWeight).not.toHaveBeenCalled();
+  });
+
+  it('never touches the bold weight', () => {
+    choose('700');
+    expect(hookState.setBoldWeight).not.toHaveBeenCalled();
+  });
+});
+
+const BOLD_LABELS: Readonly<Record<number, string>> = {
+  500: 'Medium (500)',
+  600: 'Semibold (600)',
+  700: 'Bold (700)',
+  800: 'Extra Bold (800)',
+  900: 'Black (900)',
+};
+
+describe('TerminalBoldWeightControl markup', () => {
+  beforeEach(resetHook);
+
+  it('shows the bold label and the exact bold hint (AC1)', () => {
+    const html = render(TerminalBoldWeightControl);
+    expect(html).toContain(`>${FONT_COPY.terminalBoldLabel}<`);
+    expect(html).toContain(`>${FONT_COPY.terminalBoldHint}<`);
+    expect(FONT_COPY.terminalBoldHint).toBe('Bold text is drawn at this weight. It must be heavier than the font weight.');
+  });
+
+  it('renders a native select named exactly "Terminal bold weight" through its label (AC12)', () => {
+    const html = render(TerminalBoldWeightControl);
+    const id = attr(selectTag(html), 'id');
+    expect(id).toBeTruthy();
+    expect(new RegExp(`<label[^>]*for="${id}"[^>]*>Terminal bold weight<`).test(html)).toBe(true);
+  });
+
+  it('carries the bold E2E test id on the select', () => {
+    expect(attr(selectTag(render(TerminalBoldWeightControl)), 'data-testid')).toBe(FONT_TEST_IDS.terminalBoldSelect);
+  });
+
+  it.each([
+    [400, 700, [500, 600, 700, 800, 900]],
+    [600, 800, [700, 800, 900]],
+    [800, 900, [900]],
+  ] as const)('at font weight %i offers only heavier weights, in order, with the shared labels (AC1)', (weight, bold, choices) => {
+    hookState.weight = weight;
+    hookState.boldWeight = bold;
+    expect(options(render(TerminalBoldWeightControl)).map(([value, label]) => [value, label])).toEqual(
+      choices.map((w) => [String(w), BOLD_LABELS[w]]),
+    );
+  });
+
+  it.each([[400, 700], [400, 900], [600, 800]] as const)('at font weight %i shows bold %i as the only selected option', (weight, bold) => {
+    hookState.weight = weight;
+    hookState.boldWeight = bold;
+    const selected = options(render(TerminalBoldWeightControl)).filter(([, , isSelected]) => isSelected).map(([value]) => value);
+    expect(selected).toEqual([String(bold)]);
+  });
+
+  it('is disabled at font weight 900, showing only Black (900) selected (AC1)', () => {
+    hookState.weight = 900;
+    hookState.boldWeight = 900;
+    const html = render(TerminalBoldWeightControl);
+    expect(selectTag(html)).toMatch(/\sdisabled=""/);
+    expect(options(html)).toEqual([['900', 'Black (900)', true]]);
+  });
+
+  it.each([[800, 900], [400, 700]] as const)('is enabled at font weight %i', (weight, bold) => {
+    hookState.weight = weight;
+    hookState.boldWeight = bold;
+    expect(selectTag(render(TerminalBoldWeightControl))).not.toMatch(/\sdisabled=""/);
+  });
+});
+
+describe('TerminalBoldWeightControl selection', () => {
+  beforeEach(resetHook);
+
+  it.each([['500', 500], ['900', 900]] as const)('saves %s immediately as the bold number %i, never the font weight (AC2)', (raw, bold) => {
+    choose(raw, TerminalBoldWeightControl);
+    expect(hookState.setBoldWeight).toHaveBeenCalledTimes(1);
+    expect(hookState.setBoldWeight).toHaveBeenCalledWith(bold);
+    expect(hookState.setWeight).not.toHaveBeenCalled();
+  });
+
+  it.each([['450'], ['abc'], [''], ['1000']])('ignores an unparseable or out-of-set value %j', (raw) => {
+    choose(raw, TerminalBoldWeightControl);
+    expect(hookState.setBoldWeight).not.toHaveBeenCalled();
   });
 });

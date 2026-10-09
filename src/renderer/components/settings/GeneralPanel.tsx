@@ -14,7 +14,7 @@ import {
 import { FONT_COPY } from '@renderer/fonts/font-contract';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { TerminalFontSizeControl } from '@renderer/components/settings/TerminalFontSizeControl';
-import { TerminalFontWeightControl } from '@renderer/components/settings/TerminalFontWeightControl';
+import { TerminalBoldWeightControl, TerminalFontWeightControl } from '@renderer/components/settings/TerminalFontWeightControl';
 import {
   SettingRow,
   SettingStack,
@@ -277,6 +277,7 @@ function FontSettingsControls({
       />
       <TerminalFontSizeControl />
       <TerminalFontWeightControl />
+      <TerminalBoldWeightControl />
     </SettingsSection>
   );
 }

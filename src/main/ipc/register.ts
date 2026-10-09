@@ -11,14 +11,21 @@ import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
 import { parseProjectEnv, parseAppEnv } from '@shared/project-env';
-import type { Project, ProjectConfig } from '@shared/types';
+import type { Project, ProjectConfig, SettingsMap } from '@shared/types';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
 import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
 import { TERMINAL_FONT_SIZE_KEY, parseTerminalFontSize } from '@shared/terminal-font-size';
-import { TERMINAL_FONT_WEIGHT_KEY } from '@shared/terminal-font-weight';
+import {
+  TERMINAL_FONT_WEIGHT_KEY,
+  TERMINAL_BOLD_WEIGHT_KEY,
+  parseTerminalFontWeight,
+  derivedBoldWeight,
+  isValidBoldWeight,
+  resolveTerminalWeights,
+} from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -607,6 +614,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
     if (key === TERMINAL_FONT_SIZE_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-size`);
     if (key === TERMINAL_FONT_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-weight`);
+    if (key === TERMINAL_BOLD_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-bold-weight`);
     if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
     s.settings.set(key, value as never);
     return { ok: true } as const;
@@ -628,11 +636,39 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.settings.set(TERMINAL_FONT_SIZE_KEY, parsed.value);
     return { value: parsed.value, changed: true };
   },
-  'settings:set-terminal-font-weight': async () => {
-    throw new Error('not implemented');
+  // Parses W, derives B = derivedBoldWeight(W) itself (never trusts a renderer-sent B), and
+  // writes only the keys whose stored value actually differs through one setMany transaction,
+  // so a write failure leaves neither key changed (AC8). changedKeys drives the per-key emit.
+  'settings:set-terminal-font-weight': async (s, request) => {
+    const parsed = parseTerminalFontWeight(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const weight = parsed.value;
+    const boldWeight = derivedBoldWeight(weight);
+    const entries: Partial<SettingsMap> = {};
+    const changedKeys: Array<keyof SettingsMap> = [];
+    if (s.settings.get(TERMINAL_FONT_WEIGHT_KEY) !== weight) {
+      entries[TERMINAL_FONT_WEIGHT_KEY] = weight;
+      changedKeys.push(TERMINAL_FONT_WEIGHT_KEY);
+    }
+    if (s.settings.get(TERMINAL_BOLD_WEIGHT_KEY) !== boldWeight) {
+      entries[TERMINAL_BOLD_WEIGHT_KEY] = boldWeight;
+      changedKeys.push(TERMINAL_BOLD_WEIGHT_KEY);
+    }
+    if (changedKeys.length > 0) s.settings.setMany(entries);
+    return { weight, boldWeight, changedKeys };
   },
-  'settings:set-terminal-bold-weight': async () => {
-    throw new Error('not implemented');
+  // Validates B against the font weight in use (resolveTerminalWeights on the stored pair, so a
+  // null or invalid stored weight counts as 400) and never writes the stored font weight itself.
+  'settings:set-terminal-bold-weight': async (s, request) => {
+    const parsed = parseTerminalFontWeight(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const bold = parsed.value;
+    const { weight } = resolveTerminalWeights(s.settings.get(TERMINAL_FONT_WEIGHT_KEY), s.settings.get(TERMINAL_BOLD_WEIGHT_KEY));
+    if (!isValidBoldWeight(weight, bold)) throw new Error(`terminal bold weight must be heavier than the font weight in use (${weight})`);
+    const stored = s.settings.get(TERMINAL_BOLD_WEIGHT_KEY);
+    if (stored === bold) return { value: bold, changed: false };
+    s.settings.set(TERMINAL_BOLD_WEIGHT_KEY, bold);
+    return { value: bold, changed: true };
   },
   'settings:set-app-env': async (s, { env }) => {
     const parsed = parseAppEnv(env);
@@ -1325,6 +1361,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     'settings:set-font': true,
     'settings:set-terminal-font-size': true,
     'settings:set-terminal-font-weight': true,
+    'settings:set-terminal-bold-weight': true,
     'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
   };
@@ -1352,7 +1389,15 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   });
 
   ipcMain.handle('settings:set-terminal-font-weight', async (_e, req: IpcRequest<'settings:set-terminal-font-weight'>) => {
-    return handlers['settings:set-terminal-font-weight'](services, req);
+    const result = await handlers['settings:set-terminal-font-weight'](services, req);
+    for (const key of result.changedKeys) sendEvent('settings:changed', { key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-bold-weight', async (_e, req: IpcRequest<'settings:set-terminal-bold-weight'>) => {
+    const result = await handlers['settings:set-terminal-bold-weight'](services, req);
+    if (result.changed) sendEvent('settings:changed', { key: TERMINAL_BOLD_WEIGHT_KEY });
+    return result;
   });
 
   ipcMain.handle('settings:set-app-env', async (_e, req: IpcRequest<'settings:set-app-env'>) => {
