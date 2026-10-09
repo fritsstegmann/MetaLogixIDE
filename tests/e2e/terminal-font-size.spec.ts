@@ -187,7 +187,7 @@ test.describe.serial('terminal font size setting', () => {
       await expect(input).toHaveValue(String(DEFAULT));
 
       // AC1: directly after the Terminal family combobox, with the "px" unit visible.
-      const terminalCombobox = win.getByRole('combobox', { name: 'Terminal' });
+      const terminalCombobox = win.getByRole('combobox', { name: 'Terminal', exact: true });
       const comboBox = await terminalCombobox.boundingBox();
       const inputBox = await input.boundingBox();
       if (!comboBox || !inputBox) throw new Error('font row geometry unavailable');
