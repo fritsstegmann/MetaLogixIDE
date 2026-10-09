@@ -21,7 +21,7 @@ export function parseTerminalFontWeight(value: unknown): TerminalFontWeightParse
   return { ok: false, error: 'terminal font weight must be one of 100, 200, ... 900' };
 }
 
-/** Bold weight derived from the normal weight: min(weight + 300, 900). */
+/** Bold weight derived from the normal weight: 200 heavier, never below 700 (xterm's 'bold') and never above 900. */
 export function terminalBoldWeight(weight: TerminalFontWeight): TerminalFontWeight {
-  return Math.min(weight + 300, 900) as TerminalFontWeight;
+  return Math.min(Math.max(weight + 200, 700), 900) as TerminalFontWeight;
 }

@@ -48,7 +48,7 @@ export const FONT_COPY = {
   terminalSizeUnit: 'px',
   terminalSizeSaveFailed: 'Could not save the terminal font size. Your previous size remains active.',
   terminalWeightLabel: 'Terminal font weight',
-  terminalWeightHint: 'Bold text is drawn 300 heavier, up to 900. Fonts without this weight use the nearest one.',
+  terminalWeightHint: 'Bold text is drawn 200 heavier, from 700 up to 900. Fonts without this weight use the nearest one.',
   terminalWeightSaveFailed: 'Could not save the terminal font weight. Your previous weight remains active.',
   /** Dropdown option label, e.g. "Medium (500)". */
   terminalWeightOptionLabel: (weight: TerminalFontWeight): string => `${TERMINAL_FONT_WEIGHT_NAMES[weight]} (${weight})`,

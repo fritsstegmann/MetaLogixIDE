@@ -18,6 +18,7 @@ import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
 import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
 import { TERMINAL_FONT_SIZE_KEY, parseTerminalFontSize } from '@shared/terminal-font-size';
+import { TERMINAL_FONT_WEIGHT_KEY, parseTerminalFontWeight } from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -605,6 +606,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
     if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
     if (key === TERMINAL_FONT_SIZE_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-size`);
+    if (key === TERMINAL_FONT_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-weight`);
     if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
     s.settings.set(key, value as never);
     return { ok: true } as const;
@@ -626,8 +628,13 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.settings.set(TERMINAL_FONT_SIZE_KEY, parsed.value);
     return { value: parsed.value, changed: true };
   },
-  'settings:set-terminal-font-weight': async () => {
-    throw new Error('not implemented');
+  'settings:set-terminal-font-weight': async (s, request) => {
+    const parsed = parseTerminalFontWeight(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const stored = s.settings.get(TERMINAL_FONT_WEIGHT_KEY);
+    if (stored === parsed.value) return { value: parsed.value, changed: false };
+    s.settings.set(TERMINAL_FONT_WEIGHT_KEY, parsed.value);
+    return { value: parsed.value, changed: true };
   },
   'settings:set-app-env': async (s, { env }) => {
     const parsed = parseAppEnv(env);
@@ -1319,6 +1326,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
     'settings:set-font': true,
     'settings:set-terminal-font-size': true,
+    'settings:set-terminal-font-weight': true,
     'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
   };
@@ -1342,6 +1350,12 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('settings:set-terminal-font-size', async (_e, req: IpcRequest<'settings:set-terminal-font-size'>) => {
     const result = await handlers['settings:set-terminal-font-size'](services, req);
     if (result.changed) sendEvent('settings:changed', { key: TERMINAL_FONT_SIZE_KEY });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-font-weight', async (_e, req: IpcRequest<'settings:set-terminal-font-weight'>) => {
+    const result = await handlers['settings:set-terminal-font-weight'](services, req);
+    if (result.changed) sendEvent('settings:changed', { key: TERMINAL_FONT_WEIGHT_KEY });
     return result;
   });
 

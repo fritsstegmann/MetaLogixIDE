@@ -16,6 +16,8 @@ export type TermProbe = {
   token: number;
   fontFamily: string;
   fontSize: number;
+  fontWeight: number | string;
+  fontWeightBold: number | string;
   cols: number;
   rows: number;
   bufferLength: number;
@@ -38,7 +40,7 @@ export async function terminalProbes(win: Page): Promise<TermProbe[]> {
     type Term = {
       cols: number;
       rows: number;
-      options: { fontFamily?: string; fontSize?: number };
+      options: { fontFamily?: string; fontSize?: number; fontWeight?: number | string; fontWeightBold?: number | string };
       buffer: { active: Buffer };
       textarea?: HTMLTextAreaElement;
       unicode: { activeVersion: string };
@@ -95,6 +97,8 @@ export async function terminalProbes(win: Page): Promise<TermProbe[]> {
           token,
           fontFamily: term.options.fontFamily ?? '',
           fontSize: term.options.fontSize ?? 0,
+          fontWeight: term.options.fontWeight ?? '',
+          fontWeightBold: term.options.fontWeightBold ?? '',
           cols: term.cols,
           rows: term.rows,
           bufferLength: buffer.length,
