@@ -127,7 +127,7 @@ function baseWebPreferences() {
   };
 }
 
-function darwinChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
+function platformChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
   return process.platform === 'darwin'
     ? {
         titleBarStyle: 'hiddenInset',
@@ -137,7 +137,9 @@ function darwinChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
         visualEffectState: 'active',
         roundedCorners: true,
       }
-    : {};
+    // Windows/Linux draw the app menu as an in-window bar above our own title
+    // bar. Hide it until Alt is pressed; its accelerators keep working.
+    : { autoHideMenuBar: true };
 }
 
 function wireExternalLinks(win: BrowserWindow): void {
@@ -165,7 +167,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     height: 900,
     show: false,
     backgroundColor: '#00000000',
-    ...darwinChrome(),
+    ...platformChrome(),
     webPreferences: baseWebPreferences(),
   });
   win.once('ready-to-show', () => win.show());
@@ -199,7 +201,7 @@ export async function createPopoutWindow(projectId: number, shellIndex: number):
     height: 620,
     show: false,
     backgroundColor: '#00000000',
-    ...darwinChrome(),
+    ...platformChrome(),
     webPreferences: baseWebPreferences(),
   });
   const query = `popout=1&projectId=${projectId}&shellIndex=${shellIndex}`;
