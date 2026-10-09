@@ -23,6 +23,7 @@ import {
   installInvokeRecorder,
   invokeCalls,
   installFailingHandler,
+  installDelayedGet,
   restoreHandler,
 } from './helpers/terminal-probe';
 
@@ -516,15 +517,67 @@ test.describe.serial('terminal font weight + bold weight settings', () => {
       const host = win.locator('[data-testid="shell-tab"] .xterm-screen').first();
       await expect(host).toBeVisible();
 
-      // WebGL path: screenshot at the default (400/700), change weight to 900 (bold follows
+      // Settle focus state before the first screenshot: the click above left the terminal
+      // focused (blinking cursor), and a focus-state change alone — not a repaint — can
+      // make two screenshots differ. One no-op Settings open/close moves focus into the
+      // modal and back out, so every "before" screenshot below starts from the same
+      // (settled) focus state as its "after" counterpart.
+      await openSettings(win);
+      await closeSettings(win);
+
+      // Same-state control: two screenshots taken around a no-op Settings cycle (no weight
+      // or bold change) must be pixel-identical. Without this, the real comparisons below
+      // could pass on a focus/paint artifact of opening and closing Settings, independent
+      // of any actual font-weight repaint.
+      const controlBefore = await host.screenshot();
+      await openSettings(win);
+      await closeSettings(win);
+      const controlAfter = await host.screenshot();
+      expect(Buffer.compare(controlBefore, controlAfter), 'control: a no-op Settings cycle changes no pixels').toBe(0);
+
+      // WebGL path: from the settled default (400/700), change weight to 900 (bold follows
       // to 900 too) with no new output or scroll, screenshot again.
-      const beforeWebgl = await host.screenshot();
+      const beforeWebgl = controlAfter;
       await openSettings(win);
       await weightSelect(win).selectOption(String(900));
       await closeSettings(win);
       await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeight, { timeout: E2E_TIMEOUT }).toBe(900);
       const afterWebgl = await host.screenshot();
       expect(Buffer.compare(beforeWebgl, afterWebgl), 'WebGL: the repaint changes the rendered pixels with no new output').not.toBe(0);
+
+      // WebGL bold-only repaint: font weight 300 (left alone from here on), bold moved from
+      // 400 (its nearest "Regular" face) to 900 (its "Bold" face) — a pair that does render
+      // differently on the installed stack, isolating a bold-only change from the
+      // weight+bold change exercised above.
+      await openSettings(win);
+      await weightSelect(win).selectOption(String(300));
+      await boldSelect(win).selectOption(String(400));
+      await closeSettings(win);
+      await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeight, { timeout: E2E_TIMEOUT }).toBe(300);
+      await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeightBold, { timeout: E2E_TIMEOUT }).toBe(400);
+
+      // Same-state control for the bold-only check.
+      const boldControlBefore = await host.screenshot();
+      await openSettings(win);
+      await closeSettings(win);
+      const boldControlAfter = await host.screenshot();
+      expect(Buffer.compare(boldControlBefore, boldControlAfter), 'control: a no-op Settings cycle changes no pixels (bold-only baseline)').toBe(0);
+
+      const beforeBoldWebgl = boldControlAfter;
+      await openSettings(win);
+      await boldSelect(win).selectOption(String(900));
+      await closeSettings(win);
+      await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeightBold, { timeout: E2E_TIMEOUT }).toBe(900);
+      const afterBoldWebgl = await host.screenshot();
+      expect(Buffer.compare(beforeBoldWebgl, afterBoldWebgl), 'WebGL: a bold-only repaint changes the rendered pixels with no new output').not.toBe(0);
+      expect((await terminalProbes(win))[0]?.fontWeight, 'the bold-only change leaves the font weight alone').toBe(300);
+
+      // Back to the 900/900 baseline the DOM-fallback section below was written against.
+      await openSettings(win);
+      await weightSelect(win).selectOption(String(900));
+      await closeSettings(win);
+      await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeight, { timeout: E2E_TIMEOUT }).toBe(900);
+      await expect.poll(async () => (await terminalProbes(win))[0]?.fontWeightBold, { timeout: E2E_TIMEOUT }).toBe(900);
 
       // DOM fallback path: lose the WebGL context so the addon disposes and xterm falls back
       // to its DOM renderer, then prove the same repaint-with-no-output property there.
@@ -552,17 +605,11 @@ test.describe.serial('terminal font weight + bold weight settings', () => {
       expect(Buffer.compare(beforeDomWeight, afterDomWeight), 'DOM fallback: a weight repaint changes the rendered pixels with no new output').not.toBe(0);
 
       // Bold-only repaint under the DOM fallback: verified via the DOM renderer's own
-      // computed style on the real `.xterm-bold` span written above, not a pixel diff.
-      // Confirmed by direct inspection (a throwaway debug spec against this exact build):
-      // the installed font stack's "Bold" face is the nearest match for every weight from
-      // 500 up through 900 alike, so two bold weights in that range render byte-identical
-      // screenshots despite xterm and the DOM renderer both being told the correct, and
-      // different, numeric weight (the CSS cascade and the xterm option both update — the
-      // installed font simply has no second face to show it). The plan's own documentation
-      // table makes the same point for the pixel tests above: use a pair that maps to
-      // different faces (400 vs 900); no such pair exists for *bold* on this stack, since a
-      // typical monospace ships exactly one bold face. A computed-style assertion on the
-      // actual rendered bold span is therefore the correct proof of repaint here, not pixels.
+      // computed style on the real `.xterm-bold` span written above, not a pixel diff. The
+      // WebGL bold-only check above already proves a real bold-face pixel diff exists on
+      // this stack (300/400 -> 300/900); the computed-style assertion here additionally
+      // pins the DOM renderer's own per-node bold handling, which a canvas-level pixel
+      // diff could never localize to the bold span specifically.
       await openSettings(win);
       await boldSelect(win).selectOption(String(900));
       await closeSettings(win);
@@ -608,6 +655,57 @@ test.describe.serial('terminal font weight + bold weight settings', () => {
       if (!firstProbe) throw new Error('terminal probe unavailable after restart');
       expect(firstProbe.fontWeight, 'terminals open at the saved pair, no visible jump').toBe(300);
       expect(firstProbe.fontWeightBold).toBe(800);
+
+      // AC7, made failable: delay the main process's `settings:get` reply for
+      // `terminal_font_weight`, then mount a brand-new window (a popped-out shell) whose
+      // TerminalFontWeightProvider has to load the pair from scratch. The delay is
+      // installed before that window exists, so there is no race (same technique as
+      // terminal-font-size.spec.ts's AC11 delayed-load test). This is what goes red if the
+      // open-wait (`&& fontWeightReadyRef.current`, ShellTab.tsx:270) is dropped: the
+      // terminal would open immediately, before the delay resolves, at the unready default
+      // (400/700) instead of the saved pair (300/800).
+      await expect.poll(async () => harness.win.evaluate(async (projectName) => {
+        const rendererWindow = window as unknown as RendererWindow;
+        const { shells } = await rendererWindow.api.invoke('shells:alive-list', undefined) as {
+          shells: Array<{ projectName: string; shellIndex: number }>;
+        };
+        return shells.some((entry) => entry.projectName === projectName && entry.shellIndex === 0);
+      }, PROJECT), { timeout: E2E_TIMEOUT }).toBe(true);
+
+      await installDelayedGet(harness.app, WEIGHT_KEY, 1500);
+      const poppedShell = await harness.win.evaluate(async (projectName) => {
+        const rendererWindow = window as unknown as RendererWindow;
+        const { projects } = await rendererWindow.api.invoke('projects:list', undefined) as {
+          projects: Array<{ id: number; name: string }>;
+        };
+        const project = projects.find((p) => p.name === projectName);
+        if (!project) throw new Error('project unavailable');
+        const { shellIndex } = await rendererWindow.api.invoke('shells:launch-plain', { projectId: project.id }) as { shellIndex: number };
+        return { projectId: project.id, shellIndex };
+      }, PROJECT);
+      const openedAt = Date.now();
+      const [popout] = await Promise.all([
+        harness.app.waitForEvent('window'),
+        harness.win.evaluate(async (request) => {
+          const rendererWindow = window as unknown as RendererWindow;
+          await rendererWindow.api.invoke('windows:popout-shell', request);
+        }, poppedShell),
+      ]);
+      await popout.waitForLoadState('domcontentloaded');
+
+      // Still well inside the delay: the terminal must not have opened yet. Proves the
+      // wait actually holds off, rather than happening to not matter.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      expect(await popout.locator('.xterm').count(), 'the terminal must not open before the store is ready').toBe(0);
+
+      await expect(popout.locator('.xterm')).toBeVisible({ timeout: E2E_TIMEOUT });
+      expect(Date.now() - openedAt, 'the terminal only opened once the delayed load resolved').toBeGreaterThanOrEqual(1500);
+      const popoutProbe = (await terminalProbes(popout))[0];
+      if (!popoutProbe) throw new Error('popout terminal probe unavailable');
+      expect(popoutProbe.fontWeight, 'the first probe already matches the saved weight, no 400->300 jump').toBe(300);
+      expect(popoutProbe.fontWeightBold, 'the first probe already matches the saved bold weight, no 700->800 jump').toBe(800);
+      await restoreHandler(harness.app, 'settings:get');
+      await popout.close();
 
       // AC8: the font-weight setter rejects out-of-set values; neither stored value changes.
       for (const invalid of [450, 1000, 0, 'bold', null]) {
@@ -708,7 +806,29 @@ test.describe.serial('terminal font weight + bold weight settings', () => {
         if (seed.bold !== null) {
           expect(await storedBold(harness.win), `${label}: the invalid stored bold weight is not rewritten`).toBe(seed.bold);
         }
-        await expect.poll(() => consoleErrors.length, { timeout: E2E_TIMEOUT }).toBeGreaterThan(0);
+        // Filter on the store's actual load-error context (terminal-font-weight-store.ts:74,
+        // `ports.reportError('terminal font weight load', ...)`), not just "any console.error" —
+        // the app logs plenty of unrelated console noise, so an unfiltered count could pass for
+        // the wrong reason. Each present-but-invalid seeded field produces exactly one such
+        // error; a seed with no invalid field (the positive control below) must produce none,
+        // proving the filter is actually selective rather than vacuously true.
+        const expectedWeightLoadErrors =
+          (seed.weight !== null && seed.weight !== expected.weight ? 1 : 0) +
+          (seed.bold !== null && seed.bold !== expected.bold ? 1 : 0);
+        if (expectedWeightLoadErrors > 0) {
+          await expect.poll(
+            () => consoleErrors.filter((text) => text.includes('terminal font weight load')).length,
+            { timeout: E2E_TIMEOUT, message: `${label}: the weight-load error is reported via console.error` },
+          ).toBe(expectedWeightLoadErrors);
+        } else {
+          // Positive control: give the app a moment to have logged anything it was going
+          // to log, then confirm a fully valid stored pair reports zero weight-load errors.
+          await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+          expect(
+            consoleErrors.filter((text) => text.includes('terminal font weight load')),
+            `${label}: a valid stored pair reports no weight-load error`,
+          ).toHaveLength(0);
+        }
       } finally {
         await harness.close();
       }
@@ -723,6 +843,10 @@ test.describe.serial('terminal font weight + bold weight settings', () => {
 
     // Valid weight 800, stored bold 700 (not heavier than 800): falls back to min(800+200,900) = 900.
     await seedAndCheck({ weight: 800, bold: 700 }, { weight: 800, bold: 900 }, 'bold 700 not heavier than weight 800');
+
+    // Positive control for the console-error filter above: both values valid and
+    // unchanged by resolution, so no weight-load error should be reported at all.
+    await seedAndCheck({ weight: 400, bold: 700 }, { weight: 400, bold: 700 }, 'valid pair (positive control for the console filter)');
   });
 
   test('AC10: a failed save reverts both controls and every terminal to the stored weights and shows the exact error toast for whichever channel failed', async () => {
