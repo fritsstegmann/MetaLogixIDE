@@ -36,6 +36,8 @@ const SWATCHES: Record<PaletteId, Record<Theme, readonly string[]>> = {
 const ROW_HINTS = {
   Mode: 'System follows your OS appearance.',
   'Window opacity': 'Below 100% your desktop shows through.',
+  // Literal copy, not read back from `FONT_COPY` (the contract under test): AC1.
+  'Terminal font size': 'Every terminal uses this size. ⌘= / ⌘- / ⌘0 also change it.',
   'Keep-alive cap': 'Shells kept running at once; the oldest is closed first.',
   'Root scan depth': 'Folder levels below a root that count as projects.',
   'Max watched paths': 'File-watcher limit across all roots.',
@@ -451,6 +453,7 @@ test('AC9-AC12: four section headings, control order, spacing, row layout and hi
     ['Fonts', [
       region('Fonts').getByRole('combobox', { name: 'Interface' }),
       region('Fonts').getByRole('combobox', { name: 'Terminal' }),
+      region('Fonts').getByRole('spinbutton', { name: 'Terminal font size', exact: true }),
     ]],
     ['Workspace', NUMBERS.map((n) => region('Workspace').getByRole('spinbutton', { name: n.label, exact: true }))],
     ['Notifications', SWITCHES.map((s) => region('Notifications').getByRole('switch', { name: new RegExp(s.label, 'i') }))],
