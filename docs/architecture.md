@@ -377,6 +377,17 @@ Rules:
 - Closing the split from its header returns focus to the left terminal.
   **To tab** focuses the moved shell's terminal once it is the active pane.
 
+### Shell tab overlays
+
+`ShellTab.tsx` draws three overlays above its terminal: the exit overlay
+(Re-launch and Dismiss), the drop hint and the search bar. The terminal host
+`div` has the Tailwind `isolate` class, so it creates its own stacking
+context. xterm's internal layers use their own `z-index` values (for example,
+its link layer is `z-index: 2`), and `isolate` keeps them inside the host.
+The overlays come after the host in the DOM, so they always paint above the
+terminal and receive clicks. Without `isolate`, the link layer covers the
+exit overlay and the drop hint. Do not remove it.
+
 ### Claude notifications
 
 The app shows an OS notification when Claude Code, running in an app
