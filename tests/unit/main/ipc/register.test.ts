@@ -379,6 +379,311 @@ describe('registerIpc', () => {
     });
   });
 
+  describe('settings:set-terminal-font-weight (AC4, AC8, AC11)', () => {
+    it('settings:set rejects key terminal_font_weight without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_font_weight', value: 500 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_weight')).toBeNull();
+    });
+
+    it('settings:set rejects key terminal_bold_weight without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_bold_weight', value: 700 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+    });
+
+    it.each([450, 1000, 0, 'bold', null])('rejects invalid value %j, leaves both keys untouched, emits nothing', async (value) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(setManySpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_weight')).toBeNull();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('a valid value writes {weight, derivedBoldWeight} through one setMany call and returns {weight, boldWeight, changedKeys}', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: expect.arrayContaining(['terminal_font_weight', 'terminal_bold_weight']) });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(setManySpy).toHaveBeenCalledTimes(1);
+      const settingsChangedKeys = events.filter(e => e.channel === 'settings:changed').map(e => (e.payload as { key: string }).key);
+      expect(new Set(settingsChangedKeys)).toEqual(new Set(['terminal_font_weight', 'terminal_bold_weight']));
+    });
+
+    it.each([
+      [100, 300],
+      [400, 600],
+      [800, 900],
+    ] as const)('choosing W %i stores bold %i (min(W + 200, 900), no 700 floor)', async (weight, bold) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: weight }),
+      ).resolves.toMatchObject({ weight, boldWeight: bold });
+      expect(settings.get('terminal_bold_weight')).toBe(bold);
+    });
+
+    it('resets a hand-set bold weight (W 400, B 900, then choosing W 500 resets B to 700)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 400, terminal_bold_weight: 900 });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: expect.arrayContaining(['terminal_font_weight', 'terminal_bold_weight']) });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+    });
+
+    it('atomicity: when setMany throws, the handler rejects and neither stored value changes', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 400, terminal_bold_weight: 700 });
+      vi.spyOn(settings, 'setMany').mockImplementation(() => { throw new Error('write failed'); });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).rejects.toThrow();
+      expect(settings.get('terminal_font_weight')).toBe(400);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(events).toEqual([]);
+    });
+
+    it('no-op: when both stored values already equal the target pair, changedKeys is empty, nothing is written, nothing is emitted', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 700 });
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: [] });
+      expect(setManySpy).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
+
+    it('no-op on weight alone: when only the bold weight differs, changedKeys lists only terminal_bold_weight and emits once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 600 });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: ['terminal_bold_weight'] });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_bold_weight' } }]);
+    });
+
+    it('settings:get on a fresh DB returns null for the key', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:get')!({}, { key: 'terminal_font_weight' }),
+      ).resolves.toEqual({ value: null });
+    });
+  });
+
+  describe('settings:set-terminal-bold-weight (AC4, AC8, AC11)', () => {
+    it('rejects invalid values with nothing changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 450 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('with stored weight 500, rejects B=500 and B=400, accepts B=600 and B=900', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 500 })).rejects.toThrow();
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+
+      await expect(handler({}, { value: 600 })).resolves.toEqual({ value: 600, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(600);
+
+      await expect(handler({}, { value: 900 })).resolves.toEqual({ value: 900, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(900);
+    });
+
+    it('with stored weight 900, accepts B=900 and rejects B=800', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 900);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 800 })).rejects.toThrow();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+
+      await expect(handler({}, { value: 900 })).resolves.toEqual({ value: 900, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(900);
+    });
+
+    it('with stored weight null, validates against 400: rejects B=400, accepts B=500', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+    });
+
+    it('with stored weight 450 (invalid), validates against the in-use weight 400: rejects B=400, accepts B=500', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 450);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+    });
+
+    it.each([1000, 'bold'])(
+      'with stored weight %j (invalid, not a near miss), validates against the in-use weight 400: rejects B=400, accepts B=500',
+      async (storedWeight) => {
+        const ipc = fakeIpcMain();
+        const settings = realSettings();
+        settings.set('terminal_font_weight', storedWeight as never);
+        const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+        registerIpc(ipc as unknown as IpcMain, services, () => {});
+        const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+        await expect(handler({}, { value: 400 })).rejects.toThrow();
+        await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+        expect(settings.get('terminal_font_weight')).toBe(storedWeight);
+      },
+    );
+
+    it('never touches the stored font weight', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      await ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 900 });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+    });
+
+    it('writing the already-stored bold value returns changed: false with no write and no emit', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 700 });
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 700 }),
+      ).resolves.toEqual({ value: 700, changed: false });
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
+
+    it('a change emits settings:changed { key: terminal_bold_weight } exactly once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 900 });
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_bold_weight' } }]);
+    });
+  });
+
   it.each(['plan', 'bypassPermissions', '', undefined])('settings:set-claude-permission-mode rejects mode %j without changing anything', async (mode) => {
     const ipc = fakeIpcMain();
     const settings = realSettings();

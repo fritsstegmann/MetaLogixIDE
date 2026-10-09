@@ -104,6 +104,10 @@ export type SettingsMap = {
   'terminal_font_family':          string | null;
   /** Integrated-terminal font size in px (9..28); null = never saved (effective 14, legacy migration pending). Write via settings:set-terminal-font-size only. */
   'terminal_font_size':            number | null;
+  /** Integrated-terminal normal-text weight (100..900, step 100). null = never saved (effective 400). Write via settings:set-terminal-font-weight only, which also sets terminal_bold_weight. */
+  'terminal_font_weight':          number | null;
+  /** Integrated-terminal bold weight (100..900, step 100), heavier than terminal_font_weight (or 900 at 900). null = never saved (effective 700). Write via settings:set-terminal-bold-weight only. */
+  'terminal_bold_weight':          number | null;
   'metaproject_base_url':          string;
   /** Last-used metaproject username. Password is NEVER persisted. */
   'metaproject_last_username':     string;

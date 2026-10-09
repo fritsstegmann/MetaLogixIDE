@@ -18,6 +18,9 @@ import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/ter
 import { toast } from '@renderer/hooks/useToasts';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
+import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-context';
+import { terminalFontWeightOptions } from '@renderer/terminal-font-weight-apply';
+import type { TerminalWeights } from '@shared/terminal-font-weight';
 import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
@@ -92,6 +95,11 @@ export function ShellTab({
   fontSizeRef.current = fontSize;
   const fontSizeReadyRef = useRef(fontSizeReady);
   fontSizeReadyRef.current = fontSizeReady;
+  const { weight: fontWeight, boldWeight, ready: fontWeightReady } = useTerminalFontWeight();
+  const fontWeightsRef = useRef<TerminalWeights>({ weight: fontWeight, boldWeight });
+  fontWeightsRef.current = { weight: fontWeight, boldWeight };
+  const fontWeightReadyRef = useRef(fontWeightReady);
+  fontWeightReadyRef.current = fontWeightReady;
   const { terminalFontFamily } = useFontSettings();
   const terminalFontFamilyRef = useRef<FontFamilyPreference>(terminalFontFamily);
   terminalFontFamilyRef.current = terminalFontFamily;
@@ -118,8 +126,7 @@ export function ShellTab({
       // Menlo bitmap fallback on some setups and looks pixelated.
       fontFamily: buildFontFamilyStack(terminalFontFamilyRef.current, TERMINAL_FONT_FALLBACK),
       fontSize: fontSizeRef.current,
-      fontWeight: 'normal',
-      fontWeightBold: 'bold',
+      ...terminalFontWeightOptions(fontWeightsRef.current),
       lineHeight: 1.25,
       letterSpacing: 0,
       cursorBlink: true,
@@ -254,13 +261,13 @@ export function ShellTab({
       try { await document.fonts.ready; }
       catch { /* fine — best-effort */ }
       // Poll (via rAF) until the host has real dimensions and the shared
-      // font size has loaded, so we never open at the default. Bail after
+      // font size and weight have loaded, so we never open at the defaults. Bail after
       // ~2s so we don't hold up the terminal forever if a parent layout
       // is stuck; fallback opens against whatever's there.
       const startedAt = performance.now();
       while (!disposed) {
         const host = termHostRef.current;
-        if (host && host.clientWidth >= 20 && host.clientHeight >= 20 && fontSizeReadyRef.current) break;
+        if (host && host.clientWidth >= 20 && host.clientHeight >= 20 && fontSizeReadyRef.current && fontWeightReadyRef.current) break;
         if (performance.now() - startedAt > 2000) break;
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
@@ -352,7 +359,7 @@ export function ShellTab({
       searchRef.current = null;
     };
     // Font metric changes must not recreate the terminal. Dedicated effects below
-    // apply font size and family updates to the live instance instead.
+    // apply font size, weight and family updates to the live instance instead.
   }, [projectId, shellIndex]);
 
   const findNext = useCallback((q: string) => {
@@ -370,6 +377,12 @@ export function ShellTab({
     termRef.current.options.fontSize = fontSize;
     geometrySyncRef.current?.({ forceResize: true });
   }, [fontSize]);
+
+  // Weight changes repaint without remeasuring: xterm's cell size ignores weight, so the PTY keeps its geometry.
+  useEffect(() => {
+    if (!termRef.current) return;
+    termRef.current.options = terminalFontWeightOptions({ weight: fontWeight, boldWeight });
+  }, [fontWeight, boldWeight]);
 
   useEffect(() => {
     const updater = fontUpdaterRef.current;

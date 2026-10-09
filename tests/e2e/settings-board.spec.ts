@@ -451,8 +451,8 @@ test('AC9-AC12: four section headings, control order, spacing, row layout and hi
       region('Appearance').getByRole('slider', { name: 'Window opacity' }),
     ]],
     ['Fonts', [
-      region('Fonts').getByRole('combobox', { name: 'Interface' }),
-      region('Fonts').getByRole('combobox', { name: 'Terminal' }),
+      region('Fonts').getByRole('combobox', { name: 'Interface', exact: true }),
+      region('Fonts').getByRole('combobox', { name: 'Terminal', exact: true }),
       region('Fonts').getByRole('spinbutton', { name: 'Terminal font size', exact: true }),
     ]],
     ['Workspace', NUMBERS.map((n) => region('Workspace').getByRole('spinbutton', { name: n.label, exact: true }))],
@@ -689,7 +689,7 @@ test('AC19-AC24: font rows, option list and previews', async () => {
     const at = `${palette}/${theme}`;
     for (const name of ['Interface', 'Terminal']) {
       const label = region('Fonts').getByText(name, { exact: true });
-      const input = region('Fonts').getByRole('combobox', { name });
+      const input = region('Fonts').getByRole('combobox', { name, exact: true });
       const [l, i] = [await box(label), await box(input)];
       expectPx(l.width, 110, `${at} ${name} label column`);
       expectPx(i.x - l.x, 126, `${at} ${name} column gap`);
@@ -779,7 +779,7 @@ test('AC19-AC24: font rows, option list and previews', async () => {
   await expect(terminal).not.toContainText('⎇ main');
   await expect(terminal.getByRole('img', { name: 'private-use glyph sample' })).toHaveCount(1);
   for (const name of ['Interface', 'Terminal']) {
-    const family = await style(region('Fonts').getByRole('combobox', { name }), 'font-family');
+    const family = await style(region('Fonts').getByRole('combobox', { name, exact: true }), 'font-family');
     expect(await style(dialog().getByLabel(`${name} preview`), 'font-family')).toBe(family);
   }
 });
