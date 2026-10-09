@@ -1,18 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { initialDraft, onCommit, onExternalUpdate, onInput } from '@renderer/components/settings/font-size-draft';
+import { initialDraft, onCommit, onExternalUpdate, onInput, onStep } from '@renderer/components/settings/font-size-draft';
 
 describe('onInput', () => {
-  it.each([
-    ['16', 16],
-    ['1', null],
-    ['40', null],
-    ['', null],
-  ])('typing %s commits %s', (raw, commit) => {
-    const result = onInput(raw);
-    expect(result.commit).toBe(commit);
-    expect(result.state.draft).toBe(raw);
-    expect(result.state.editing).toBe(true);
-  });
+  it.each(['16', '1', '40', ''])(
+    'typed text %s never saves while typing, and marks the field as holding an uncommitted edit',
+    (raw) => {
+      const result = onInput(raw);
+      expect(result.commit).toBeNull();
+      expect(result.state.draft).toBe(raw);
+      expect(result.state.editing).toBe(true);
+    },
+  );
 });
 
 describe('onCommit', () => {
@@ -40,6 +38,38 @@ describe('onCommit', () => {
     expect(result.state.draft).toBe('16');
     expect(result.state.editing).toBe(false);
   });
+
+  it('resolves the edit (editing becomes false) even for an in-range change, so it no longer blocks an external update', () => {
+    const result = onCommit('16', 14);
+    expect(result.commit).toBe(16);
+    expect(result.state.editing).toBe(false);
+  });
+});
+
+describe('onStep', () => {
+  it('increments and commits immediately', () => {
+    const result = onStep(14, 'in');
+    expect(result.commit).toBe(15);
+    expect(result.state).toEqual({ draft: '15', editing: false });
+  });
+
+  it('decrements and commits immediately', () => {
+    const result = onStep(14, 'out');
+    expect(result.commit).toBe(13);
+    expect(result.state).toEqual({ draft: '13', editing: false });
+  });
+
+  it('is a no-op with no commit at the maximum bound', () => {
+    const result = onStep(28, 'in');
+    expect(result.commit).toBeNull();
+    expect(result.state).toEqual({ draft: '28', editing: false });
+  });
+
+  it('is a no-op with no commit at the minimum bound', () => {
+    const result = onStep(9, 'out');
+    expect(result.commit).toBeNull();
+    expect(result.state).toEqual({ draft: '9', editing: false });
+  });
 });
 
 describe('onExternalUpdate', () => {
@@ -48,9 +78,14 @@ describe('onExternalUpdate', () => {
     expect(onExternalUpdate(state, 18)).toEqual({ draft: '18', editing: false });
   });
 
-  it('keeps the uncommitted draft when the field is being edited', () => {
+  it('keeps the uncommitted typed draft when the field is being edited', () => {
     const state = { draft: '1', editing: true };
     expect(onExternalUpdate(state, 18)).toEqual(state);
+  });
+
+  it('a revert after a failed save is not blocked by a value the field already resolved via commit or step', () => {
+    const resolvedByCommit = onCommit('16', 14).state;
+    expect(onExternalUpdate(resolvedByCommit, 14)).toEqual({ draft: '14', editing: false });
   });
 });
 

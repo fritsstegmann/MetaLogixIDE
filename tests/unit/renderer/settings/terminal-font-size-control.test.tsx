@@ -32,7 +32,7 @@ describe('TerminalFontSizeControl markup', () => {
     expect(html).toContain(`>${FONT_COPY.terminalSizeUnit}<`);
   });
 
-  it('renders a 9..28 step-1 number spinbutton named "Terminal font size", carrying its test id and the current saved value', async () => {
+  it('renders a 9..28 step-1 number field named "Terminal font size", carrying its test id and the current saved value', async () => {
     hookState.size = 18;
     const { TerminalFontSizeControl } = await import('@renderer/components/settings/TerminalFontSizeControl');
     const html = renderToStaticMarkup(<TerminalFontSizeControl />);
@@ -48,5 +48,12 @@ describe('TerminalFontSizeControl markup', () => {
     const id = attr(html, 'input', 'id');
     expect(id).toBeTruthy();
     expect(new RegExp(`<label[^>]*for="${id}"[^>]*>${FONT_COPY.terminalSizeLabel}<`).test(html)).toBe(true);
+  });
+
+  it('exposes an explicit decrease and increase stepper button (AC2 amendment: arrow keys and the stepper save immediately; the native spinner is not the commit path)', async () => {
+    const { TerminalFontSizeControl } = await import('@renderer/components/settings/TerminalFontSizeControl');
+    const html = renderToStaticMarkup(<TerminalFontSizeControl />);
+    expect(/<button[^>]*type="button"[^>]*aria-label="Decrease terminal font size"[^>]*>/.test(html)).toBe(true);
+    expect(/<button[^>]*type="button"[^>]*aria-label="Increase terminal font size"[^>]*>/.test(html)).toBe(true);
   });
 });

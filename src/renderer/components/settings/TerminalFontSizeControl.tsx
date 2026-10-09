@@ -3,9 +3,15 @@ import { TERMINAL_FONT_SIZE } from '@shared/terminal-font-size';
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
 import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
 import { NUMBER_FIELD_CLASS, SettingRow } from '@renderer/components/settings/primitives';
-import { initialDraft, onCommit, onExternalUpdate, onInput, type DraftState } from '@renderer/components/settings/font-size-draft';
+import { initialDraft, onCommit, onExternalUpdate, onInput, onStep, type DraftState } from '@renderer/components/settings/font-size-draft';
 
-/** Settings row for the one shared integrated-terminal font size: a 9..28 px number spinbutton with a "px" readout, named "Terminal font size". Saves in-range whole numbers as typed, clamps out-of-range whole numbers on blur or Enter, reverts anything else, and follows the shared size (keyboard zoom, other windows) while the field is not mid-edit. */
+const HIDE_NATIVE_SPINNER_CLASS =
+  '[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]';
+
+const STEP_BUTTON_CLASS =
+  'flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] bg-[--surface-field] text-[13px] text-[--text] focus:outline-none focus:ring-2 focus:ring-[--accent]/60 focus-visible:rounded-[9px]';
+
+/** Settings row for the one shared integrated-terminal font size: a 9..28 px number field, flanked by explicit "−"/"+" stepper buttons, with a "px" readout, named "Terminal font size". AC2 (amended): typed text never saves while typing, only on blur or Enter (clamped if out of range, reverted to the saved value if empty, non-numeric or non-integer); the stepper buttons and ArrowUp/ArrowDown on the field save immediately. The native spinner is hidden so there is exactly one way to step. Follows the shared size (keyboard zoom, other windows, or a reverted failed save) while the field holds no uncommitted typed edit. */
 export function TerminalFontSizeControl(): React.JSX.Element {
   const { size, setSize } = useTerminalFontSize();
   const id = useId();
@@ -21,9 +27,24 @@ export function TerminalFontSizeControl(): React.JSX.Element {
     if (result.commit !== null) setSize(result.commit);
   }
 
+  function step(direction: 'in' | 'out'): void {
+    const result = onStep(size, direction);
+    setState(result.state);
+    if (result.commit !== null) setSize(result.commit);
+  }
+
   return (
     <SettingRow label={FONT_COPY.terminalSizeLabel} hint={FONT_COPY.terminalSizeHint} htmlFor={id}>
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          aria-label="Decrease terminal font size"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => step('out')}
+          className={STEP_BUTTON_CLASS}
+        >
+          −
+        </button>
         <input
           id={id}
           type="number"
@@ -32,17 +53,30 @@ export function TerminalFontSizeControl(): React.JSX.Element {
           step={TERMINAL_FONT_SIZE.step}
           value={state.draft}
           data-testid={FONT_TEST_IDS.terminalSizeInput}
-          onChange={(e) => {
-            const result = onInput(e.target.value);
-            setState(result.state);
-            if (result.commit !== null) setSize(result.commit);
-          }}
+          onChange={(e) => setState(onInput(e.target.value).state)}
           onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') commit(e.currentTarget.value);
+            if (e.key === 'Enter') {
+              commit(e.currentTarget.value);
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              step('in');
+            } else if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              step('out');
+            }
           }}
-          className={NUMBER_FIELD_CLASS}
+          className={`${NUMBER_FIELD_CLASS} ${HIDE_NATIVE_SPINNER_CLASS}`}
         />
+        <button
+          type="button"
+          aria-label="Increase terminal font size"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => step('in')}
+          className={STEP_BUTTON_CLASS}
+        >
+          +
+        </button>
         <span className="text-[13px] text-[--text-muted]">{FONT_COPY.terminalSizeUnit}</span>
       </div>
     </SettingRow>
