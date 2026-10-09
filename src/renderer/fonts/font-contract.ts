@@ -1,3 +1,5 @@
+import type { TerminalFontWeight } from '@shared/terminal-font-weight';
+
 export const UI_FONT_CSS_PROPERTY = '--metaide-ui-font-family';
 
 export const FONT_TEST_IDS = {
@@ -10,7 +12,21 @@ export const FONT_TEST_IDS = {
   terminalReset: 'terminal-font-reset',
   terminalStatus: 'terminal-font-status',
   terminalSizeInput: 'terminal-font-size-input',
+  terminalWeightSelect: 'terminal-font-weight-select',
 } as const;
+
+/** CSS weight names shown in the terminal font weight dropdown. */
+export const TERMINAL_FONT_WEIGHT_NAMES: Readonly<Record<TerminalFontWeight, string>> = {
+  100: 'Thin',
+  200: 'Extra Light',
+  300: 'Light',
+  400: 'Regular',
+  500: 'Medium',
+  600: 'Semibold',
+  700: 'Bold',
+  800: 'Extra Bold',
+  900: 'Black',
+};
 
 export const FONT_COPY = {
   sectionLabel: 'Fonts',
@@ -31,4 +47,9 @@ export const FONT_COPY = {
   terminalSizeHint: 'Every terminal uses this size. ⌘= / ⌘- / ⌘0 also change it.',
   terminalSizeUnit: 'px',
   terminalSizeSaveFailed: 'Could not save the terminal font size. Your previous size remains active.',
+  terminalWeightLabel: 'Terminal font weight',
+  terminalWeightHint: 'Bold text is drawn 300 heavier, up to 900. Fonts without this weight use the nearest one.',
+  terminalWeightSaveFailed: 'Could not save the terminal font weight. Your previous weight remains active.',
+  /** Dropdown option label, e.g. "Medium (500)". */
+  terminalWeightOptionLabel: (weight: TerminalFontWeight): string => `${TERMINAL_FONT_WEIGHT_NAMES[weight]} (${weight})`,
 } as const;

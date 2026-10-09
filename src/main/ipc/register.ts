@@ -626,6 +626,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.settings.set(TERMINAL_FONT_SIZE_KEY, parsed.value);
     return { value: parsed.value, changed: true };
   },
+  'settings:set-terminal-font-weight': async () => {
+    throw new Error('not implemented');
+  },
   'settings:set-app-env': async (s, { env }) => {
     const parsed = parseAppEnv(env);
     if (!parsed.ok) throw new Error(parsed.error);
