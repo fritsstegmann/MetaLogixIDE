@@ -152,7 +152,7 @@ function AppearanceSection({
       <SettingStack label="Theme">
         <PaletteCards palette={theme.palette} effective={theme.effective} onSelect={onPalette} />
       </SettingStack>
-      <SettingRow label="Mode" hint="System follows macOS.">
+      <SettingRow label="Mode" hint="System follows your OS appearance.">
         <ModeControl mode={theme.mode} effective={theme.effective} onChange={onMode} />
       </SettingRow>
       <SettingRow label="Window opacity" hint="Below 100% your desktop shows through.">
