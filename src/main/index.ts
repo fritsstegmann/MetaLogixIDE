@@ -402,6 +402,7 @@ const startupReady = app.whenReady().then(async () => {
   // reads + SQL upserts, and the file watcher is already running.
   try {
     const { discoverProjects } = await import('./domain/discovery');
+    const { pruneMissingProjects } = await import('./domain/prune-missing');
     const scanDepth = services.settings.get('scan_depth');
     for (const root of services.roots.list()) {
       for (const disc of discoverProjects(root.path, scanDepth)) {
@@ -410,6 +411,8 @@ const startupReady = app.whenReady().then(async () => {
           services.projects.updateConfig(p.id, { linkedMetaprojectProjectId: disc.metaprojectProjectId });
         }
       }
+      // Nothing is alive yet at boot, so every project whose folder is gone goes.
+      pruneMissingProjects({ projects: services.projects, hasLiveShell: () => false }, root);
       services.watcher.watch(root.path);
     }
   } catch (e) {

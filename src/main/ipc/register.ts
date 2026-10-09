@@ -4,6 +4,7 @@ import log from 'electron-log/main';
 import type { Services } from '@main/services';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
+import { pruneMissingProjects } from '@main/domain/prune-missing';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
@@ -116,6 +117,10 @@ function assertProjectPathExists(project: { id: number; name: string; path: stri
   }
 }
 
+function hasLiveShell(s: Services, projectId: number): boolean {
+  return s.ptyManager.liveShells().some((shell) => shell.projectId === projectId);
+}
+
 export interface WindowHooks {
   createPopoutWindow: (projectId: number, shellIndex: number) => Promise<number>;
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
@@ -173,6 +178,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         s.projects.updateConfig(p.id, { linkedMetaprojectProjectId: disc.metaprojectProjectId });
       }
     }
+    pruneMissingProjects({ projects: s.projects, hasLiveShell: (id) => hasLiveShell(s, id) }, root);
     return { discovered: n };
   },
 
