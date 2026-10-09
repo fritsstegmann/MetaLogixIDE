@@ -19,7 +19,7 @@ The app loads the symbols before opening or repainting a terminal, including spl
 One font size applies to every integrated terminal in every window: single and split panes, and popped-out shell windows. Set it in **Settings → General → Fonts → Terminal font size**, directly below the Terminal font field (`src/renderer/components/settings/TerminalFontSizeControl.tsx`).
 
 - Sizes are whole numbers from 9 to 28 px. The default is 14 px.
-- The **−** and **+** buttons, and the Up and Down arrow keys in the field, change the size by 1 px and save it immediately. At 9 or 28 px they do nothing.
+- The **−** and **+** buttons, and the Up and Down arrow keys in the field, change the size by 1 px and save it immediately. If you have typed a whole number that is not yet saved, they step from that number. At 9 or 28 px they do nothing.
 - Typed text is saved only when the field loses focus or you press Enter, so the terminals do not resize while you type. A number outside the range is clamped to the nearest bound. Empty input or a fraction such as 16.5 saves nothing, and the field returns to the saved size (`src/renderer/components/settings/font-size-draft.ts`).
 - In a focused terminal, ⌘= or ⌘+ makes the text 1 px larger and ⌘- makes it 1 px smaller (Ctrl on Linux and Windows). ⌘0 returns to 14 px. These keys change the same shared size, so every terminal and the Settings field follow. At 9 or 28 px the key does nothing.
 - A change applies to every open terminal immediately. The terminal keeps its process and scrollback, remeasures, and sends its new columns and rows to the shell (`src/renderer/components/ShellTab.tsx:367-372`). Terminals opened later start at the saved size.
