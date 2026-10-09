@@ -243,6 +243,11 @@ preference preserves the compatibility stack (`src/shared/font-settings.ts:1-10`
 | IO | `src/main/ipc/register.ts` | `settings:set-terminal-font-size` validates the size, writes only when unset if asked, and broadcasts `settings:changed` only when the value changed. The generic setter rejects the key. |
 | Renderer state | `src/renderer/fonts/terminal-font-size-store.ts`, `terminal-font-size-context.tsx` | One store per window: loads or migrates the size, applies changes locally first, ignores stale refreshes, and reverts with a toast on a failed save. |
 | Presentation | `src/renderer/components/settings/TerminalFontSizeControl.tsx`, `font-size-draft.ts` | The Terminal font size stepper and its pure input rules. |
+| Contract | `src/shared/terminal-font-weight.ts` | Defines the font weight and bold weight keys, the nine weights, the defaults (400 and 700), the bold rule (`derivedBoldWeight`, `isValidBoldWeight`, `boldWeightChoices`), and `resolveTerminalWeights`, which turns the stored pair into the weights in use. |
+| IO | `src/main/ipc/register.ts` | `settings:set-terminal-font-weight` validates W, derives bold in main, writes both keys in one `setMany` transaction, and broadcasts once per changed key. `settings:set-terminal-bold-weight` accepts only a bold weight heavier than the font weight in use. The generic setter rejects both keys. |
+| Renderer state | `src/renderer/fonts/terminal-font-weight-store.ts`, `terminal-font-weight-context.tsx` | One store per window for the pair: resolves the stored values without writing, applies changes locally first, re-syncs on either key, and reverts with that setting's toast on a failed save. |
+| Presentation | `src/renderer/components/settings/TerminalFontWeightControl.tsx` | The Terminal font weight and Terminal bold weight selects. |
+| Terminal adapter | `src/renderer/terminal-font-weight-apply.ts` | Maps the pair to xterm's `fontWeight` and `fontWeightBold`. |
 
 The UI preference changes inherited application text. Explicit `.font-mono`
 and Markdown code rules keep their compatibility stack
@@ -264,6 +269,16 @@ with `onlyIfUnset`, so concurrent windows cannot overwrite each other. Each
 `term.options.fontSize` and forces a geometry sync instead of recreating the
 terminal (`src/renderer/components/ShellTab.tsx:367-372`). A terminal waits
 for the loaded size before it opens, within the existing 2 s layout cap.
+
+The terminal font and bold weights use the same store-and-broadcast path
+with two channels, one per user action. Main is the only place that derives
+bold from the font weight, so the stored pair is never half-written; both
+main and the renderer resolve a missing or invalid stored value with the same
+shared function. A weight change sets `fontWeight` and `fontWeightBold` in
+one `term.options` assignment (`src/renderer/components/ShellTab.tsx:384`).
+xterm repaints in place and the WebGL renderer rebuilds its glyph atlas.
+Weight does not change cell size, so there is no geometry sync or PTY
+resize. A terminal also waits for the loaded weights before it opens.
 
 ### Split shell and motion
 

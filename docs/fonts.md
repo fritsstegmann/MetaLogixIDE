@@ -28,6 +28,21 @@ One font size applies to every integrated terminal in every window: single and s
 
 Before this setting existed, keyboard zoom saved the size in the window's `metaide.shellFontSize` local storage. On the first launch with the setting, that value is rounded, clamped to 9-28, and saved once; if it is missing or invalid, 14 is saved. The old key is not deleted, and it is not read again after migration.
 
+## Terminal font weight
+
+Two settings control how heavy terminal text is. Both apply to every integrated terminal in every window. Set them in **Settings → General → Fonts**, directly below Terminal font size (`src/renderer/components/settings/TerminalFontWeightControl.tsx`).
+
+- **Terminal font weight** sets normal text. Choose one of nine weights, from Thin (100) to Black (900). The default is Regular (400).
+- **Terminal bold weight** sets bold text. The default is Bold (700). The list offers only weights heavier than the font weight.
+- When you choose a font weight, bold is set to 200 heavier, up to 900, and replaces any bold weight you chose before. For example, Light (300) sets bold to Medium (500), and Bold (700) sets bold to Black (900). You can then choose a different bold weight.
+- At font weight Black (900), bold is also 900 and the bold list is disabled.
+- A choice is saved immediately. Choosing the value that is already selected saves nothing.
+- A change applies to every open terminal immediately. The terminal keeps its process, scrollback, and columns and rows. Terminals opened later start at the saved weights.
+- Many fonts have only Regular and Bold faces. For a weight the font does not have, the nearest face is used, so some choices can look the same.
+- Both weights are stored in the main-process settings store and survive a restart. The main process accepts only 100, 200, … 900, and only a bold weight heavier than the font weight (`src/shared/terminal-font-weight.ts`).
+- If a stored value is invalid, for example edited by hand, the font weight falls back to 400. The bold weight falls back to 700 if that is heavier than the font weight, and otherwise to the font weight + 200, up to 900. The error is logged to the developer console, and the stored value is not changed.
+- If a save fails, both settings and every terminal return to the stored weights and an error toast appears.
+
 ## Choose a font
 
 Each preference is one field: **Interface** for application text and **Terminal** for terminals (`src/renderer/components/FontControl.tsx`).
