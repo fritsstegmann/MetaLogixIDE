@@ -63,6 +63,17 @@ describe('FontControl markup (AC20 row and input)', () => {
     expect(cls).toContain('focus-visible:rounded-[10px]');
     expect(attr(input, 'role')).toBe('combobox');
   });
+
+  it('draws the field caret at 14px with stroke 2', () => {
+    const html = render({});
+    const pathIndex = html.indexOf('M6 9l6 6 6-6');
+    expect(pathIndex).toBeGreaterThan(-1);
+    const svgStart = html.lastIndexOf('<svg', pathIndex);
+    const caretTag = html.slice(svgStart, html.indexOf('>', svgStart) + 1);
+    expect(caretTag).toContain('width="14"');
+    expect(caretTag).toContain('height="14"');
+    expect(caretTag).toContain('stroke-width="2"');
+  });
 });
 
 describe('FontControl markup (AC21-AC23 option list)', () => {
@@ -99,6 +110,7 @@ describe('FontControl markup (AC21-AC23 option list)', () => {
     expect(selected).toHaveLength(1);
     expect(selected[0]).toContain('<svg');
     expect(selected[0]).toContain('width="14"');
+    expect(selected[0]).toContain('stroke-width="3"');
     expect(selected[0]).toContain('text-[--accent]');
     expect(selected[0]).toContain('Menlo');
     for (const r of rows.filter((x) => !x.includes('aria-selected="true"'))) {

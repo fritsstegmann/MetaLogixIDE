@@ -41,7 +41,7 @@ function useExitingToasts(toasts: Toast[]): Entry[] {
 
 const KIND_STYLES: Record<ToastKind, { border: string; accent: string; stripe: string; Icon: () => JSX.Element }> = {
   info:    { border: 'border-[--border]',       accent: 'text-[color:var(--accent)]', stripe: 'bg-[color:var(--accent)]', Icon: InfoIcon },
-  success: { border: 'border-emerald-500/40',   accent: 'text-emerald-400',           stripe: 'bg-emerald-500',            Icon: CheckIcon },
+  success: { border: 'border-emerald-500/40',   accent: 'text-emerald-400',           stripe: 'bg-emerald-500',            Icon: SuccessIcon },
   warning: { border: 'border-amber-500/40',     accent: 'text-amber-400',             stripe: 'bg-amber-400',              Icon: WarnIcon },
   error:   { border: 'border-[color:var(--danger)]/40', accent: 'text-[--danger]',    stripe: 'bg-[--danger]',             Icon: ErrorIcon },
 };
@@ -86,6 +86,6 @@ export function ToastStack() {
 }
 
 export function InfoIcon()  { return <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8"  x2="12.01" y2="8"/></svg>; }
-export function CheckIcon() { return <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>; }
+export function SuccessIcon() { return <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>; }
 export function WarnIcon()  { return <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>; }
 export function ErrorIcon() { return <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9"  y1="9" x2="15" y2="15"/></svg>; }

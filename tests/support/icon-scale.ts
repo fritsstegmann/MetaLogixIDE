@@ -9,8 +9,8 @@
  * - R2: an `<svg>` sized by a bare identifier (`{size}`) sits in a component
  *   that types that prop as `IconSize`.
  * - R3: no `<…Icon size={<number>}>` call site; pass `ICON_SIZE.*`.
- * - R4: a literal `strokeWidth` is 2, 2.5 or 3. 2.5 (or `ICON_STROKE.xs`) only
- *   inside an svg drawn at `ICON_SIZE.xs`; 3 (or `ICON_STROKE.check`) only in
+ * - R4: a literal `strokeWidth` is 2, 2.5 or 3. An svg drawn at `ICON_SIZE.xs`
+ *   uses 2.5 (or `ICON_STROKE.xs`), and 2.5 is used nowhere else; 3 (or `ICON_STROKE.check`) only in
  *   `components/CheckIcon.tsx`. Named exceptions are keyed by file and
  *   enclosing component, not by line.
  */
@@ -29,6 +29,7 @@ const STROKE_EXCEPTIONS: StrokeException[] = [
 const CHECK_ICON_FILE = 'components/CheckIcon.tsx';
 const XS_WIDTH = 'ICON_SIZE.xs';
 const NUMERIC = /^\s*\d+(\.\d+)?\s*$/;
+const XS_STROKE = 'icons drawn at ICON_SIZE.xs use stroke 2.5';
 
 interface SvgTag {
   start: number;
@@ -100,9 +101,10 @@ function strokeProblem(
   const inCheckFile = endsWithPath(path, CHECK_ICON_FILE);
   if (value === 'ICON_STROKE.xs') return inXs ? null : 'stroke 2.5 is for icons drawn at ICON_SIZE.xs only';
   if (value === 'ICON_STROKE.check') return inCheckFile ? null : `stroke 3 is for ${CHECK_ICON_FILE} only`;
+  if (value === 'ICON_STROKE.outline') return inXs ? XS_STROKE : null;
   if (!NUMERIC.test(value)) return null;
   const n = Number(value);
-  if (n === 2) return null;
+  if (n === 2) return inXs ? XS_STROKE : null;
   if (n === 2.5) return inXs ? null : 'stroke 2.5 is for icons drawn at ICON_SIZE.xs only';
   if (n === 3) return inCheckFile ? null : `stroke 3 is for ${CHECK_ICON_FILE} only`;
   const component = enclosingComponent(source, index);

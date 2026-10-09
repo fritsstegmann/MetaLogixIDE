@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CheckIcon, ErrorIcon, InfoIcon, mergeToasts, WarnIcon } from '@renderer/components/ToastStack';
+import { ErrorIcon, InfoIcon, mergeToasts, SuccessIcon, WarnIcon } from '@renderer/components/ToastStack';
 import { XIcon } from '@renderer/components/shell-icons';
 import { ICON_SIZE } from '@renderer/components/icon-size';
 import type { Toast } from '@renderer/hooks/useToasts';
@@ -39,7 +39,7 @@ describe('mergeToasts', () => {
 describe('toast icons', () => {
   it('kind icons render at 14 px stroke 2', () => {
     expect(svgAttrs(renderToStaticMarkup(createElement(InfoIcon)))).toEqual({ width: '14', height: '14', stroke: '2' });
-    expect(svgAttrs(renderToStaticMarkup(createElement(CheckIcon)))).toEqual({ width: '14', height: '14', stroke: '2' });
+    expect(svgAttrs(renderToStaticMarkup(createElement(SuccessIcon)))).toEqual({ width: '14', height: '14', stroke: '2' });
     expect(svgAttrs(renderToStaticMarkup(createElement(WarnIcon)))).toEqual({ width: '14', height: '14', stroke: '2' });
     expect(svgAttrs(renderToStaticMarkup(createElement(ErrorIcon)))).toEqual({ width: '14', height: '14', stroke: '2' });
   });

@@ -79,6 +79,12 @@ describe('iconScaleViolations', () => {
     expect(rules('<svg width={ICON_SIZE.md} height={ICON_SIZE.md} strokeWidth={ICON_STROKE.xs} />')).toEqual(['R4']);
   });
 
+  it('R4: requires 2.5 in an xs svg; a literal 2 or ICON_STROKE.outline there is flagged', () => {
+    expect(rules('<svg width={ICON_SIZE.xs} height={ICON_SIZE.xs} strokeWidth="2" />')).toEqual(['R4']);
+    expect(rules('<svg width={ICON_SIZE.xs} height={ICON_SIZE.xs} strokeWidth={ICON_STROKE.outline} />')).toEqual(['R4']);
+    expect(rules('<svg width={ICON_SIZE.xs} height={ICON_SIZE.xs} strokeWidth={ICON_STROKE.xs} />')).toEqual([]);
+  });
+
   it('R4: allows 3 only in components/CheckIcon.tsx', () => {
     const src = '<svg width={size} height={size} strokeWidth={3} />';
     const typed = `function CheckIcon({ size }: { readonly size: IconSize }) { return ${src}; }`;
