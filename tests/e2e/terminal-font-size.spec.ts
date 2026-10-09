@@ -17,6 +17,7 @@ import {
   installInvokeRecorder,
   invokeCalls,
   installFailingHandler,
+  installDelayedGet,
   restoreHandler,
   type TermProbe,
 } from './helpers/terminal-probe';
@@ -208,10 +209,10 @@ test.describe.serial('terminal font size setting', () => {
     }
   });
 
-  test('AC2: in-range saves as typed, out-of-range clamps on blur, invalid input reverts', async () => {
+  test('AC2: commits on blur/Enter (not per keystroke), clamps out-of-range, invalid input reverts, arrows save immediately', async () => {
     const harness = await launchHarness();
     try {
-      const { win } = harness;
+      const { app, win } = harness;
       await openProject(win);
       await openSettings(win);
       const input = sizeInput(win);
@@ -260,6 +261,53 @@ test.describe.serial('terminal font size setting', () => {
       await input.press('Enter');
       await expect.poll(() => storedSize(win), { timeout: E2E_TIMEOUT }).toBe(MIN);
       await expect(input).toHaveValue(String(MIN));
+
+      // AC2 amendment (user ruling, Phase 7 gate): typed text saves nothing while
+      // typing — only Arrow keys and the stepper buttons save immediately. Typing
+      // "100" one key at a time must never record a save for the "1" or the "10"
+      // it passes through on the way (which the old "in-range saves as typed" rule
+      // would have done, briefly setting every terminal to 10).
+      await installInvokeRecorder(app, CHANNEL);
+      const baseline = (await invokeCalls(app, CHANNEL)).length;
+      await input.focus();
+      await input.fill('');
+      await input.press('1');
+      expect(await invokeCalls(app, CHANNEL), 'typing "1" does not save').toHaveLength(baseline);
+      await input.press('0');
+      expect(await invokeCalls(app, CHANNEL), 'typing "10" does not save').toHaveLength(baseline);
+      await input.press('0');
+      await expect(input).toHaveValue('100');
+      expect(await invokeCalls(app, CHANNEL), 'typing "100" does not save').toHaveLength(baseline);
+
+      // Blur now commits the typed value, clamped to the max — exactly one save call.
+      await input.blur();
+      await expect.poll(() => storedSize(win), { timeout: E2E_TIMEOUT }).toBe(MAX);
+      await expect(input).toHaveValue(String(MAX));
+      expect(await invokeCalls(app, CHANNEL), 'blur issues exactly one save').toHaveLength(baseline + 1);
+
+      // Arrow keys still save immediately, with no blur or Enter needed.
+      await input.focus();
+      await input.press('ArrowDown');
+      await expect.poll(() => storedSize(win), { timeout: E2E_TIMEOUT }).toBe(MAX - 1);
+      await expect(input).toHaveValue(String(MAX - 1));
+      expect(await invokeCalls(app, CHANNEL), 'ArrowDown saves immediately, with the field still focused').toHaveLength(baseline + 2);
+
+      // The explicit stepper buttons save immediately too, and clamp (no-op) at a bound.
+      const decreaseButton = win.getByRole('button', { name: 'Decrease terminal font size' });
+      const increaseButton = win.getByRole('button', { name: 'Increase terminal font size' });
+      await increaseButton.click();
+      await expect.poll(() => storedSize(win), { timeout: E2E_TIMEOUT }).toBe(MAX);
+      await expect(input).toHaveValue(String(MAX));
+      expect(await invokeCalls(app, CHANNEL), 'the "+" button saves immediately').toHaveLength(baseline + 3);
+      const callsAtMax = (await invokeCalls(app, CHANNEL)).length;
+      await increaseButton.click();
+      await expect.poll(async () => input.inputValue(), { message: 'the "+" button is a no-op at the max' }).toBe(String(MAX));
+      expect(await invokeCalls(app, CHANNEL), 'no save call at the bound').toHaveLength(callsAtMax);
+      expect(await storedSize(win)).toBe(MAX);
+
+      await decreaseButton.click();
+      await expect.poll(() => storedSize(win), { timeout: E2E_TIMEOUT }).toBe(MAX - 1);
+      expect(await invokeCalls(app, CHANNEL), 'the "-" button saves immediately').toHaveLength(callsAtMax + 1);
     } finally {
       await harness.close();
     }
@@ -462,17 +510,84 @@ test.describe.serial('terminal font size setting', () => {
       await harness.close(false);
 
       harness = await launchHarness(fixture, { addRoot: false });
-      await installResizeRecorder(harness.app);
       expect(await storedSize(harness.win)).toBe(19);
       await openProject(harness.win);
-      // AC11: the first post-open probe already matches 19 (no 14 -> 19 jump), and the first
-      // recorded resize for shell 0 already matches a 19px fit.
+      // Coarse sanity check (not the proof — see below): by the time a project can be
+      // clicked through the UI, the store has long since loaded, so this alone cannot
+      // go red for a dropped open-wait or a wrong constructor read.
       const firstProbe = (await terminalProbes(harness.win))[0];
       if (!firstProbe) throw new Error('terminal probe unavailable after restart');
       expect(firstProbe.fontSize, 'at most one font-size change between construction and open').toBe(19);
-      await expect.poll(() => resizeCalls(harness.app), { timeout: E2E_TIMEOUT }).not.toHaveLength(0);
-      const firstResize = latestCallsByShell(await resizeCalls(harness.app)).get(0);
-      expect(firstResize).toMatchObject({ cols: firstProbe.cols, rows: firstProbe.rows });
+
+      // `shells:launch-plain` auto-picks the next unused shellIndex from the alive-shells
+      // list; right after `openProject` the shellIndex-0 spawn can still be registering,
+      // so wait for it to show up as alive before launching a second shell, or
+      // `launch-plain` can race and try to reuse index 0 ("already spawned").
+      await expect.poll(async () => harness.win.evaluate(async (projectName) => {
+        const rendererWindow = window as unknown as RendererWindow;
+        const { shells } = await rendererWindow.api.invoke('shells:alive-list', undefined) as {
+          shells: Array<{ projectName: string; shellIndex: number }>;
+        };
+        return shells.some((entry) => entry.projectName === projectName && entry.shellIndex === 0);
+      }, PROJECT), { timeout: E2E_TIMEOUT }).toBe(true);
+
+      // AC11, made failable: delay the main process's `settings:get` reply for
+      // `terminal_font_size`, then mount a brand-new window (a popped-out shell)
+      // whose TerminalFontSizeProvider has to load the size from scratch. The delay
+      // is installed on the main process *before* that window exists, so — unlike
+      // seeding localStorage ahead of a renderer's first paint (AC10, which loses
+      // that race) — there is no race here: the handler swap happens entirely
+      // inside the main process, independent of the new window's renderer. This is
+      // what goes red if the open-wait (`&& fontSizeReadyRef.current`,
+      // ShellTab.tsx:263) is dropped — the terminal would open immediately, before
+      // the delay resolves, at the unready default (14) — or if the constructor
+      // reads a literal 14 instead of `fontSizeRef.current` (ShellTab.tsx:120).
+      // Checks the FIRST resize recorded for this specific shell, not the latest
+      // (`latestCallsByShell` would hide either bug once the live-apply effect
+      // eventually corrects the value).
+      await installResizeRecorder(harness.app);
+      await installDelayedGet(harness.app, SETTING_KEY, 1500);
+      const poppedShell = await harness.win.evaluate(async (projectName) => {
+        const rendererWindow = window as unknown as RendererWindow;
+        const { projects } = await rendererWindow.api.invoke('projects:list', undefined) as {
+          projects: Array<{ id: number; name: string }>;
+        };
+        const project = projects.find((p) => p.name === projectName);
+        if (!project) throw new Error('project unavailable');
+        const { shellIndex } = await rendererWindow.api.invoke('shells:launch-plain', { projectId: project.id }) as { shellIndex: number };
+        return { projectId: project.id, shellIndex };
+      }, PROJECT);
+      const poppedIndex = poppedShell.shellIndex;
+      const openedAt = Date.now();
+      const [popout] = await Promise.all([
+        harness.app.waitForEvent('window'),
+        harness.win.evaluate(async (request) => {
+          const rendererWindow = window as unknown as RendererWindow;
+          await rendererWindow.api.invoke('windows:popout-shell', request);
+        }, poppedShell),
+      ]);
+      await popout.waitForLoadState('domcontentloaded');
+
+      // Still well inside the delay: the terminal must not have opened yet — no
+      // `.xterm` in the DOM, no resize recorded for this shell. Proves the wait
+      // actually holds off, rather than happening to not matter.
+      await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+      expect(await popout.locator('.xterm').count(), 'the terminal must not open before the store is ready').toBe(0);
+      expect(
+        (await resizeCalls(harness.app)).some((call) => call.shellIndex === poppedIndex),
+        'no resize for this shell before the store is ready',
+      ).toBe(false);
+
+      await expect(popout.locator('.xterm')).toBeVisible({ timeout: E2E_TIMEOUT });
+      expect(Date.now() - openedAt, 'the terminal only opened once the delayed load resolved').toBeGreaterThanOrEqual(1500);
+      const popoutProbe = (await terminalProbes(popout))[0];
+      if (!popoutProbe) throw new Error('popout terminal probe unavailable');
+      expect(popoutProbe.fontSize, 'the first probe already matches the saved size, no 14->19 jump').toBe(19);
+      const firstPoppedResize = (await resizeCalls(harness.app)).find((call) => call.shellIndex === poppedIndex);
+      if (!firstPoppedResize) throw new Error('no resize recorded for the popped-out shell');
+      expect(firstPoppedResize, 'the first resize for this shell already matches a 19px fit').toMatchObject({ cols: popoutProbe.cols, rows: popoutProbe.rows });
+      await restoreHandler(harness.app, 'settings:get');
+      await popout.close();
 
       // AC9: the dedicated setter rejects an out-of-range value and leaves the stored value unchanged.
       await expect(harness.win.evaluate(async () => {
@@ -540,24 +655,39 @@ test.describe.serial('terminal font size setting', () => {
       await expect.poll(async () => (await terminalProbes(win)).map((p) => p.fontSize)).toEqual([DEFAULT, DEFAULT]);
 
       await installFailingHandler(app, CHANNEL, 'injected terminal font size save failure');
+      await installInvokeRecorder(app, CHANNEL);
       try {
-        // From Settings: the field and every terminal revert to 14, with an error toast.
+        // Gate blocking finding 1: a save that fails WHILE THE FIELD STILL HAS FOCUS
+        // must revert immediately (not just on blur), and blurring the now-reverted
+        // field afterward must not resubmit the stale value (the regression: a
+        // second failing save, a second toast). Under the AC2 amendment, Enter
+        // commits without moving focus, so it is the reachable way to fail a save
+        // while the field is still focused.
         await openSettings(win);
         const input = sizeInput(win);
         await input.fill('16');
-        await input.blur();
+        await input.press('Enter');
         await expect(win.getByTestId('toast').filter({ hasText: FONT_COPY.terminalSizeSaveFailed }).first(), 'positive control: the failure toast appeared').toBeVisible({ timeout: E2E_TIMEOUT });
-        await expect(input, 'the field reverts to the stored value').toHaveValue(String(DEFAULT));
+        await expect(input, 'input state: the field is still focused after Enter').toBeFocused();
+        await expect(input, 'the field reverts to the stored value while still focused').toHaveValue(String(DEFAULT));
         await expect.poll(async () => (await terminalProbes(win)).map((p) => p.fontSize), { message: 'every terminal reverts to the stored value' }).toEqual([DEFAULT, DEFAULT]);
         expect(await storedSize(win), 'the stored value is unchanged').toBe(DEFAULT);
+        expect(await invokeCalls(app, CHANNEL), 'exactly one save call while the field was focused').toHaveLength(1);
+
+        // Blurring the already-reverted field must not resubmit it: still 1 call, still 1 toast.
+        await input.blur();
+        expect(await invokeCalls(app, CHANNEL), 'blur after a focused failure issues no further save').toHaveLength(1);
+        expect(await win.getByTestId('toast').filter({ hasText: FONT_COPY.terminalSizeSaveFailed }), 'still exactly one failure toast').toHaveCount(1);
         await closeSettings(win);
 
         // From keyboard zoom: same outcome.
+        const callsBeforeZoom = (await invokeCalls(app, CHANNEL)).length;
         await win.locator('.split-left .xterm').click();
         await win.keyboard.press('Meta+=');
         await expect(win.getByTestId('toast').filter({ hasText: FONT_COPY.terminalSizeSaveFailed }).last(), 'zoom failure also toasts').toBeVisible({ timeout: E2E_TIMEOUT });
         await expect.poll(async () => (await terminalProbes(win)).map((p) => p.fontSize), { message: 'zoom reverts every terminal too' }).toEqual([DEFAULT, DEFAULT]);
         expect(await storedSize(win), 'the stored value is still unchanged').toBe(DEFAULT);
+        expect(await invokeCalls(app, CHANNEL), 'zoom issues exactly one more save call').toHaveLength(callsBeforeZoom + 1);
       } finally {
         await restoreHandler(app, CHANNEL);
       }

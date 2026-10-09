@@ -187,6 +187,35 @@ export async function installFailingHandler(app: ElectronApplication, channel: s
   }, { channelName: channel, message });
 }
 
+/**
+ * Delays the main process's reply to `settings:get` for one specific settings key by
+ * `delayMs`; every other key still resolves immediately through the real handler.
+ * Install this *before* the window that must observe the delay is created: the
+ * handler swap happens entirely inside the main process (a direct `ipcMain.handle`
+ * replacement), independent of any renderer's load state, so — unlike seeding
+ * localStorage before a renderer's first paint (which loses the race against that
+ * renderer's own first script execution) — a window created after this call is
+ * guaranteed to hit the delay on its first `settings:get` for `targetKey`, no race.
+ * Restore with `restoreHandler(app, 'settings:get')`.
+ */
+export async function installDelayedGet(app: ElectronApplication, targetKey: string, delayMs: number): Promise<void> {
+  await app.evaluate(({ ipcMain }, args) => {
+    const ipcMainWithHandlers = ipcMain as unknown as IpcMainWithHandlers;
+    const original = ipcMainWithHandlers._invokeHandlers?.get('settings:get');
+    if (!original) throw new Error('settings:get handler unavailable');
+    const globals = globalThis as OriginalHandlerGlobals;
+    globals.__probeOriginalHandlers ??= new Map();
+    globals.__probeOriginalHandlers.set('settings:get', original);
+    ipcMain.removeHandler('settings:get');
+    ipcMain.handle('settings:get', async (event, request: { key?: string }) => {
+      if (request?.key === args.targetKey) {
+        await new Promise((resolve) => setTimeout(resolve, args.delayMs));
+      }
+      return original(event, request);
+    });
+  }, { targetKey, delayMs });
+}
+
 /** Restores the handler `installFailingHandler` replaced. */
 export async function restoreHandler(app: ElectronApplication, channel: string): Promise<void> {
   await app.evaluate(({ ipcMain }, channelName) => {
