@@ -30,9 +30,12 @@ import { APP_ENV_TESTIDS, ENV_COPY, ENV_TESTIDS } from '../../src/renderer/proje
  *    chat link-plug / empty-state / empty-channel tiles: `ChatTab` renders
  *    behind a network-gated sign-in and is not reachable headless
  *    (`chat-icons.test.tsx`, Agent 2).
- *  - The CLI-menu Star/remove-X and "Add a custom command" row: markup-only,
- *    no fixed box to re-derive here, and already covered by markup unit
- *    tests over `ShellTabsBar.tsx`.
+ *  - The CLI-menu Star and "Add a custom command" row: markup-only, no
+ *    fixed box to re-derive here, and already covered by markup unit tests
+ *    over `ShellTabsBar.tsx` (the star's size is baked into `StarIcon`'s
+ *    own definition). The CLI-menu remove-X IS reachable — it is a
+ *    `<XIcon size={ICON_SIZE.sm} />` call site laid out (at opacity 0) for
+ *    any project-scoped profile, and is covered below.
  *
  * Phase 5 reconcile: the env editor's Reveal/Copy/Remove icons ARE reachable
  * — the App-wide Environment settings section drives the same
@@ -174,11 +177,6 @@ test('AC5 (D9): the text ✕ closes in the StatusBar alive-shells popover (20px 
   await expectIconSize(popoverClose.locator('svg'), 12, 'alive-shells popover close icon');
   await popoverClose.click();
 
-  // ShellTab's exit-overlay dismiss (:500) is only reachable after a shell
-  // process exits, which this suite does not script; it is covered by the
-  // D9 conversion asserted above plus the find-bar close below (same
-  // shared `<XIcon size={ICON_SIZE.sm} />` call site pattern, same 24px box).
-
   // ShellTab find bar close (:533), opened with ⌘F inside the terminal.
   const shellTab = win.locator('[data-testid="shell-tab"]').first();
   await shellTab.click();
@@ -193,6 +191,57 @@ test('AC5 (D9): the text ✕ closes in the StatusBar alive-shells popover (20px 
   await expect(searchBar.locator('input')).toBeFocused();
   await win.keyboard.press('Escape');
   await expect(searchBar).toBeHidden();
+});
+
+test('AC16: the ShellTab exit-overlay Dismiss (:502) is real-mouse-clickable and renders 12x12; Re-launch (:493) hit-tests clean too', async () => {
+  // ShellTab.tsx:415 sets exitInfo on the pty's exit callback, which renders
+  // the overlay; typing `exit` into the real login shell is the only way to
+  // fire that callback through the actual UI.
+  const shellTab = win.locator('[data-testid="shell-tab"]').first();
+  await shellTab.click();
+  await win.keyboard.type('exit');
+  await win.keyboard.press('Enter');
+  const dismiss = win.getByTestId('shell-exit-dismiss');
+  await expect(dismiss).toBeVisible({ timeout: 10000 });
+  await expectIconSize(dismiss.locator('svg'), 12, 'shell exit-overlay dismiss icon');
+
+  // AC16/D14: before the `isolate` fix on the terminal host, xterm's own
+  // link-layer canvas (z-index 2, pointer-events auto) painted above this
+  // whole overlay and silently ate clicks at this point. Checked for
+  // Re-launch with a real hit-test (the same check the browser itself runs
+  // before delivering a click) rather than an actual click — a second real
+  // pty relaunch cycle isn't worth it for what both buttons share: landing
+  // on the right element. Not dependent on the relaunch succeeding.
+  const relaunch = win.getByTestId('shell-relaunch');
+  const relaunchHits = await relaunch.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return top !== null && (top === el || el.contains(top));
+  });
+  expect(relaunchHits, 'Re-launch hit-tests to itself, not a layered element on top of it').toBe(true);
+
+  // Dismiss gets the full real click — the one this overlay most needs,
+  // and the one ShellTab.tsx:415 is reachable through from this suite.
+  await dismiss.click();
+  await expect(dismiss).toBeHidden();
+
+  // Restore shell 0 to alive: AC6's Split (and anything else sharing this
+  // app instance afterwards) assumes a live primary shell, same as every
+  // other test in this file always has. Equivalent to clicking Re-launch
+  // (already hit-test-proven above) but direct, since the overlay — and
+  // so the button — is gone now that Dismiss really did its job.
+  const projectId = await win.evaluate(async (path: string) => {
+    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
+    const { projects } = (await api.invoke('projects:list', {})) as { projects: { id: number; path: string }[] };
+    const match = projects.find((p) => p.path === path);
+    if (!match) throw new Error('iconproj not found in projects:list');
+    return match.id;
+  }, projectDir);
+  await win.evaluate(async (id: number) => {
+    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
+    await api.invoke('shells:launch', { projectId: id });
+  }, projectId);
+  await win.locator('.xterm').first().waitFor({ timeout: 10000 });
 });
 
 /* ─────────────────────────────── AC6: 20-24px icon buttons, 16px micro controls ─────────────────────────────── */
@@ -326,6 +375,42 @@ test('AC9: the Pi and oh-my-pi marks render 16x16 centred in an unchanged 20x20 
   await expect(menu).toBeHidden();
 });
 
+test('AC3: the CLI-menu "Remove from this project" X (ShellTabsBar.tsx:210) renders 12x12 for a project-scoped profile', async () => {
+  // Only project-scoped profiles get the remove-X (ShellTabsBar.tsx:208);
+  // the three beforeAll profiles are all global, so one project-scoped
+  // profile is seeded here via projects:update-config (the same path the
+  // "save" checkbox on a custom command uses).
+  const projectId = await win.evaluate(async (path: string) => {
+    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
+    const { projects } = (await api.invoke('projects:list', {})) as { projects: { id: number; path: string }[] };
+    const match = projects.find((p) => p.path === path);
+    if (!match) throw new Error('iconproj not found in projects:list');
+    return match.id;
+  }, projectDir);
+  await win.evaluate(async ({ id }: { id: number }) => {
+    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
+    await api.invoke('projects:update-config', { id, config: { cliProfiles: [{ name: 'ProjMark', argv: ['/bin/sh'] }] } });
+  }, { id: projectId });
+
+  await win.getByTestId('tabbar-new-shell').click();
+  const menu = win.locator('[data-new-shell-menu="1"]');
+  await expect(menu).toBeVisible();
+  await settle(menu); // menuMotion opens with a 0.97 scale transition
+
+  const row = menu.locator('div.group', { hasText: 'ProjMark' });
+  // Positive control: it's really the project-scoped row, not a global one.
+  await expect(row.getByText('saved', { exact: true })).toBeVisible();
+  const removeX = row.getByRole('button', { name: 'Remove from this project' });
+  // Opacity-0 by default, but still laid out (ShellTabsBar.tsx:208) — boundingBox reads the real box.
+  await expectIconSize(removeX.locator('svg'), 12, 'CLI-menu remove-X icon');
+
+  // Positive control: the button really removes the profile, not just sized right.
+  await removeX.click();
+  await expect(menu.getByText('ProjMark')).toHaveCount(0);
+  await win.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+});
+
 /* ─────────────────────────────── AC13: centring ─────────────────────────────── */
 
 test('AC13: icon-only buttons in AC4-AC6 keep their icon centred (±0.5px) in their box, on both axes', async () => {
@@ -419,6 +504,12 @@ test('AC3: SidebarHeader add/filter icons and the Env-tab unaffected icons rende
   await expectIconSize(filterIcon, 14, 'sidebar filter search icon');
   // Positive control: the icon really sits left of the input, not just present.
   expect((await box(filterIcon)).x, 'filter icon left of its input').toBeLessThan((await box(filterInput)).x);
+
+  // Root folder glyph (RootFolderGlyph, Sidebar.tsx:515). Visible for every
+  // root row — confirmed already rendered and tinted by chrome-cleanup.spec
+  // :84 — so it needs no extra setup here.
+  const rootGlyph = win.locator('[data-testid="root-hue"]').first();
+  await expectIconSize(rootGlyph, 12, 'root folder glyph');
 });
 
 test('AC3: the app-wide Env editor\'s Reveal/Copy/Remove row icons render 14x14 (EnvValueField, EnvEditor)', async () => {
