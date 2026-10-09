@@ -9,6 +9,7 @@ export const FONT_TEST_IDS = {
   /** The "System default" option in the terminal font list. */
   terminalReset: 'terminal-font-reset',
   terminalStatus: 'terminal-font-status',
+  terminalSizeInput: 'terminal-font-size-input',
 } as const;
 
 export const FONT_COPY = {
@@ -26,4 +27,8 @@ export const FONT_COPY = {
   discoveryError: 'Installed fonts could not be loaded. Type an exact family name.',
   unavailable: 'Font is not available on this computer.',
   unknown: 'Font availability is unknown.',
+  terminalSizeLabel: 'Terminal font size',
+  terminalSizeHint: 'Every terminal uses this size. ⌘= / ⌘- / ⌘0 also change it.',
+  terminalSizeUnit: 'px',
+  terminalSizeSaveFailed: 'Could not save the terminal font size. Your previous size remains active.',
 } as const;

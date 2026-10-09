@@ -614,6 +614,9 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.settings.set(request.key, parsed.value);
     return { value: parsed.value };
   },
+  'settings:set-terminal-font-size': async () => {
+    throw new Error('not implemented');
+  },
   'settings:set-app-env': async (s, { env }) => {
     const parsed = parseAppEnv(env);
     if (!parsed.ok) throw new Error(parsed.error);

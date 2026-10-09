@@ -102,6 +102,8 @@ export type SettingsMap = {
   'ui_font_family':                string | null;
   /** Host-installed family used by integrated terminals; null keeps the built-in stack. */
   'terminal_font_family':          string | null;
+  /** Integrated-terminal font size in px (9..28); null = never saved (effective 14, legacy migration pending). Write via settings:set-terminal-font-size only. */
+  'terminal_font_size':            number | null;
   'metaproject_base_url':          string;
   /** Last-used metaproject username. Password is NEVER persisted. */
   'metaproject_last_username':     string;
