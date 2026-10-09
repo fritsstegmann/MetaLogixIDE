@@ -137,6 +137,8 @@ export interface IpcContract {
   'settings:get': { request: { key: keyof SettingsMap };                        response: { value: SettingsMap[keyof SettingsMap] } };
   'settings:set': { request: { key: keyof SettingsMap; value: SettingsMap[keyof SettingsMap] }; response: { ok: true } };
   'settings:set-font': { request: { key: FontSettingKey; value: unknown }; response: { value: FontFamilyPreference } };
+  /** Validated replace of the whole app env map; rejects naming the key only; emits settings:changed { key: 'app_env' }. */
+  'settings:set-app-env': { request: { env: Record<string, string> }; response: { env: Record<string, string> } };
   'settings:set-claude-permission-mode': { request: { mode: ClaudePermissionMode }; response: { mode: ClaudePermissionMode; changedKeys: Array<keyof SettingsMap> } };
 
   // notifications

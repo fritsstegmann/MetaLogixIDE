@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
-import { parseProjectEnv } from '@shared/project-env';
+import { parseProjectEnv, parseAppEnv } from '@shared/project-env';
 import type { Project, ProjectConfig } from '@shared/types';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
@@ -34,7 +34,8 @@ function projectSpawnEnv(
   project: Project,
   templateEnv: Record<string, string>,
 ): Record<string, string> {
-  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir }).env;
+  const appEnv = s.settings.get('app_env');
+  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir, appEnv }).env;
 }
 
 /**
@@ -596,6 +597,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // Permission mode and font preferences have dedicated validated setters.
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
     if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
+    if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -605,6 +607,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!parsed.ok) throw new Error(parsed.error);
     s.settings.set(request.key, parsed.value);
     return { value: parsed.value };
+  },
+  'settings:set-app-env': async (s, { env }) => {
+    const parsed = parseAppEnv(env);
+    if (!parsed.ok) throw new Error(parsed.error);
+    s.settings.set('app_env', parsed.env);
+    return { env: parsed.env };
   },
   'settings:set-claude-permission-mode': async (s, { mode }) => {
     if (!isClaudePermissionMode(mode)) throw new Error(`invalid Claude permission mode (expected 'auto' or 'bypass')`);
@@ -1289,6 +1297,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   // events that the fixed per-channel payload cannot express.
   const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
     'settings:set-font': true,
+    'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
   };
 
@@ -1305,6 +1314,12 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('settings:set-font', async (_e, req: IpcRequest<'settings:set-font'>) => {
     const result = await handlers['settings:set-font'](services, req);
     sendEvent('settings:changed', { key: req.key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-app-env', async (_e, req: IpcRequest<'settings:set-app-env'>) => {
+    const result = await handlers['settings:set-app-env'](services, req);
+    sendEvent('settings:changed', { key: 'app_env' });
     return result;
   });
 

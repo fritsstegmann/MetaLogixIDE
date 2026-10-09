@@ -246,4 +246,18 @@ describe('SettingsRepo', () => {
     expect(repo.get('notify_claude_finished')).toBe(false);
     expect(repo.get('notify_claude_needs_input')).toBe(true);
   });
+
+  describe('app_env (AC3)', () => {
+    it('defaults to an empty map on a fresh DB', () => {
+      const repo = seed();
+      expect(repo.get('app_env')).toEqual({});
+    });
+
+    it('set then get preserves insertion order of 3 keys', () => {
+      const repo = seed();
+      repo.set('app_env', { B: '2', A: '1', C: '3' });
+      expect(Object.keys(repo.get('app_env'))).toEqual(['B', 'A', 'C']);
+      expect(repo.get('app_env')).toEqual({ B: '2', A: '1', C: '3' });
+    });
+  });
 });

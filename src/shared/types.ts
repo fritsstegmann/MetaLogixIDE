@@ -119,4 +119,6 @@ export type SettingsMap = {
   'notify_claude_needs_input':     boolean;
   /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
   'notify_claude_finished':        boolean;
+  /** App-wide env variables applied to every spawn; project variables override. Write via settings:set-app-env only. */
+  'app_env':                       Record<string, string>;
 };

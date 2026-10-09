@@ -41,7 +41,7 @@ const ROW_HINTS = {
   'Max watched paths': 'File-watcher limit across all roots.',
 } as const;
 const FONTS_HINT = 'Pick an installed font or type an exact family name.';
-const NAV = ['General', 'Root directories', 'Launch commands', 'Metaproject'] as const;
+const NAV = ['General', 'Root directories', 'Launch commands', 'Environment', 'Metaproject'] as const;
 const SECTIONS = ['Appearance', 'Fonts', 'Workspace', 'Notifications'] as const;
 const SWITCHES = [
   { testId: 'notify-needs-input-toggle', label: 'When Claude needs input', key: 'notify_claude_needs_input' },
