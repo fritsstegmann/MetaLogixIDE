@@ -19,7 +19,7 @@ The app loads the symbols before opening or repainting a terminal, including spl
 Each preference is one field: **Interface** for application text and **Terminal** for terminals (`src/renderer/components/FontControl.tsx`).
 
 1. Open **Settings → General → Fonts**.
-2. Click the **Interface** or **Terminal** field. A list opens with **System default** first, then every installed family drawn in its own face.
+2. Click the **Interface** or **Terminal** field. A list opens with **System default** first, then the installed families (up to 500) drawn in their own face.
 3. Allow font access if requested.
 4. Type to filter the list. If the text does not match an installed family exactly, the list also offers **Use “…”** to save the typed name as an exact family. While you type, the highlight goes to the family whose name matches exactly, then to one that starts with the text, then to the first that contains it.
 5. Click an entry, or use the arrow keys and Enter. The preview line under the field updates.
@@ -35,5 +35,7 @@ The list includes all installed families for both preferences; terminal selectio
 ## Return to the system default
 
 Choose **System default** at the top of the list, or clear the field and press Enter. This changes only that preference and restores its built-in fallback stack.
+
+For the interface, System default is the desktop's UI font: San Francisco on macOS, Segoe UI on Windows, and the GTK/fontconfig interface font on Linux (`UI_FONT_FALLBACK` in `src/shared/font-settings.ts`).
 
 A font name can contain printable punctuation and non-ASCII characters. The app trims outer whitespace and rejects C0 control characters and names longer than 256 Unicode code points (`src/shared/font-settings.ts:16-32`).

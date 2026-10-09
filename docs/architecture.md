@@ -172,6 +172,13 @@ rescan flows. With `autoFocus`, `ContextMenu` focuses its first enabled item,
 and moves with the arrow keys; `SidebarHeader` returns focus to "+" when the menu closes. Copy and
 test ids live in `src/renderer/sidebar-copy.ts`.
 
+Rescan (and the automatic rescan at startup) adds newly discovered folders and
+drops projects whose folder no longer exists
+(`src/main/domain/prune-missing.ts`). Deleting a project row cascades to its
+saved shells, recents and prompts, so pruning skips a root whose own folder is
+missing (an unmounted drive must not empty it) and any project that still has
+a live shell.
+
 Section headers (In use, Recents, Projects) align with the filter field and
 show a chevron on the right. The full list is titled "Projects" but stores its
 collapsed state under the legacy key "All projects", so existing state

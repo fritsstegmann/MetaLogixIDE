@@ -34,7 +34,7 @@ const SWATCHES: Record<PaletteId, Record<Theme, readonly string[]>> = {
 };
 
 const ROW_HINTS = {
-  Mode: 'System follows macOS.',
+  Mode: 'System follows your OS appearance.',
   'Window opacity': 'Below 100% your desktop shows through.',
   'Keep-alive cap': 'Shells kept running at once; the oldest is closed first.',
   'Root scan depth': 'Folder levels below a root that count as projects.',

@@ -12,7 +12,7 @@ import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { commitAll, git, makeConflict, markerScript, stubGitEnv, tempProject } from '../git/temp-repo';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -878,5 +878,51 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
   it('git:file-diff without .git returns an empty diff', async () => {
     const { call } = gitRig();
     await expect(call('git:file-diff', { projectId: 1, path: 'a.ts' })).resolves.toEqual({ diff: '' });
+  });
+});
+
+describe('roots:rescan', () => {
+  function rescanRig(liveProjectIds: number[] = []) {
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'rescan-db-')), 'db'));
+    runMigrations(db, migrationsDir);
+    const settings = new SettingsRepo(db);
+    settings.seedDefaults();
+    const roots = new RootsRepo(db);
+    const projects = new ProjectsRepo(db);
+    const ptyManager = fakePtyManager();
+    ptyManager.liveShells.mockImplementation(() =>
+      liveProjectIds.map((projectId) => ({ projectId, shellIndex: 0, pid: 1, startedAt: 0, lastDataAt: 0 })) as never);
+    const ipc = fakeIpcMain();
+    const services = { settings, roots, projects, ptyManager } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    const rootPath = mkdtempSync(join(tmpdir(), 'rescan-root-'));
+    const root = roots.add(rootPath);
+    const rescan = () => ipc.handlers.get('roots:rescan')!({}, { id: root.id });
+    return { projects, rootPath, rescan, liveProjectIds };
+  }
+
+  it('drops a project whose folder was removed from the root', async () => {
+    const { projects, rootPath, rescan } = rescanRig();
+    mkdirSync(join(rootPath, 'keep'));
+    mkdirSync(join(rootPath, 'gone'));
+    await rescan();
+    expect(projects.list().map((p) => p.name).sort()).toEqual(['gone', 'keep']);
+
+    rmSync(join(rootPath, 'gone'), { recursive: true });
+    await rescan();
+
+    expect(projects.list().map((p) => p.name)).toEqual(['keep']);
+  });
+
+  it('keeps a removed folder\'s project while it still has a live shell', async () => {
+    const { projects, rootPath, rescan, liveProjectIds } = rescanRig();
+    mkdirSync(join(rootPath, 'busy'));
+    await rescan();
+    liveProjectIds.push(projects.list()[0]!.id);
+
+    rmSync(join(rootPath, 'busy'), { recursive: true });
+    await rescan();
+
+    expect(projects.list().map((p) => p.name)).toEqual(['busy']);
   });
 });
