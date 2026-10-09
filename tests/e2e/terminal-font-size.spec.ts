@@ -540,8 +540,9 @@ test.describe.serial('terminal font size setting', () => {
       // inside the main process, independent of the new window's renderer. This is
       // what goes red if the open-wait (`&& fontSizeReadyRef.current`,
       // ShellTab.tsx:263) is dropped — the terminal would open immediately, before
-      // the delay resolves, at the unready default (14) — or if the constructor
-      // reads a literal 14 instead of `fontSizeRef.current` (ShellTab.tsx:120).
+      // the delay resolves, at the unready default (14). A constructor that read a
+      // literal 14 instead of `fontSizeRef.current` would not go red: the mount-time
+      // live-apply effect sets the size before open (an equivalent mutant).
       // Checks the FIRST resize recorded for this specific shell, not the latest
       // (`latestCallsByShell` would hide either bug once the live-apply effect
       // eventually corrects the value).
