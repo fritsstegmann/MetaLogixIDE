@@ -267,7 +267,7 @@ first window to load then migrates the legacy `metaide.shellFontSize` value
 with `onlyIfUnset`, so concurrent windows cannot overwrite each other. Each
 `ShellTab` reads the shared size through a ref, so a change sets
 `term.options.fontSize` and forces a geometry sync instead of recreating the
-terminal (`src/renderer/components/ShellTab.tsx:367-372`). A terminal waits
+terminal (`src/renderer/components/ShellTab.tsx:374-379`). A terminal waits
 for the loaded size before it opens, within the existing 2 s layout cap.
 
 The terminal font and bold weights use the same store-and-broadcast path
@@ -656,7 +656,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
    (`src/renderer/fonts/font-settings-context.tsx:39-68`).
 4. The UI adapter updates the root CSS property, or each terminal updater
    changes its existing xterm instance (`src/renderer/fonts/use-apply-ui-font.ts:12-28`,
-   `src/renderer/components/ShellTab.tsx:374-379`).
+   `src/renderer/components/ShellTab.tsx:387-392`).
 5. A terminal font change completes with fit, repaint, and PTY resize. It
    does not recreate the PTY or replay scrollback
    (`src/renderer/terminal-font-update.ts:68-105`).

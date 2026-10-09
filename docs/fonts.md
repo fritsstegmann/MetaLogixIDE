@@ -8,7 +8,7 @@ The UI font applies to navigation, labels, controls, chat prose, and rendered Ma
 
 ## Terminal font
 
-The Terminal font applies to all integrated terminals, including split and popped-out terminals. A live change keeps the terminal process, scrollback, selection, and input, then remeasures and repaints the terminal (`src/renderer/components/ShellTab.tsx:374-379`, `src/renderer/terminal-font-update.ts:108-139`).
+The Terminal font applies to all integrated terminals, including split and popped-out terminals. A live change keeps the terminal process, scrollback, selection, and input, then remeasures and repaints the terminal (`src/renderer/components/ShellTab.tsx:387-392`, `src/renderer/terminal-font-update.ts:108-139`).
 
 Terminals include **Symbols Nerd Font Mono v3.4.0** as a bundled fallback for private-use Nerd Font icons. Normal text keeps the existing system stack or your selected family. A selected font that already contains an icon takes precedence. The bundled face is restricted to private-use Unicode ranges, so it does not replace ordinary letters, numbers, or punctuation. **System default** keeps this icon fallback.
 
@@ -22,7 +22,7 @@ One font size applies to every integrated terminal in every window: single and s
 - The **−** and **+** buttons, and the Up and Down arrow keys in the field, change the size by 1 px and save it immediately. If you have typed a whole number that is not yet saved, they step from that number. At 9 or 28 px they do nothing.
 - Typed text is saved only when the field loses focus or you press Enter, so the terminals do not resize while you type. A number outside the range is clamped to the nearest bound. Empty input or a fraction such as 16.5 saves nothing, and the field returns to the saved size (`src/renderer/components/settings/font-size-draft.ts`).
 - In a focused terminal, ⌘= or ⌘+ makes the text 1 px larger and ⌘- makes it 1 px smaller (Ctrl on Linux and Windows). ⌘0 returns to 14 px. These keys change the same shared size, so every terminal and the Settings field follow. At 9 or 28 px the key does nothing.
-- A change applies to every open terminal immediately. The terminal keeps its process and scrollback, remeasures, and sends its new columns and rows to the shell (`src/renderer/components/ShellTab.tsx:367-372`). Terminals opened later start at the saved size.
+- A change applies to every open terminal immediately. The terminal keeps its process and scrollback, remeasures, and sends its new columns and rows to the shell (`src/renderer/components/ShellTab.tsx:374-379`). Terminals opened later start at the saved size.
 - The size is stored in the main-process settings store and survives a restart. The main process accepts only whole numbers from 9 to 28 (`src/shared/terminal-font-size.ts`).
 - If a save fails, every terminal and the Settings field return to the stored size and an error toast appears.
 

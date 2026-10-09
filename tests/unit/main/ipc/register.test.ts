@@ -449,6 +449,22 @@ describe('registerIpc', () => {
       expect(new Set(settingsChangedKeys)).toEqual(new Set(['terminal_font_weight', 'terminal_bold_weight']));
     });
 
+    it.each([
+      [100, 300],
+      [400, 600],
+      [800, 900],
+    ] as const)('choosing W %i stores bold %i (min(W + 200, 900), no 700 floor)', async (weight, bold) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: weight }),
+      ).resolves.toMatchObject({ weight, boldWeight: bold });
+      expect(settings.get('terminal_bold_weight')).toBe(bold);
+    });
+
     it('resets a hand-set bold weight (W 400, B 900, then choosing W 500 resets B to 700)', async () => {
       const ipc = fakeIpcMain();
       const settings = realSettings();
@@ -608,6 +624,22 @@ describe('registerIpc', () => {
       await expect(handler({}, { value: 400 })).rejects.toThrow();
       await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
     });
+
+    it.each([1000, 'bold'])(
+      'with stored weight %j (invalid, not a near miss), validates against the in-use weight 400: rejects B=400, accepts B=500',
+      async (storedWeight) => {
+        const ipc = fakeIpcMain();
+        const settings = realSettings();
+        settings.set('terminal_font_weight', storedWeight as never);
+        const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+        registerIpc(ipc as unknown as IpcMain, services, () => {});
+        const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+        await expect(handler({}, { value: 400 })).rejects.toThrow();
+        await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+        expect(settings.get('terminal_font_weight')).toBe(storedWeight);
+      },
+    );
 
     it('never touches the stored font weight', async () => {
       const ipc = fakeIpcMain();
