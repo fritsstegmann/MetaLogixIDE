@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePersistedNumber } from '@renderer/hooks/usePersistedNumber';
 import { Terminal, type IDisposable, type ITheme, type ILinkProvider, type IBufferCellPosition } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -18,6 +17,8 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
+import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
+import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
 import {
@@ -86,7 +87,11 @@ export function ShellTab({
   const pendingLive = useRef('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [fontSize, setFontSize] = usePersistedNumber('metaide.shellFontSize', 14, 9, 28);
+  const { size: fontSize, ready: fontSizeReady, setSize: setFontSize } = useTerminalFontSize();
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const fontSizeReadyRef = useRef(fontSizeReady);
+  fontSizeReadyRef.current = fontSizeReady;
   const { terminalFontFamily } = useFontSettings();
   const terminalFontFamilyRef = useRef<FontFamilyPreference>(terminalFontFamily);
   terminalFontFamilyRef.current = terminalFontFamily;
@@ -112,7 +117,7 @@ export function ShellTab({
       // common developer monospace fonts. `ui-monospace` alone can pick
       // Menlo bitmap fallback on some setups and looks pixelated.
       fontFamily: buildFontFamilyStack(terminalFontFamilyRef.current, TERMINAL_FONT_FALLBACK),
-      fontSize,
+      fontSize: fontSizeRef.current,
       fontWeight: 'normal',
       fontWeightBold: 'bold',
       lineHeight: 1.25,
@@ -248,13 +253,14 @@ export function ShellTab({
       await initialFontUpdate;
       try { await document.fonts.ready; }
       catch { /* fine — best-effort */ }
-      // Poll (via rAF) until the host has real dimensions. Bail after
+      // Poll (via rAF) until the host has real dimensions and the shared
+      // font size has loaded, so we never open at the default. Bail after
       // ~2s so we don't hold up the terminal forever if a parent layout
       // is stuck; fallback opens against whatever's there.
       const startedAt = performance.now();
       while (!disposed) {
         const host = termHostRef.current;
-        if (host && host.clientWidth >= 20 && host.clientHeight >= 20) break;
+        if (host && host.clientWidth >= 20 && host.clientHeight >= 20 && fontSizeReadyRef.current) break;
         if (performance.now() - startedAt > 2000) break;
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
@@ -347,7 +353,6 @@ export function ShellTab({
     };
     // Font metric changes must not recreate the terminal. Dedicated effects below
     // apply font size and family updates to the live instance instead.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, shellIndex]);
 
   const findNext = useCallback((q: string) => {
@@ -386,13 +391,13 @@ export function ShellTab({
         requestAnimationFrame(() => searchInputRef.current?.focus());
       } else if (mod && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
-        setFontSize(fontSize + 1);
+        setFontSize(stepTerminalFontSize(fontSize, 'in'));
       } else if (mod && e.key === '-') {
         e.preventDefault();
-        setFontSize(fontSize - 1);
+        setFontSize(stepTerminalFontSize(fontSize, 'out'));
       } else if (mod && e.key === '0') {
         e.preventDefault();
-        setFontSize(14);
+        setFontSize(stepTerminalFontSize(fontSize, 'reset'));
       }
     };
     el.addEventListener('keydown', onKey);

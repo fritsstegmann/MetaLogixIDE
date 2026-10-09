@@ -119,6 +119,32 @@ describe('SettingsRepo', () => {
     });
   });
 
+  describe('terminal font size (AC3, AC9, AC10)', () => {
+    it('a fresh seed gives terminal_font_size === null', () => {
+      const repo = seed();
+      expect(repo.get('terminal_font_size')).toBeNull();
+    });
+
+    it('an existing DB whose row is already 18 keeps 18 after seedDefaults (INSERT OR IGNORE)', () => {
+      const repo = seed();
+      repo.set('terminal_font_size', 18);
+      repo.seedDefaults();
+      expect(repo.get('terminal_font_size')).toBe(18);
+    });
+
+    it('an upgraded install with no prior row adds the null default without touching unrelated settings', () => {
+      const db = openDb(join(mkdtempSync(join(tmpdir(), 'st-')), 'db'));
+      runMigrations(db, migrationsDir);
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('theme', JSON.stringify('light'));
+      const repo = new SettingsRepo(db);
+
+      repo.seedDefaults();
+
+      expect(repo.get('terminal_font_size')).toBeNull();
+      expect(repo.get('theme')).toBe('light');
+    });
+  });
+
   it('AC1 — fresh seed leaves claude_permission_mode null', () => {
     const repo = seed();
     expect(repo.get('claude_permission_mode')).toBeNull();

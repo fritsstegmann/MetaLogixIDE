@@ -283,6 +283,102 @@ describe('registerIpc', () => {
     expect(events).toEqual([]);
   });
 
+  describe('settings:set-terminal-font-size (AC9, AC10)', () => {
+    it('settings:set rejects key terminal_font_size without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_font_size', value: 16 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBeNull();
+    });
+
+    it.each([8, 29, 16.5, '16', null])('rejects invalid value %j, leaves the store untouched, emits nothing', async (value) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('a valid value writes, returns { value, changed: true }, and emits exactly one keyed settings:changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 16 }),
+      ).resolves.toEqual({ value: 16, changed: true });
+      expect(settings.get('terminal_font_size')).toBe(16);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_font_size' } }]);
+    });
+
+    it('onlyIfUnset with a null stored value writes and emits once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 18, onlyIfUnset: true }),
+      ).resolves.toEqual({ value: 18, changed: true });
+      expect(settings.get('terminal_font_size')).toBe(18);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_font_size' } }]);
+    });
+
+    it('onlyIfUnset with an already-saved value does not write, returns changed: false, and emits nothing', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_size', 20);
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 18, onlyIfUnset: true }),
+      ).resolves.toEqual({ value: 20, changed: false });
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBe(20);
+      expect(events).toEqual([]);
+    });
+
+    it('settings:get on a fresh DB returns null for the key', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:get')!({}, { key: 'terminal_font_size' }),
+      ).resolves.toEqual({ value: null });
+    });
+  });
+
   it.each(['plan', 'bypassPermissions', '', undefined])('settings:set-claude-permission-mode rejects mode %j without changing anything', async (mode) => {
     const ipc = fakeIpcMain();
     const settings = realSettings();

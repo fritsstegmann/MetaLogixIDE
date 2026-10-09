@@ -17,6 +17,7 @@ import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
 import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
+import { TERMINAL_FONT_SIZE_KEY, parseTerminalFontSize } from '@shared/terminal-font-size';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -603,6 +604,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // Permission mode and font preferences have dedicated validated setters.
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
     if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
+    if (key === TERMINAL_FONT_SIZE_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-size`);
     if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
     s.settings.set(key, value as never);
     return { ok: true } as const;
@@ -613,6 +615,16 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!parsed.ok) throw new Error(parsed.error);
     s.settings.set(request.key, parsed.value);
     return { value: parsed.value };
+  },
+  'settings:set-terminal-font-size': async (s, request) => {
+    const parsed = parseTerminalFontSize(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const stored = s.settings.get(TERMINAL_FONT_SIZE_KEY);
+    if (request.onlyIfUnset === true && stored !== null) {
+      return { value: stored, changed: false };
+    }
+    s.settings.set(TERMINAL_FONT_SIZE_KEY, parsed.value);
+    return { value: parsed.value, changed: true };
   },
   'settings:set-app-env': async (s, { env }) => {
     const parsed = parseAppEnv(env);
@@ -1303,6 +1315,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   // events that the fixed per-channel payload cannot express.
   const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
     'settings:set-font': true,
+    'settings:set-terminal-font-size': true,
     'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
   };
@@ -1320,6 +1333,12 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('settings:set-font', async (_e, req: IpcRequest<'settings:set-font'>) => {
     const result = await handlers['settings:set-font'](services, req);
     sendEvent('settings:changed', { key: req.key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-font-size', async (_e, req: IpcRequest<'settings:set-terminal-font-size'>) => {
+    const result = await handlers['settings:set-terminal-font-size'](services, req);
+    if (result.changed) sendEvent('settings:changed', { key: TERMINAL_FONT_SIZE_KEY });
     return result;
   });
 

@@ -239,6 +239,10 @@ preference preserves the compatibility stack (`src/shared/font-settings.ts:1-10`
 | Presentation | `src/renderer/components/FontControl.tsx` | One combobox per preference: installed-family search, exact-name entry, System default, preview, and status. |
 | Style adapter | `src/renderer/fonts/use-apply-ui-font.ts` | Sets the UI font through one CSS custom property. |
 | Terminal adapter | `src/renderer/terminal-font-update.ts` | Updates xterm in place, waits for readiness, and synchronizes terminal geometry. |
+| Contract | `src/shared/terminal-font-size.ts` | Defines the terminal font size key, bounds (9-28, default 14), parser, clamp, zoom step, and legacy migration rule. |
+| IO | `src/main/ipc/register.ts` | `settings:set-terminal-font-size` validates the size, writes only when unset if asked, and broadcasts `settings:changed` only when the value changed. The generic setter rejects the key. |
+| Renderer state | `src/renderer/fonts/terminal-font-size-store.ts`, `terminal-font-size-context.tsx` | One store per window: loads or migrates the size, applies changes locally first, ignores stale refreshes, and reverts with a toast on a failed save. |
+| Presentation | `src/renderer/components/settings/TerminalFontSizeControl.tsx`, `font-size-draft.ts` | The Terminal font size stepper and its pure input rules. |
 
 The UI preference changes inherited application text. Explicit `.font-mono`
 and Markdown code rules keep their compatibility stack
@@ -251,6 +255,15 @@ font store. The updater changes `term.options.fontFamily`, waits for the
 selected family with a bounded timeout, fits the terminal, clears stale glyph
 state, repaints all rows, and reports the resulting dimensions to the PTY
 (`src/renderer/terminal-font-update.ts:108-139`).
+
+The terminal font size follows the same store-and-broadcast path through its
+own channel. `null` in the settings store means the size was never saved; the
+first window to load then migrates the legacy `metaide.shellFontSize` value
+with `onlyIfUnset`, so concurrent windows cannot overwrite each other. Each
+`ShellTab` reads the shared size through a ref, so a change sets
+`term.options.fontSize` and forces a geometry sync instead of recreating the
+terminal (`src/renderer/components/ShellTab.tsx:367-372`). A terminal waits
+for the loaded size before it opens, within the existing 2 s layout cap.
 
 ### Split shell and motion
 
@@ -628,7 +641,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
    (`src/renderer/fonts/font-settings-context.tsx:39-68`).
 4. The UI adapter updates the root CSS property, or each terminal updater
    changes its existing xterm instance (`src/renderer/fonts/use-apply-ui-font.ts:12-28`,
-   `src/renderer/components/ShellTab.tsx:337-349`).
+   `src/renderer/components/ShellTab.tsx:374-379`).
 5. A terminal font change completes with fit, repaint, and PTY resize. It
    does not recreate the PTY or replay scrollback
    (`src/renderer/terminal-font-update.ts:68-105`).

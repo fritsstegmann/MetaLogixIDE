@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'theme':                         'dark',
   'ui_font_family':                null,
   'terminal_font_family':          null,
+  'terminal_font_size':            null,
   'metaproject_base_url':          'https://projects.metalogix.solutions',
   'metaproject_last_username':     '',
   'window_opacity':                100,
