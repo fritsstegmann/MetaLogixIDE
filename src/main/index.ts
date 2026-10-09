@@ -373,7 +373,9 @@ ipcMain.handle('app:renderer-ready-for-files', () => {
 });
 
 const startupReady = app.whenReady().then(async () => {
-  if (process.platform === 'darwin') {
+  // GUI launches (Dock, desktop launchers) inherit a minimal PATH that lacks
+  // version-manager shims, so `claude` and friends wouldn't resolve.
+  if (process.platform !== 'win32') {
     const loginShell = process.env.SHELL || '/bin/zsh';
     try {
       process.env.PATH = await resolveLoginShellPath(loginShell, homedir(), process.env);
