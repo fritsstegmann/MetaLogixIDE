@@ -13,6 +13,7 @@ export const FONT_TEST_IDS = {
   terminalStatus: 'terminal-font-status',
   terminalSizeInput: 'terminal-font-size-input',
   terminalWeightSelect: 'terminal-font-weight-select',
+  terminalBoldSelect: 'terminal-bold-weight-select',
 } as const;
 
 /** CSS weight names shown in the terminal font weight dropdown. */
@@ -48,8 +49,11 @@ export const FONT_COPY = {
   terminalSizeUnit: 'px',
   terminalSizeSaveFailed: 'Could not save the terminal font size. Your previous size remains active.',
   terminalWeightLabel: 'Terminal font weight',
-  terminalWeightHint: 'Bold text is drawn 200 heavier, from 700 up to 900. Fonts without this weight use the nearest one.',
+  terminalWeightHint: 'Changing this also sets bold to 200 heavier, up to 900. Fonts without this weight use the nearest one.',
   terminalWeightSaveFailed: 'Could not save the terminal font weight. Your previous weight remains active.',
+  terminalBoldLabel: 'Terminal bold weight',
+  terminalBoldHint: 'Bold text is drawn at this weight. It must be heavier than the font weight.',
+  terminalBoldSaveFailed: 'Could not save the terminal bold weight. Your previous bold weight remains active.',
   /** Dropdown option label, e.g. "Medium (500)". */
   terminalWeightOptionLabel: (weight: TerminalFontWeight): string => `${TERMINAL_FONT_WEIGHT_NAMES[weight]} (${weight})`,
 } as const;
