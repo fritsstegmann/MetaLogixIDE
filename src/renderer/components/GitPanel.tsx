@@ -4,6 +4,7 @@ import { toast } from '@renderer/hooks/useToasts';
 import { gitStatusTextClass } from '@renderer/git-status-style';
 import { unstagePaths } from '@renderer/git-unstage-paths';
 import { DIFF_COPY } from '@renderer/diff-tab-copy';
+import { ICON_SIZE, ICON_STROKE } from './icon-size';
 import type { GitChangeEntry } from '@shared/ipc-contract';
 
 type FileEntry = GitChangeEntry;
@@ -293,7 +294,7 @@ function EmptyPanel({ text }: { text: string }) {
 
 function BranchIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
+    <svg width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
       <circle cx="6" cy="6" r="2.5" />
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
@@ -303,7 +304,7 @@ function BranchIcon() {
 
 function RefreshIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round">
       <polyline points="23 4 23 10 17 10" />
       <polyline points="1 20 1 14 7 14" />
       <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />

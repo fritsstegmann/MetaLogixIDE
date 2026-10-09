@@ -1,5 +1,7 @@
+import { ICON_STROKE, type IconSize } from './icon-size';
+
 /** Decorative check mark; callers convey selection through ARIA state, not this icon. */
-export function CheckIcon({ size }: { readonly size: number }): React.JSX.Element {
+export function CheckIcon({ size }: { readonly size: IconSize }): React.JSX.Element {
   return (
     <svg
       aria-hidden="true"
@@ -8,7 +10,7 @@ export function CheckIcon({ size }: { readonly size: number }): React.JSX.Elemen
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={3}
+      strokeWidth={ICON_STROKE.check}
       strokeLinecap="round"
       strokeLinejoin="round"
     >

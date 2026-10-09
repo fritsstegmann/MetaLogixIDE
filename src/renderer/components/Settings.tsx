@@ -8,6 +8,7 @@ import { useAppVersion } from '@renderer/hooks/useAppVersion';
 import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
 import { APP_ENV_DRAFT_KEY, type EnvDrafts } from '@renderer/hooks/useEnvDrafts';
 import { APP_ENV_COPY } from '@renderer/project-env-copy';
+import { ICON_SIZE, ICON_STROKE } from '@renderer/components/icon-size';
 
 interface FontDiscoverySession {
   readonly fontDiscovery: FontDiscoveryState;
@@ -225,12 +226,12 @@ function SettingsNav({
 function CloseIcon(): React.JSX.Element {
   return (
     <svg
-      width="15"
-      height="15"
+      width={ICON_SIZE.lg}
+      height={ICON_SIZE.lg}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth={ICON_STROKE.outline}
       strokeLinecap="round"
       aria-hidden="true"
     >

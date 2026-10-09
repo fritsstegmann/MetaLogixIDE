@@ -193,6 +193,18 @@ describe('EnvValueField editing (AC26, AC27)', () => {
   });
 });
 
+describe('EnvValueField icons (icon-sizes AC3)', () => {
+  it('renders the reveal and copy icons at 14x14', () => {
+    const html = render();
+    for (const testId of [ENV_TESTIDS.reveal, ENV_TESTIDS.copy]) {
+      const button = tagWith(html, 'button', testId);
+      const rest = html.slice(html.indexOf(button));
+      expect(rest).toContain('width="14"');
+      expect(rest).toContain('height="14"');
+    }
+  });
+});
+
 describe('EnvValueField order (AC33)', () => {
   it('renders input, then reveal, then copy', () => {
     const html = render();

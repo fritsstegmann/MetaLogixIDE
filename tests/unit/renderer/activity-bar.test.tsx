@@ -38,12 +38,12 @@ describe('ActivityBar geometry (AC10)', () => {
       expect(classesOf(b)).not.toContain('w-8');
     }
   });
-  it('every icon is 17x17', () => {
+  it('every icon is 16x16', () => {
     const icons = svgs(render());
     expect(icons).toHaveLength(5);
     for (const s of icons) {
-      expect(s).toContain('width="17"');
-      expect(s).toContain('height="17"');
+      expect(s).toContain('width="16"');
+      expect(s).toContain('height="16"');
     }
   });
 });

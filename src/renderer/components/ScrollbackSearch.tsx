@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@renderer/api';
+import { ICON_SIZE } from './icon-size';
+import { XIcon } from './shell-icons';
 
 interface Match {
   projectId: number;
@@ -110,7 +112,7 @@ export function ScrollbackSearch({ open, onClose, onFocus }: Props) {
             className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel]"
             aria-label="Close"
           >
-            ✕
+            <XIcon size={ICON_SIZE.md} />
           </button>
         </div>
         <div className="px-3 py-1 border-b border-[--border] text-[10px] text-[--text-muted] flex gap-3">

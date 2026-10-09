@@ -5,6 +5,7 @@ import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { useProjectClaudeState } from '@renderer/hooks/useClaudeStates';
 import type { Project } from '@shared/types';
 import { StatusDot } from './StatusDot';
+import { ICON_SIZE } from './icon-size';
 
 export function ProjectSwitcher({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (p: Project) => void }) {
   const { projects, refresh } = useProjects();
@@ -146,7 +147,7 @@ function ProjectSwitcherRow({
 
 function SearchIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
+    <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
       <circle cx="11" cy="11" r="7" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>

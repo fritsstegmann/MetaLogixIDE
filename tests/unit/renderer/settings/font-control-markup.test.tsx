@@ -98,7 +98,7 @@ describe('FontControl markup (AC21-AC23 option list)', () => {
     expect(open).not.toContain('✓');
     expect(selected).toHaveLength(1);
     expect(selected[0]).toContain('<svg');
-    expect(selected[0]).toContain('width="13"');
+    expect(selected[0]).toContain('width="14"');
     expect(selected[0]).toContain('text-[--accent]');
     expect(selected[0]).toContain('Menlo');
     for (const r of rows.filter((x) => !x.includes('aria-selected="true"'))) {

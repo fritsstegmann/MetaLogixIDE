@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { ICON_SIZE } from './icon-size';
 
 export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks';
 
@@ -111,7 +112,7 @@ function ABButton({
 
 function SidebarIcon({ open }: { open: boolean }) {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <line x1={open ? '9' : '9'} y1="3" x2="9" y2="21" />
     </svg>
@@ -120,7 +121,7 @@ function SidebarIcon({ open }: { open: boolean }) {
 
 function GitBranchIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="2.5" />
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
@@ -130,7 +131,7 @@ function GitBranchIcon() {
 
 function ChatIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
     </svg>
   );
@@ -138,7 +139,7 @@ function ChatIcon() {
 
 function ProjectsIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </svg>
   );
@@ -146,9 +147,9 @@ function ProjectsIcon() {
 
 
 function TasksIcon() {
-  // Play triangle inside a rounded square — reads as "runnable" at 17px.
+  // Play triangle inside a rounded square — reads as "runnable" at 16px.
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="3" />
       <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
     </svg>

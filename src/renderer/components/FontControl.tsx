@@ -14,6 +14,7 @@ import type {
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
 import type { LocalFontAccessResult } from '@renderer/fonts/local-font-access';
 import { CheckIcon } from '@renderer/components/CheckIcon';
+import { ICON_SIZE, ICON_STROKE } from '@renderer/components/icon-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import {
   activeOptionIndex,
@@ -270,7 +271,7 @@ function FontInput({ picker, ids, settingKey, value, fallback }: {
         data-testid={ids.testInput}
       />
       <span aria-hidden className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[--text-muted]">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+        <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
       </span>
     </div>
   );
@@ -313,7 +314,7 @@ function FontOptionRow({ picker, ids, index, option, fallback }: {
       }`}
     >
       <span aria-hidden className={`inline-flex w-3.5 shrink-0 text-[--accent] ${selected ? '' : 'invisible'}`}>
-        {selected && <CheckIcon size={13} />}
+        {selected && <CheckIcon size={ICON_SIZE.md} />}
       </span>
       <FontOptionLabel option={option} fallback={fallback} />
     </li>

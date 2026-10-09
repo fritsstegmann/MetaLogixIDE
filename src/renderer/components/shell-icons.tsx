@@ -19,8 +19,7 @@ export function PlusIcon({ size = ICON_SIZE.md }: { readonly size?: IconSize }) 
   );
 }
 
-// `size` is narrowed to `IconSize` together with its one caller (SplitPill) in the chrome slice.
-export function SplitIcon({ size = ICON_SIZE.md }: { readonly size?: number }) {
+export function SplitIcon({ size = ICON_SIZE.md }: { readonly size?: IconSize }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="16" rx="2" />

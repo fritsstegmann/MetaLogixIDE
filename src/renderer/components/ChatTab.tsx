@@ -2,6 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { usePersistedState } from '@renderer/hooks/usePersistedState';
+import {
+  ChatBubbleIcon,
+  CloseIcon,
+  DeleteIcon,
+  DownloadIcon,
+  EditIcon,
+  EmptyChannelIcon,
+  FileIcon,
+  FolderOpenIcon,
+  LinkPlugIcon,
+} from './chat-icons';
 
 interface Channel { id: number; project_id: number | null; name: string; is_private: boolean }
 interface MpProject { id: number; name: string; identifier?: string | null }
@@ -406,9 +417,7 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false, onDi
           {!loadingMessages && messages.length === 0 && !error && (
             <div className="h-full min-h-[120px] flex flex-col items-center justify-center gap-2 text-center text-[--text-muted] px-6">
               <div className="w-10 h-10 rounded-full bg-[--panel-strong] border border-[--border] flex items-center justify-center">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
+                <EmptyChannelIcon />
               </div>
               <div className="text-sm font-medium text-[--text]">
                 {activeChannel ? `#${activeChannel.name} is quiet` : 'No channel selected'}
@@ -789,15 +798,6 @@ function LinkOrCreateBanner({ localProjectId, onLinked }: { localProjectId: numb
   );
 }
 
-function LinkPlugIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[color:var(--accent)]">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
-
 function LoginCard({ onLoggedIn, onDismiss }: { onLoggedIn: () => void; onDismiss?: () => void }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -874,10 +874,7 @@ function LoginCard({ onLoggedIn, onDismiss }: { onLoggedIn: () => void; onDismis
             className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-md text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
             data-testid="mp-login-dismiss"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <CloseIcon />
           </button>
         )}
         <div className="text-center space-y-1.5">
@@ -945,14 +942,6 @@ function LoginCard({ onLoggedIn, onDismiss }: { onLoggedIn: () => void; onDismis
         </button>
       </div>
     </div>
-  );
-}
-
-function ChatBubbleIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[color:var(--accent)]">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
   );
 }
 
@@ -1114,22 +1103,14 @@ function MessageRow({ m, grouped, mine, channelId, projectIdForAttachments }: { 
             title="Edit"
             className="w-5 h-5 flex items-center justify-center rounded text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z" />
-            </svg>
+            <EditIcon />
           </button>
           <button
             onClick={del}
             title="Delete"
             className="w-5 h-5 flex items-center justify-center rounded text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]"
           >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-              <path d="M10 11v6M14 11v6" />
-              <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
-            </svg>
+            <DeleteIcon />
           </button>
         </div>
       )}
@@ -1212,31 +1193,6 @@ function AttachmentRow({ attachment, projectId }: { attachment: Attachment; proj
         </button>
       )}
     </div>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
-  );
-}
-function DownloadIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  );
-}
-function FolderOpenIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
-    </svg>
   );
 }
 

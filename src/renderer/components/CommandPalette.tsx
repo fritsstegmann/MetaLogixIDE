@@ -1,5 +1,6 @@
 import Fuse from 'fuse.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ICON_SIZE, ICON_STROKE } from './icon-size';
 
 export interface Command {
   id: string;
@@ -116,7 +117,7 @@ export function CommandPalette({ open, commands, onClose }: Props) {
 
 function ChevronIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
+    <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
       <polyline points="9 6 15 12 9 18" />
     </svg>
   );

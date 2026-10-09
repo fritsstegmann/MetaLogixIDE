@@ -1,5 +1,6 @@
 import type { ThemePalette } from '@renderer/hooks/useTheme';
 import { CheckIcon } from '@renderer/components/CheckIcon';
+import { ICON_SIZE } from '@renderer/components/icon-size';
 import { PALETTE_SWATCHES } from '@renderer/components/settings/palette-swatches';
 
 interface Props {
@@ -41,7 +42,7 @@ export function PaletteCards({ palette, effective, onSelect }: Props) {
             {selected ? (
               <span className="flex items-center justify-between font-medium text-[--accent-soft-text]">
                 {label}
-                <CheckIcon size={13} />
+                <CheckIcon size={ICON_SIZE.md} />
               </span>
             ) : (
               <span className="text-[--text]">{label}</span>

@@ -16,6 +16,7 @@ import { ENV_COPY } from '@renderer/project-env-copy';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
 import { SIDEBAR_WIDTH } from '@renderer/sidebar-width';
 import { SidebarHeader } from './SidebarHeader';
+import { ICON_SIZE, ICON_STROKE } from './icon-size';
 
 interface Props {
   selectedProjectId: number | null;
@@ -304,7 +305,7 @@ function ProjectRow({
 
 function RowXIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.xs} height={ICON_SIZE.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.xs} strokeLinecap="round" strokeLinejoin="round">
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
     </svg>
@@ -480,12 +481,12 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   return (
     <svg
       aria-hidden
-      width="11"
-      height="11"
+      width={ICON_SIZE.sm}
+      height={ICON_SIZE.sm}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.4"
+      strokeWidth={ICON_STROKE.outline}
       strokeLinecap="round"
       strokeLinejoin="round"
       className="shrink-0 text-[--text-muted] transition-transform duration-150"
@@ -511,7 +512,7 @@ function rootFolderName(path: string): string {
 /** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
 function RootFolderGlyph({ color }: { color: string }) {
   return (
-    <svg aria-hidden data-testid="root-hue" width="13" height="13" viewBox="0 0 24 24" fill={color} fillOpacity={0.25} stroke={color} strokeWidth="1.8" strokeLinejoin="round" className="shrink-0">
+    <svg aria-hidden data-testid="root-hue" width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill={color} fillOpacity={0.25} stroke={color} strokeWidth="1.8" strokeLinejoin="round" className="shrink-0">
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </svg>
   );

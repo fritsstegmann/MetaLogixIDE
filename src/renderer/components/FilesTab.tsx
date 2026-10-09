@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import hljs from 'highlight.js/lib/common';
 import { api } from '@renderer/api';
 import { ResizeHandle } from './ResizeHandle';
+import { ICON_SIZE, ICON_STROKE } from './icon-size';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { MarkdownPreview } from './MarkdownPreview';
@@ -350,7 +351,7 @@ function childStatus(files: Record<string, GitFileStatus>, dirRelPath: string): 
 
 function TabXIcon() {
   return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.xs} height={ICON_SIZE.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.xs} strokeLinecap="round" strokeLinejoin="round">
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
     </svg>
@@ -785,7 +786,7 @@ function Breadcrumbs({ relPath }: { relPath: string }) {
 function FileIcon({ isDir, name }: { isDir: boolean; name: string }) {
   if (isDir) {
     return (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted] shrink-0">
+      <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted] shrink-0">
         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       </svg>
     );
@@ -796,7 +797,7 @@ function FileIcon({ isDir, name }: { isDir: boolean; name: string }) {
               : ['ts','tsx','js','jsx','py','go','rs'].includes(ext) ? 'text-[--icon-code]'
               : 'text-[--text-muted]';
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 ${color}`}>
+    <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 ${color}`}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
     </svg>

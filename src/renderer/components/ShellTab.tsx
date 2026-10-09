@@ -15,6 +15,8 @@ import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewState } from './HoverPreview';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { XIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
@@ -497,7 +499,7 @@ export function ShellTab({
               className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
               data-testid="shell-exit-dismiss"
             >
-              ✕
+              <XIcon size={ICON_SIZE.sm} />
             </button>
           </div>
         </div>
@@ -530,7 +532,7 @@ export function ShellTab({
             title="Close (Esc)"
             className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
           >
-            ✕
+            <XIcon size={ICON_SIZE.sm} />
           </button>
         </div>
       )}

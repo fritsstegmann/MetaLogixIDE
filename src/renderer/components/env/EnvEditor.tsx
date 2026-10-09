@@ -38,6 +38,7 @@ import {
   EnvValueField,
   type EnvValueLabels,
 } from './EnvValueField';
+import { ICON_SIZE, ICON_STROKE } from '../icon-size';
 
 export type EnvLoad = 'loading' | 'ready' | 'failed';
 
@@ -481,12 +482,12 @@ export function EnvEditor({ source, scope, subtitle, reveal, onCopy, children }:
 function RemoveIcon() {
   return (
     <svg
-      width="12"
-      height="12"
+      width={ICON_SIZE.md}
+      height={ICON_SIZE.md}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.5"
+      strokeWidth={ICON_STROKE.outline}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden

@@ -4,6 +4,8 @@ import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { usePorts } from '@renderer/hooks/usePorts';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { XIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 
 interface LiveShell {
   projectId: number; shellIndex: number; projectName: string; pid: number;
@@ -159,7 +161,7 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
               className="ml-auto text-[--text-muted] hover:text-[--text] w-5 h-5 flex items-center justify-center rounded hover:bg-[--panel]"
               title="Close"
             >
-              ✕
+              <XIcon size={ICON_SIZE.sm} />
             </button>
           </div>
           {shells.length === 0 && (
@@ -223,7 +225,7 @@ function fmtDuration(ms: number): string {
 
 function BranchIcon() {
   return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="2.5" />
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />

@@ -93,6 +93,16 @@ describe('EnvEditor rows', () => {
     expect(rows[0]).toContain('value="ONLY"');
   });
 
+  it('renders the remove icon at 14x14 with stroke 2 (icon-sizes AC3, AC10)', () => {
+    const rows = rowsOf(render());
+    for (const row of rows) {
+      const removeOnward = row.slice(row.indexOf(`data-testid="${ENV_TESTIDS.remove}"`));
+      expect(removeOnward).toContain('width="14"');
+      expect(removeOnward).toContain('height="14"');
+      expect(removeOnward).toContain('stroke-width="2"');
+    }
+  });
+
   it('orders each row name, value, reveal, copy, remove (AC33)', () => {
     const rows = rowsOf(render());
     expect(rows).toHaveLength(2);
