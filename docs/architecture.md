@@ -193,6 +193,52 @@ the macOS home becomes `~`, leading segments shrink to their first character,
 and the last segment stays whole (`~/P/P/acme`). The tooltip shows the full
 path.
 
+### Icon sizes
+
+Every UI icon is an inline `<svg>` on a 24-unit viewBox. Its width and
+height come from `ICON_SIZE` in `src/renderer/components/icon-size.ts`,
+never from a numeric literal.
+
+| Name | Size | Use |
+|---|---|---|
+| `xs` | 10 px | Glyph in a 16 px control |
+| `sm` | 12 px | Glyph in a 20-24 px button, or beside 11-12 px text |
+| `md` | 14 px | Default. Glyph in a 28-32 px button, or beside 13-14 px text |
+| `lg` | 16 px | Glyph in a 36 px button |
+| `xl` | 20 px | Glyph in a 40 px tile |
+
+Rules:
+
+- Pick the size from the icon's box or from the text beside it. Changing an
+  icon size never changes the size of its button, row or bar.
+- An icon used at more than one size takes a `size` prop typed `IconSize`,
+  so the typecheck rejects an off-scale value such as 13. The shared icons in
+  `shell-icons.tsx` (`XIcon`, `PlusIcon`, `SplitIcon`) and `CheckIcon.tsx`
+  work this way.
+- Outline icons use stroke 2 (`ICON_STROKE.outline`). Icons drawn at `xs`
+  use 2.5, so they stay legible. `CheckIcon.tsx` uses 3. Two filled shapes
+  keep their own stroke: `StarFilledIcon` (1.5) and the sidebar
+  `RootFolderGlyph` (1.8). `iconStroke(size)` gives 2.5 at `xs` and 2
+  otherwise.
+- A close control is the shared `XIcon`, never a `✕` text glyph. Other text
+  glyphs (`▸`, `▶`, `›`, `↑`, `↓`, `+`, `−`) and emoji stay text.
+- The Pi and oh-my-pi marks in the new-shell menu render at 16 px, centred in
+  a 20 px slot. Emoji profile icons are not resized.
+- Chat icons live in `src/renderer/components/chat-icons.tsx`, so they can be
+  unit tested.
+
+Enforcement:
+
+- `tests/unit/renderer/icon-scale-tree.test.ts` runs the check in
+  `tests/support/icon-scale.ts` over every `src/renderer/**/*.tsx` and fails
+  on a literal icon size, a width different from its height, an untyped size
+  prop, a numeric `size` at a call site, or a stroke off the rule.
+  `tests/unit/renderer/icon-scale.test.ts` proves each rule fires.
+- `node scripts/check-icon-scale.ts [file ...]` runs the same check from the
+  command line and prints each violation as `file:line rule message`.
+- `tests/e2e/icon-sizes.spec.ts` checks the rendered sizes in the built app,
+  and that icon-only buttons keep their icon centred within 0.5 px.
+
 ### Markdown preview pipeline
 
 The Files tab shows a rendered preview for `.md`, `.markdown` and `.mdx`
