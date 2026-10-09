@@ -477,7 +477,9 @@ export function ShellTab({
       }}
       className="relative w-full h-full min-h-0 px-3 pt-2 pb-3 bg-transparent focus:outline-none"
     >
-      <div ref={termHostRef} className="w-full h-full" />
+      {/* `isolate` keeps xterm's internal z-indexes (e.g. its link layer) inside the
+          host, so the exit overlay, drop hint and search bar always paint above it. */}
+      <div ref={termHostRef} className="w-full h-full isolate" />
       {exitInfo && (
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
