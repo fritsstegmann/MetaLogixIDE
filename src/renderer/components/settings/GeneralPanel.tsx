@@ -13,6 +13,7 @@ import {
 } from '@renderer/components/FontControl';
 import { FONT_COPY } from '@renderer/fonts/font-contract';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
+import { TerminalFontSizeControl } from '@renderer/components/settings/TerminalFontSizeControl';
 import {
   SettingRow,
   SettingStack,
@@ -273,6 +274,7 @@ function FontSettingsControls({
         onSave={(value) => saveFont('terminal_font_family', value)}
         onLoadInstalledFonts={onLoadInstalledFonts}
       />
+      <TerminalFontSizeControl />
     </SettingsSection>
   );
 }

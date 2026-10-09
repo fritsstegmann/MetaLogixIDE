@@ -14,25 +14,35 @@ export type TerminalFontSizeParseResult =
 export type TerminalFontSizeStep = 'in' | 'out' | 'reset';
 
 /** Main-side validator: integer within [min, max]; anything else is rejected. */
-export function parseTerminalFontSize(_value: unknown): TerminalFontSizeParseResult {
-  void [_value];
-  throw new Error('not implemented');
+export function parseTerminalFontSize(value: unknown): TerminalFontSizeParseResult {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return { ok: false, error: 'terminal font size must be a whole number' };
+  }
+  if (value < TERMINAL_FONT_SIZE.min || value > TERMINAL_FONT_SIZE.max) {
+    return { ok: false, error: `terminal font size must be between ${TERMINAL_FONT_SIZE.min} and ${TERMINAL_FONT_SIZE.max}` };
+  }
+  return { ok: true, value };
 }
 
 /** Rounds then clamps any finite number into [min, max]. */
-export function clampTerminalFontSize(_value: number): number {
-  void [_value];
-  throw new Error('not implemented');
+export function clampTerminalFontSize(value: number): number {
+  const rounded = Math.round(value);
+  if (rounded < TERMINAL_FONT_SIZE.min) return TERMINAL_FONT_SIZE.min;
+  if (rounded > TERMINAL_FONT_SIZE.max) return TERMINAL_FONT_SIZE.max;
+  return rounded;
 }
 
 /** Next size for a zoom key; at a bound returns `current` unchanged. */
-export function stepTerminalFontSize(_current: number, _step: TerminalFontSizeStep): number {
-  void [_current, _step];
-  throw new Error('not implemented');
+export function stepTerminalFontSize(current: number, step: TerminalFontSizeStep): number {
+  if (step === 'reset') return TERMINAL_FONT_SIZE.default;
+  const next = step === 'in' ? current + TERMINAL_FONT_SIZE.step : current - TERMINAL_FONT_SIZE.step;
+  return clampTerminalFontSize(next);
 }
 
 /** AC10 rule: valid finite legacy text → clampTerminalFontSize(n); otherwise TERMINAL_FONT_SIZE.default. */
-export function migratedTerminalFontSize(_legacyRaw: string | null): number {
-  void [_legacyRaw];
-  throw new Error('not implemented');
+export function migratedTerminalFontSize(legacyRaw: string | null): number {
+  if (legacyRaw === null || legacyRaw === '') return TERMINAL_FONT_SIZE.default;
+  const n = Number(legacyRaw);
+  if (!Number.isFinite(n)) return TERMINAL_FONT_SIZE.default;
+  return clampTerminalFontSize(n);
 }
