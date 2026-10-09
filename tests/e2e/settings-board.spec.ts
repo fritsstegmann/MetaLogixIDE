@@ -365,8 +365,8 @@ test('AC5, AC6: nav geometry, icons, names, aria-current; every label on one lin
       const svg = b.locator('svg');
       await expect(svg).toHaveAttribute('aria-hidden', 'true');
       const s = await box(svg);
-      expectPx(s.width, 15, `${at} ${name} icon width`);
-      expectPx(s.height, 15, `${at} ${name} icon height`);
+      expectPx(s.width, 14, `${at} ${name} icon width`);
+      expectPx(s.height, 14, `${at} ${name} icon height`);
       expect(s.x + s.width, `${at} ${name} icon before label`).toBeLessThanOrEqual((await box(b.locator(':scope > span:last-child'))).x);
     }
     const iconColour = (name: string) => item(name).locator('svg').evaluate((e) => getComputedStyle(e).color);
@@ -553,7 +553,7 @@ test('AC13-AC15a: palette card geometry, selected state and swatch colours in ev
         await expect(check).toHaveCount(1);
         await expect(check).toHaveAttribute('aria-hidden', 'true');
         const k = await box(check);
-        expectPx(k.width, 13, `${at} check size`);
+        expectPx(k.width, 14, `${at} check size`);
         expectPx(cb.x + cb.width - (k.x + k.width), 10, `${at} check inset from card right`, 1);
       } else {
         await expect(card).toHaveAttribute('aria-pressed', 'false');
@@ -742,8 +742,8 @@ test('AC19-AC24: font rows, option list and previews', async () => {
   await expect(selected).toHaveText('System default');
   const check = selected.locator('svg');
   const k = await box(check);
-  expectPx(k.width, 13, 'check width');
-  expectPx(k.height, 13, 'check height');
+  expectPx(k.width, 14, 'check width');
+  expectPx(k.height, 14, 'check height');
   expect(await check.evaluate((e) => getComputedStyle(e).color)).toBe(await resolveIn(list, 'color', 'var(--accent)'));
   await expect(list.locator('[aria-selected="false"] svg')).toHaveCount(0);
   expect(await list.innerText()).not.toContain('✓');

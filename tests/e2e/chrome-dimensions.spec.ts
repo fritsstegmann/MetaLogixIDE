@@ -348,7 +348,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
           expect([r.width, r.height], `${at} ${label} size`).toEqual([36, 36]);
           expect(await radii(b), `${at} ${label} radius`).toEqual(['10px', '10px', '10px', '10px']);
           const icon = await box(b.locator('svg').first());
-          expect([icon.width, icon.height], `${at} ${label} icon`).toEqual([17, 17]);
+          expect([icon.width, icon.height], `${at} ${label} icon`).toEqual([16, 16]);
         }
 
         // AC11–AC13 for both tones

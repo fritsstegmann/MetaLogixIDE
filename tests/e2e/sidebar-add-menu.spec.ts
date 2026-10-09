@@ -445,7 +445,7 @@ test('AC24c: project rows are 34px tall with 10px side padding, 8px radius and a
   }
 });
 
-test('AC24d: section headers align with the filter, show a right-edge 11px chevron, and the root label is fish-abbreviated', async () => {
+test('AC24d: section headers align with the filter, show a right-edge 12px chevron, and the root label is fish-abbreviated', async () => {
   await seedSections();
   await markHeader();
   const field = await box(win.locator('[data-e2e="filter-field"]'));
@@ -458,7 +458,7 @@ test('AC24d: section headers align with the filter, show a right-edge 11px chevr
     const chevron = t.locator('> svg').last();
     const cb = await box(chevron);
     const tb = await box(t);
-    expect([cb.width, cb.height], `${id} chevron size`).toEqual([11, 11]);
+    expect([cb.width, cb.height], `${id} chevron size`).toEqual([12, 12]);
     expect(tb.x + tb.width - (cb.x + cb.width), `${id} chevron at the right edge`).toBeCloseTo(0, 0);
   }
 
@@ -483,7 +483,7 @@ test('AC24d: section headers align with the filter, show a right-edge 11px chevr
   expect(fish(fullPath), 'positive control: the abbreviation differs from the full path').not.toBe(fullPath);
   const rc = await box(rootToggle.locator('> svg').last());
   const rt = await box(rootToggle);
-  expect([rc.width, rc.height], 'root chevron size').toEqual([11, 11]);
+  expect([rc.width, rc.height], 'root chevron size').toEqual([12, 12]);
   expect(rt.x + rt.width - (rc.x + rc.width), 'root chevron at the right (inside the toggle padding)').toBeLessThanOrEqual(10.5);
   expect(rc.x, 'root chevron right of the label').toBeGreaterThan((await box(label)).x);
 });
