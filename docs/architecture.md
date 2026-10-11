@@ -59,14 +59,52 @@ Icon sources: [Pi favicon](https://pi.dev/favicon.svg) and
 Project profiles override global profiles (`src/main/domain/launch.ts:14-18`).
 
 Click a profile to open a new terminal tab.
-Use its star button to select it as the folder's automatic launch command.
-Clear the star to restore the global launch command.
+Use its star button to select the project's default agent.
+Clear the star to use the global launch commands.
 The existing shell launch, environment, tab, and popout paths apply to these agents.
 Pi and oh-my-pi use bare `pi` and `omp` commands on both first and subsequent launches.
 They do not receive Claude-specific permission flags or hooks.
 
 Upstream CLI references: [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
 and [oh-my-pi](https://github.com/can1357/oh-my-pi/blob/main/docs/cli-reference.md).
+
+### Project settings and default agent
+
+The **Project settings** tab sits immediately after **Env**.
+It shows the selected project's name, path, and **Default agent** field.
+Without a selected project, it shows a selection prompt.
+The sidebar's **Project settings…** context action can target an inactive project without selecting it or starting its shell
+(`src/renderer/App.tsx`, `src/renderer/components/Sidebar.tsx`).
+
+The field uses the merged project and global CLI profile catalog.
+This includes **Pi** (`pi`) and **oh-my-pi** (`omp`).
+Project profiles shadow global profiles with the same name.
+**Use global default** selects no named profile.
+It uses the current global first-launch or subsequent-launch command, not a fixed profile
+(`src/main/domain/launch.ts:14-18,36-52`).
+
+Changes save immediately through `shells:set-default-cli`.
+The settings field and star control use the same validated operation.
+It updates only `defaultCliName` and `launchCmd` in the project's configuration.
+An explicit choice or reset clears both legacy custom launch-command variants.
+The field explains this replacement before the user acts.
+A separate replacement button applies the current choice when legacy commands still override it.
+Opening the tab does not write or migrate configuration
+(`src/main/domain/project-default-agent.ts`, `src/renderer/project-default-agent-store.ts`).
+
+The per-tab store captures the target project ID and retains the last confirmed choice.
+It disables overlapping saves and ignores results after the session disconnects.
+A failed save restores the confirmed display and shows an error.
+A missing saved profile remains visible as unavailable.
+Without a legacy custom override, automatic launch falls back to the global command.
+Saving an inactive project's settings does not replace the active project's state
+(`src/renderer/project-default-agent-store.ts:91-128`, `src/renderer/App.tsx:729-731`).
+
+Changing the default does not restart or replace a running terminal.
+The next new automatic primary launch uses the saved choice.
+Named profiles use their configured command on both first and subsequent launches.
+Explicit profile launches and plain terminals keep their existing behavior.
+The SQLite schema and IPC channel names do not change.
 
 ### IDE themes
 
