@@ -14,8 +14,8 @@ interface Props {
 export function ProjectSettingsTab({ target, onSaved }: Props): ReactElement {
   const { snapshot, choose, replaceCustomCommands, retry } = useProjectDefaultAgent(target, onSaved);
   return <section aria-label={COPY.title} data-testid={TESTIDS.view}
-    className="flex-1 min-h-0 overflow-auto text-[--text]">
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    className="flex-1 min-h-0 min-w-0 overflow-auto text-[--text]">
+    <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
       <h2 className="text-lg font-semibold">{COPY.title}</h2>
       <ProjectSettingsPanel snapshot={snapshot} onChoose={choose}
         onReplaceCustomCommands={replaceCustomCommands} onRetry={retry} />

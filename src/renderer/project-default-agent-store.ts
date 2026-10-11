@@ -1,4 +1,4 @@
-/** Per-dialog project default state; injected IO preserves confirmed choices and isolates late results. */
+/** Per-tab project default state; injected IO preserves confirmed choices and isolates late results. */
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from '@shared/project-default-agent';
 import type { Project } from '@shared/types';
 import type { ProjectSettingsTarget } from './project-settings-contract';

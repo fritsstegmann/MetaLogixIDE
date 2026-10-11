@@ -11,7 +11,7 @@ import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
 import { GitPanel } from './components/GitPanel';
 import { Settings } from './components/Settings';
-import { ProjectSettingsDialog } from './components/ProjectSettingsDialog';
+import { ProjectSettingsTab } from './components/ProjectSettingsTab';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS, type ProjectSettingsTarget } from './project-settings-contract';
 import type { SettingsSection } from './components/settings/nav-icons';
 import { ResizeHandle } from './components/ResizeHandle';
@@ -260,6 +260,7 @@ function MainApp() {
   const [chatPanelWidth, setChatPanelWidth] = usePersistedNumber('metaide.chatPanelWidth', 400, 300, 640);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectSettingsTarget, setProjectSettingsTarget] = useState<ProjectSettingsTarget | null>(null);
+  const settingsTarget = projectSettingsTarget ?? selected;
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   const [finderOpen, setFinderOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
@@ -275,10 +276,10 @@ function MainApp() {
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
-  shortcutsBlockedRef.current = permissionMode.status !== 'chosen' || projectSettingsTarget !== null;
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
   const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
     || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
-    || permissionMode.status === 'unchosen' || projectSettingsTarget !== null;
+    || permissionMode.status === 'unchosen';
   useWindowTerminalFocus(overlayOpen);
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
@@ -418,6 +419,7 @@ function MainApp() {
           : await api.invoke('projects:ensure-for-file', { path });
         await api.invoke('projects:open', { id: project.id });
         lastPickIdRef.current = project.id;
+        setProjectSettingsTarget(null);
         setSelected(project);
         try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
         setMainTab('files');
@@ -440,6 +442,7 @@ function MainApp() {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
           const { project } = await api.invoke('projects:open', { id: projectId });
+          setProjectSettingsTarget(null);
           setSelected(project);
         }
         setMainTab('shell');
@@ -526,6 +529,7 @@ function MainApp() {
   // ref the stale earlier setSelected would win, reverting the click.
   const lastPickIdRef = useRef<number | null>(null);
   async function pick(p: Project) {
+    setProjectSettingsTarget(null);
     lastPickIdRef.current = p.id;
     terminalFocus.cancelRequest();
     try {
@@ -549,6 +553,20 @@ function MainApp() {
     mainTabRef.current = 'env';
     setMainTab('env');
     void pick(p);
+  }
+
+  /** Opens an explicit sidebar target without selecting its project or launching a shell. */
+  function openProjectSettings(target: ProjectSettingsTarget): void {
+    setProjectSettingsTarget(target);
+    mainTabRef.current = 'settings';
+    setMainTab('settings');
+  }
+
+  /** The main tab always targets the selected project rather than a previous sidebar override. */
+  function openSelectedProjectSettings(): void {
+    setProjectSettingsTarget(null);
+    mainTabRef.current = 'settings';
+    setMainTab('settings');
   }
 
   /** One split pane's shell: the chip's label and dot inputs, falling back to the full shell list for a popped right shell that has left the strip. */
@@ -792,7 +810,7 @@ function MainApp() {
                 onSelect={pick}
                 onNewProject={() => setNewProjectOpen(true)}
                 onEditEnv={editEnv}
-                onProjectSettings={setProjectSettingsTarget}
+                onProjectSettings={openProjectSettings}
                 width={sidebarWidth}
               />
               <ResizeHandle
@@ -901,14 +919,16 @@ function MainApp() {
                 </span>
               )}
             </TabButton>
+            <TabButton
+              active={mainTab === 'settings'}
+              onClick={openSelectedProjectSettings}
+              testId={PROJECT_SETTINGS_TESTIDS.tab}
+            >
+              {PROJECT_SETTINGS_COPY.tab}
+            </TabButton>
             <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pr-2">
               {selected && (
                 <>
-                  <button type="button" onClick={() => setProjectSettingsTarget(selected)}
-                    data-testid={PROJECT_SETTINGS_TESTIDS.open}
-                    className="min-h-11 shrink-0 rounded-lg px-3 text-sm text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]">
-                    {PROJECT_SETTINGS_COPY.open}
-                  </button>
                   <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
                     <StatusDot state={selectedClaudeState} />
                     <span className="truncate font-medium">{selected.name}</span>
@@ -987,15 +1007,20 @@ function MainApp() {
                 onToggleSplit={() => (rightShellIndex != null ? split.closeSplit() : void openSplit())}
               />
             )}
-            {selected ? mainBody(selected) : <EmptyState />}
+            {mainTab === 'settings'
+              ? settingsTarget
+                ? <ProjectSettingsTab key={settingsTarget.id} target={settingsTarget} onSaved={applyDefaultAgentProject} />
+                : <section aria-label={PROJECT_SETTINGS_COPY.title} data-testid={PROJECT_SETTINGS_TESTIDS.view}
+                    className="flex-1 min-h-0 min-w-0 overflow-auto p-4 text-base text-[--text-muted] sm:p-6">
+                    {PROJECT_SETTINGS_COPY.noProject}
+                  </section>
+              : selected ? mainBody(selected) : <EmptyState />}
           </div>
         </main>
       </div>
 
       <StatusBar project={selected} aliveCount={aliveCount} />
       <ProjectSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} onPick={pick} />
-      {projectSettingsTarget && <ProjectSettingsDialog key={projectSettingsTarget.id}
-        target={projectSettingsTarget} onClose={() => setProjectSettingsTarget(null)} onSaved={applyDefaultAgentProject} />}
       <Settings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1051,6 +1076,7 @@ function MainApp() {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
               const { project } = await api.invoke('projects:open', { id: projectId });
+              setProjectSettingsTarget(null);
               setSelected(project);
             }
             setMainTab('shell');

@@ -167,6 +167,33 @@ describe('project default settings session', () => {
     await settle();
     expect(listener).not.toHaveBeenCalled();
   });
+  it('keeps a disposed A load from changing a newly mounted B tab target or saved choice', async () => {
+    const a = harness();
+    const delayed = deferred<Project>();
+    a.loadProject.mockReturnValueOnce(delayed.promise);
+    const storeA = createProjectDefaultAgentStore(project(), a.ports);
+    const close = storeA.connect();
+    close();
+    const bProject = project(2, { defaultCliName: 'inherit:' });
+    const b = harness(bProject);
+    const storeB = createProjectDefaultAgentStore(bProject, b.ports);
+    storeB.connect();
+    await settle();
+    const currentB = storeB.getSnapshot();
+    expect(currentB).toMatchObject({ status: 'ready', target: { id: 2 }, project: bProject,
+      confirmedName: 'inherit:', pendingName: 'inherit:' });
+    delayed.resolve(project(1, { defaultCliName: 'Codex' }));
+    await settle();
+    expect(storeA.getSnapshot()).toMatchObject({ status: 'loading', target: { id: 1 } });
+    expect(storeB.getSnapshot()).toBe(currentB);
+    expect(a.onSaved).not.toHaveBeenCalled();
+    expect(b.onSaved).not.toHaveBeenCalled();
+    expect(a.save).not.toHaveBeenCalled();
+    expect(b.save).not.toHaveBeenCalled();
+    expect(b.loadProject.mock.calls).toEqual([[2]]);
+    expect(b.loadProfiles.mock.calls).toEqual([[2]]);
+  });
+
 
   it('keeps a disposed A save attached to A and never publishes into B or callback', async () => {
     const a = harness();

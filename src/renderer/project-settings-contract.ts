@@ -5,7 +5,6 @@ export type ProjectSettingsTarget = Readonly<Pick<Project, 'id' | 'name' | 'path
 
 /** Shared accessible copy for project settings and the existing default-star shortcut. */
 export const PROJECT_SETTINGS_COPY = {
-  open: 'Project settings',
   contextMenuItem: 'Project settings…',
   title: 'Project settings',
   tab: 'Project settings',
@@ -22,8 +21,6 @@ export const PROJECT_SETTINGS_COPY = {
   saving: 'Saving default agent…',
   saved: 'Default agent saved',
   retry: 'Retry',
-  done: 'Done',
-  close: 'Close project settings',
   unavailableProfile: (name: string): string => `${name} (unavailable)`,
   missingProfileNotice: (name: string): string => `The saved profile “${name}” is unavailable. Choose another agent or use the global default.`,
   missingProfileFallback: 'Automatic launches use the global launch commands unless a custom launch command overrides them.',
@@ -33,8 +30,6 @@ export const PROJECT_SETTINGS_COPY = {
 export const PROJECT_SETTINGS_TESTIDS = {
   tab: 'project-settings-tab',
   view: 'project-settings-view',
-  open: 'project-settings-open',
-  dialog: 'project-settings-dialog',
   panel: 'project-settings-panel',
   projectName: 'project-settings-name',
   projectPath: 'project-settings-path',
@@ -47,6 +42,4 @@ export const PROJECT_SETTINGS_TESTIDS = {
   error: 'project-settings-error',
   status: 'project-settings-status',
   retry: 'project-settings-retry',
-  close: 'project-settings-close',
-  done: 'project-settings-done',
 } as const;

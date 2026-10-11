@@ -231,7 +231,6 @@ function ProjectRow({
 }) {
   const claudeState = useProjectClaudeState(project.id);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const rowRef = useRef<HTMLButtonElement>(null);
   async function unload(e: React.MouseEvent) {
     e.stopPropagation();
     try { await api.invoke('shells:kill', { projectId: project.id, shellIndex: 0 }); }
@@ -265,7 +264,6 @@ function ProjectRow({
     { label: 'Rename folder…',  onClick: () => onRename(project) },
     { label: ENV_COPY.contextMenuItem, onClick: () => onEditEnv(project) },
     { label: PROJECT_SETTINGS_COPY.contextMenuItem, onClick: () => {
-      rowRef.current?.focus();
       onProjectSettings({ id: project.id, name: project.name, path: project.path });
     } },
     { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
@@ -280,7 +278,6 @@ function ProjectRow({
       }`}
     >
       <button
-        ref={rowRef}
         onKeyDown={openKeyboardMenu}
         aria-haspopup="menu"
         aria-expanded={menu !== null}
