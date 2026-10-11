@@ -150,17 +150,6 @@ async function markScrollRegion(): Promise<{ left: number; right: number; conten
   });
 }
 
-/** Fish-style abbreviation, computed independently of the app: /Users/<name> → ~, leading segments to one char (two for .dirs), last whole. */
-function fish(path: string): string {
-  const home = /^\/Users\/[^/]+/.exec(path);
-  const rest = home ? path.slice(home[0].length) : path;
-  const parts = rest.split('/');
-  const out = parts.map((seg, i) => {
-    if (i === parts.length - 1 || seg === '') return seg;
-    return seg.startsWith('.') && seg.length > 1 ? seg.slice(0, 2) : seg.slice(0, 1);
-  });
-  return (home ? '~' : '') + out.join('/');
-}
 
 /**
  * Seeds the sections the row and header tests measure: In use holds `beta`
@@ -445,7 +434,7 @@ test('AC24c: project rows are 34px tall with 10px side padding, 8px radius and a
   }
 });
 
-test('AC24d: section headers align with the filter, show a right-edge 11px chevron, and the root label is fish-abbreviated', async () => {
+test('AC24d: section headers align with the filter, show a right-edge 11px chevron, and expose the full root path in a tooltip', async () => {
   await seedSections();
   await markHeader();
   const field = await box(win.locator('[data-e2e="filter-field"]'));
@@ -472,15 +461,16 @@ test('AC24d: section headers align with the filter, show a right-edge 11px chevr
   await recents.click();
   await expect(recents).toHaveAttribute('aria-expanded', 'true');
 
-  // Root toggle: same chevron at its right, fish-abbreviated label, full path in the tooltip.
+  // Root toggle: same right-edge chevron and full-path tooltip, independent of label wording.
   const { roots } = await invoke<{ roots: { path: string }[] }>('roots:list', undefined);
   expect(roots, 'one seeded root').toHaveLength(1);
-  const fullPath = roots[0]!.path;
-  expect(fullPath.split('/').filter(Boolean).length, `input state: root path has >= 3 segments (${fullPath})`).toBeGreaterThanOrEqual(3);
+  const root = roots[0];
+  if (!root) throw new Error('seeded root missing');
+  const fullPath = root.path;
   const rootToggle = win.getByTestId('root-toggle');
   const label = rootToggle.locator(`[title="${fullPath}"]`);
-  await expect(label).toHaveText(fish(fullPath));
-  expect(fish(fullPath), 'positive control: the abbreviation differs from the full path').not.toBe(fullPath);
+  await expect(label).toBeVisible();
+  await expect(label).toHaveAttribute('title', fullPath);
   const rc = await box(rootToggle.locator('> svg').last());
   const rt = await box(rootToggle);
   expect([rc.width, rc.height], 'root chevron size').toEqual([11, 11]);

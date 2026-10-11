@@ -10,16 +10,16 @@ import {
   automaticSpawn,
   choice,
   choose,
-  closeSettings,
+  leaveSettingsTab,
   command,
-  dialog,
+  settingsView,
   displayedChoice,
   gateEvidence,
   installGate,
   ipc,
   killPrimary,
   launchAgents,
-  openSettings,
+  enterSettingsTab,
   openShellMenu,
   output,
   profile,
@@ -44,7 +44,7 @@ import {
  * Only explicit failure/delay cases wrap an existing transport handler; successful
  * calls still use the original. Marker executables replace paid agent binaries,
  * never profile lookup, setting persistence, argv/env resolution or process spawn.
- * Author-only Phase 4: run/build/reconciliation belongs to Phase 5.
+ * Tab-revision authoring only: reconciliation and execution require Main's runner release.
  */
 const A = 'default-agent-a';
 const B = 'default-agent-b';
@@ -108,23 +108,20 @@ async function reopenAndCheck(
   target: Project,
   name: string | null,
 ): Promise<void> {
-  await openSettings(h.win, target);
+  await enterSettingsTab(h.win, target);
   await expect(choice(h.win)).toBeEnabled();
   expect(await displayedChoice(h.win)).toBe(name ?? COPY.globalDefault);
-  await closeSettings(h.win);
+  await leaveSettingsTab(h.win);
 }
 
-async function focusInside(win: Page): Promise<boolean> {
-  return dialog(win).evaluate((panel) => panel.contains(document.activeElement));
-}
 
 async function usableBox(control: Locator): Promise<void> {
   await expect(control).toBeVisible();
   await control.scrollIntoViewIfNeeded();
   const metrics = await control.evaluate((element) => {
     const r = element.getBoundingClientRect();
-    const panel = element.closest('[role="dialog"]');
-    if (!panel) throw new Error('geometry assertion requires actual dialog');
+    const panel = element.closest('[data-testid="project-settings-view"]');
+    if (!panel) throw new Error('geometry assertion requires actual settings tab');
     const bounds = panel.getBoundingClientRect();
     return {
       x: r.x,
@@ -167,6 +164,44 @@ async function paintedFocus(control: Locator): Promise<void> {
   );
 }
 
+test('E1 settings follows Env and shows a truthful selection prompt before any project is selected (AC1/12)', async () => {
+  const { h, a, b } = await start();
+  const tabs = h.win.getByTestId('main-tab-bar').getByRole('button');
+  await expect(tabs.nth(3)).toHaveText('Env');
+  await expect(tabs.nth(4)).toHaveText(COPY.tab);
+  await expect(tabs.nth(4)).toHaveAttribute('data-testid', IDS.tab);
+  await installGate(h.app, 'shells:set-default-cli', 'pass');
+  try {
+    await tabs.nth(4).click();
+    await expect(h.win.getByText(COPY.noProject, { exact: true })).toBeVisible();
+    await expect(h.win.getByRole('dialog')).toHaveCount(0);
+    await expect(h.win.getByRole('combobox', { name: COPY.defaultAgentLabel })).toHaveCount(0);
+    await expect(h.win.getByTestId(IDS.projectName)).toHaveCount(0);
+    await expect(h.win).toHaveTitle('MetaLogix IDE');
+    expect(await shellState(h.win)).toEqual([]);
+    expect(await project(h.win, A)).toEqual(a);
+    expect(await project(h.win, B)).toEqual(b);
+    expect((await gateEvidence(h.app, 'shells:set-default-cli')).requests).toEqual([]);
+    await h.win.getByRole('button', { name: 'Env', exact: true }).click();
+    await expect(h.win.getByText(COPY.noProject, { exact: true })).toHaveCount(0);
+    await h.win.getByRole('button', { name: COPY.tab, exact: true }).click();
+    await expect(h.win.getByText(COPY.noProject, { exact: true })).toBeVisible();
+    // An explicit row target works even without an active project or any shell.
+    await enterSettingsTab(h.win, b, true);
+    await expect(choice(h.win)).toBeEnabled();
+    expect(await displayedChoice(h.win)).toBe(OTHER);
+    await expect(h.win.getByText(COPY.noProject, { exact: true })).toHaveCount(0);
+    await expect(h.win).toHaveTitle('MetaLogix IDE');
+    expect(await shellState(h.win)).toEqual([]);
+    await h.win.getByRole('button', { name: COPY.tab, exact: true }).click();
+    await expect(h.win.getByText(COPY.noProject, { exact: true })).toBeVisible();
+    await expect(h.win.getByTestId(IDS.projectName)).toHaveCount(0);
+    expect((await gateEvidence(h.app, 'shells:set-default-cli')).requests).toEqual([]);
+  } finally {
+    await restoreGate(h.app, 'shells:set-default-cli');
+  }
+});
+
 test('E1 visible and inactive-row settings identify scope without writing, switching or touching a live shell (AC1/3/9/10)', async () => {
   const { h, a, b } = await start();
   const legacy = { first: command(h, 'legacy-first'), subsequent: command(h, 'legacy-subsequent') };
@@ -178,29 +213,41 @@ test('E1 visible and inactive-row settings identify scope without writing, switc
   const beforeA = await project(h.win, A);
   await installGate(h.app, 'shells:set-default-cli', 'pass');
   try {
-    await expect(h.win.getByRole('button', { name: COPY.open, exact: true })).toBeVisible();
-    await openSettings(h.win, a);
+    await expect(h.win.getByRole('button', { name: COPY.tab, exact: true })).toBeVisible();
+    await enterSettingsTab(h.win, a);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(PRIMARY);
-    await expect(dialog(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+    await expect(settingsView(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
     await expect(
-      dialog(h.win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }),
+      settingsView(h.win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }),
     ).toBeVisible();
-    await h.win.screenshot({ path: '.claude/reports/project-settings-legacy.png' });
-    await closeSettings(h.win);
-    await openSettings(h.win, b, true);
+    await h.win.screenshot({ path: '.claude/reports/project-settings-tab-legacy.png' });
+    await leaveSettingsTab(h.win);
+    await enterSettingsTab(h.win, b, true);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(OTHER);
-    await expect(dialog(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+    await expect(settingsView(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
     await expect(h.win).toHaveTitle(`${A} — MetaLogix IDE`);
     await expect(h.win.getByTestId('settings-modal')).toHaveCount(0);
-    await closeSettings(h.win);
+    expect(await shellState(h.win), 'inactive B entry neither switches nor spawns').toEqual(before);
     expect(await project(h.win, A)).toEqual(beforeA);
+    expect(await project(h.win, B)).toEqual(seededB);
+    // A normal selection clears the explicit B target without leaving this tab.
+    await selectProject(h.win, A);
+    await expect(settingsView(h.win).getByTestId(IDS.projectName)).toHaveText(A);
+    await expect(choice(h.win)).toBeEnabled();
+    expect(await displayedChoice(h.win)).toBe(PRIMARY);
+    await enterSettingsTab(h.win, b, true);
+    await enterSettingsTab(h.win, a);
+    await expect(choice(h.win)).toBeEnabled();
+    expect(await displayedChoice(h.win)).toBe(PRIMARY);
+    await leaveSettingsTab(h.win);
+    expect((await project(h.win, A)).config).toEqual(beforeA.config);
     expect(await project(h.win, B)).toEqual(seededB);
     expect(await shellState(h.win), 'positive live A remains; B has no shell').toEqual(before);
     expect(
       (await gateEvidence(h.app, 'shells:set-default-cli')).requests,
-      'loaded both target controls; no open/close write',
+      'loaded both target controls; no enter/leave write',
     ).toEqual([]);
     // Input transport positive control proves the unchanged live executable still responds.
     await ipc(h.win, 'shells:write', { projectId: a.id, shellIndex: 0, data: 'after-readonly\n' });
@@ -209,7 +256,7 @@ test('E1 visible and inactive-row settings identify scope without writing, switc
     expect(text.match(/INPUT\[/g)).toHaveLength(1);
     await h.win.getByTestId('settings-open').click();
     await expect(h.win.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
-    await expect(dialog(h.win)).toHaveCount(0);
+    await expect(settingsView(h.win)).toHaveCount(0);
   } finally {
     await restoreGate(h.app, 'shells:set-default-cli');
   }
@@ -246,7 +293,7 @@ test('E2 merged choices deduplicate, match shell menu, retain custom sentinel na
     ).toHaveCount(1);
   }
   await h.win.keyboard.press('Escape');
-  await openSettings(h.win, a);
+  await enterSettingsTab(h.win, a);
   await expect(choice(h.win)).toBeEnabled();
   await expect(choice(h.win).locator('option')).toHaveText([
     COPY.globalDefault,
@@ -257,7 +304,7 @@ test('E2 merged choices deduplicate, match shell menu, retain custom sentinel na
     COPY.globalDefault,
     GLOBAL_ONLY,
   ]);
-  await h.win.screenshot({ path: '.claude/reports/project-settings-normal.png' });
+  await h.win.screenshot({ path: '.claude/reports/project-settings-tab-normal.png' });
   for (const name of ['global', 'profile:Primary']) {
     await choose(h.win, name);
     await confirmed(h.win, seededA, name);
@@ -273,10 +320,10 @@ test('E2 merged choices deduplicate, match shell menu, retain custom sentinel na
     throw new Error('options must expose native select values');
   expect(customValue).not.toBe(fallbackValue);
   await choice(h.win).selectOption(customValue);
-  await expect(dialog(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
+  await expect(settingsView(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
   await confirmed(h.win, seededA, COPY.globalDefault);
   await choice(h.win).selectOption(fallbackValue);
-  await expect(dialog(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
+  await expect(settingsView(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
   await confirmed(h.win, seededA, null);
   expect((await project(h.win, B)).config).toEqual(b.config);
   expect(await setting(h.win, 'default_cli_profiles')).toEqual(globalsBefore);
@@ -297,14 +344,14 @@ test('E2 successful empty catalog retains enabled global fallback without missin
   );
   await installGate(h.app, 'shells:set-default-cli', 'pass');
   try {
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
     await expect(choice(h.win).locator('option')).toHaveText([COPY.globalDefault]);
     expect(await displayedChoice(h.win)).toBe(COPY.globalDefault);
-    await expect(dialog(h.win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
-    await expect(dialog(h.win).getByTestId(IDS.error)).toHaveCount(0);
-    await expect(dialog(h.win).getByTestId(IDS.missingProfile)).toHaveCount(0);
-    await closeSettings(h.win);
+    await expect(settingsView(h.win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
+    await expect(settingsView(h.win).getByTestId(IDS.error)).toHaveCount(0);
+    await expect(settingsView(h.win).getByTestId(IDS.missingProfile)).toHaveCount(0);
+    await leaveSettingsTab(h.win);
     expect((await project(h.win, A)).config).toEqual(empty.config);
     expect((await gateEvidence(h.app, 'shells:set-default-cli')).requests).toEqual([]);
   } finally {
@@ -321,7 +368,7 @@ for (const recovery of [OTHER, null]) {
       { defaultCliName: 'Removed agent' },
       { unavailableName: 'Removed agent' },
     );
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(COPY.unavailableProfile('Removed agent'));
     await expect(
@@ -331,24 +378,24 @@ for (const recovery of [OTHER, null]) {
       }),
     ).toBeDisabled();
     await expect(
-      dialog(h.win).getByText(COPY.missingProfileNotice('Removed agent'), { exact: true }),
+      settingsView(h.win).getByText(COPY.missingProfileNotice('Removed agent'), { exact: true }),
     ).toBeVisible();
     await expect(
-      dialog(h.win).getByText(COPY.missingProfileFallback, { exact: true }),
+      settingsView(h.win).getByText(COPY.missingProfileFallback, { exact: true }),
     ).toBeVisible();
     await expect(choice(h.win).getByRole('option', { name: OTHER, exact: true })).toBeEnabled();
-    await closeSettings(h.win);
+    await leaveSettingsTab(h.win);
     expect((await project(h.win, A)).config).toEqual(missing.config);
     await selectProject(h.win, A);
     await assertLaunch(h, missing, 'global-first');
     await killPrimary(h, a);
     await automaticSpawn(h, a);
     await assertLaunch(h, missing, 'global-subsequent');
-    await openSettings(h.win, a);
+    await enterSettingsTab(h.win, a);
     await choose(h.win, recovery);
-    await expect(dialog(h.win).getByTestId(IDS.missingProfile)).toHaveCount(0);
+    await expect(settingsView(h.win).getByTestId(IDS.missingProfile)).toHaveCount(0);
     const saved = await confirmed(h.win, missing, recovery);
-    await closeSettings(h.win);
+    await leaveSettingsTab(h.win);
     await killPrimary(h, a);
     await automaticSpawn(h, a);
     await assertLaunch(
@@ -369,12 +416,12 @@ test('E2 unavailable named choice with active legacy commands cannot apply that 
     { defaultCliName: 'Removed agent', launchCmd: { first: command(h, 'legacy-first') } },
     { unavailableName: 'Removed agent' },
   );
-  await openSettings(h.win, a, true);
+  await enterSettingsTab(h.win, a, true);
   await expect(choice(h.win)).toBeEnabled();
-  await expect(dialog(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
-  await expect(dialog(h.win).getByTestId(IDS.missingProfile)).toBeVisible();
+  await expect(settingsView(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+  await expect(settingsView(h.win).getByTestId(IDS.missingProfile)).toBeVisible();
   await expect(
-    dialog(h.win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }),
+    settingsView(h.win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }),
   ).toHaveCount(0);
   await choose(h.win, PRIMARY);
   await confirmed(h.win, missing, PRIMARY);
@@ -387,10 +434,10 @@ for (const variants of ['both', 'first-only', 'subsequent-only'] as const) {
     if (variants !== 'subsequent-only') legacy.first = command(h, 'legacy-first');
     if (variants !== 'first-only') legacy.subsequent = command(h, 'legacy-subsequent');
     const untouched = await seedProject(h, A, { launchCmd: legacy });
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
-    await expect(dialog(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
-    await closeSettings(h.win);
+    await expect(settingsView(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+    await leaveSettingsTab(h.win);
     expect((await project(h.win, A)).config).toEqual(untouched.config);
     await selectProject(h.win, A);
     await assertLaunch(
@@ -428,10 +475,10 @@ for (const scenario of [
       await setting(h.win, 'default_launch_cmd.first'),
       await setting(h.win, 'default_launch_cmd.subsequent'),
     ];
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(scenario.saved ?? COPY.globalDefault);
-    await expect(dialog(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+    await expect(settingsView(h.win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
     if (scenario.same) await replaceLegacy(h.win);
     else await choose(h.win, scenario.next);
     const saved = await confirmed(h.win, legacy, scenario.next);
@@ -441,9 +488,9 @@ for (const scenario of [
       await setting(h.win, 'default_launch_cmd.first'),
       await setting(h.win, 'default_launch_cmd.subsequent'),
     ]).toEqual(globalBefore);
-    await expect(dialog(h.win).getByTestId(IDS.replaceCustomCommands)).toHaveCount(0);
-    await expect(dialog(h.win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
-    await closeSettings(h.win);
+    await expect(settingsView(h.win).getByTestId(IDS.replaceCustomCommands)).toHaveCount(0);
+    await expect(settingsView(h.win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
+    await leaveSettingsTab(h.win);
     await selectProject(h.win, A);
     const namedMarker = scenario.next === PRIMARY ? 'project-primary' : 'project-other';
     const pid = await assertLaunch(
@@ -466,11 +513,11 @@ for (const scenario of [
 
 test('E3 global fallback reads later global first/subsequent edits without copying them into project config (AC6/7)', async () => {
   const { h, a, b } = await start();
-  await openSettings(h.win, a, true);
+  await enterSettingsTab(h.win, a, true);
   await expect(choice(h.win)).toBeEnabled();
   await choose(h.win, null);
   const reset = await confirmed(h.win, a, null);
-  await closeSettings(h.win);
+  await leaveSettingsTab(h.win);
   await setGlobals(h, 'edited-first', 'edited-subsequent');
   await selectProject(h.win, A);
   await assertLaunch(h, reset, 'edited-first');
@@ -491,15 +538,15 @@ test('E3 global fallback reads later global first/subsequent edits without copyi
 });
 
 for (const selection of [OTHER, null]) {
-  test(`E4 ${selection ?? 'global reset'} persists through dialog/project reopen and same-userData restart with matching spawns (AC5/7/8)`, async ({}, testInfo) => {
+  test(`E4 ${selection ?? 'global reset'} persists through tab/project reopen and same-userData restart with matching spawns (AC5/7/8)`, async ({}, testInfo) => {
     testInfo.setTimeout(120_000);
     const { h, a } = await start();
     await selectProject(h.win, A);
     await assertLaunch(h, a, 'project-primary', true);
-    await openSettings(h.win, a);
+    await enterSettingsTab(h.win, a);
     await choose(h.win, selection);
     const saved = await confirmed(h.win, a, selection);
-    await closeSettings(h.win);
+    await leaveSettingsTab(h.win);
     const marker = selection === null ? 'global-subsequent' : 'project-other';
     await reopenAndCheck(h, a, selection);
     await assertMenuDefault(h.win, selection);
@@ -588,22 +635,22 @@ for (const channel of ['shells:cli-profiles-list', 'projects:list'] as const) {
     await assertLaunch(h, a, 'project-primary', true);
     await installGate(h.app, channel, 'fail');
     try {
-      await openSettings(h.win, a);
-      await expect(dialog(h.win).getByTestId(IDS.error)).toContainText(COPY.loadFailed);
-      await expect(dialog(h.win).getByTestId(IDS.error)).toContainText(
+      await enterSettingsTab(h.win, a);
+      await expect(settingsView(h.win).getByTestId(IDS.error)).toContainText(COPY.loadFailed);
+      await expect(settingsView(h.win).getByTestId(IDS.error)).toContainText(
         `E2E controlled ${channel} failure`,
       );
       // Failed loads may omit the control; neither enabled choice nor legacy apply may exist.
-      await expect(dialog(h.win).locator('select:not(:disabled)')).toHaveCount(0);
+      await expect(settingsView(h.win).locator('select:not(:disabled)')).toHaveCount(0);
       await expect(
-        dialog(h.win).getByRole('button', { name: COPY.retry, exact: true }),
+        settingsView(h.win).getByRole('button', { name: COPY.retry, exact: true }),
       ).toBeEnabled();
-      await expect(dialog(h.win).getByText(COPY.saved, { exact: true })).toHaveCount(0);
+      await expect(settingsView(h.win).getByText(COPY.saved, { exact: true })).toHaveCount(0);
       expect((await gateEvidence(h.app, channel)).requests.length).toBeGreaterThan(0);
     } finally {
       await restoreGate(h.app, channel);
     }
-    await dialog(h.win).getByRole('button', { name: COPY.retry, exact: true }).click();
+    await settingsView(h.win).getByRole('button', { name: COPY.retry, exact: true }).click();
     await expect(choice(h.win)).toBeEnabled();
     await expect(choice(h.win).getByRole('option', { name: PRIMARY, exact: true })).toBeEnabled();
     expect((await project(h.win, A)).config).toEqual(a.config);
@@ -619,14 +666,14 @@ test('E5 failed immediate save restores confirmed value, retains config and live
   const before = await shellState(h.win);
   await installGate(h.app, 'shells:set-default-cli', 'fail', a.id);
   try {
-    await openSettings(h.win, a);
+    await enterSettingsTab(h.win, a);
     await expect(choice(h.win)).toBeEnabled();
     await choice(h.win).selectOption({ label: OTHER });
-    await expect(dialog(h.win).getByTestId(IDS.error)).toContainText(COPY.saveFailed);
-    await expect(dialog(h.win).getByTestId(IDS.error)).toContainText('retry after recovery');
+    await expect(settingsView(h.win).getByTestId(IDS.error)).toContainText(COPY.saveFailed);
+    await expect(settingsView(h.win).getByTestId(IDS.error)).toContainText('retry after recovery');
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(PRIMARY);
-    await expect(dialog(h.win).getByText(COPY.saved, { exact: true })).toHaveCount(0);
+    await expect(settingsView(h.win).getByText(COPY.saved, { exact: true })).toHaveCount(0);
     expect((await project(h.win, A)).config).toEqual(a.config);
     expect((await project(h.win, B)).config).toEqual(b.config);
     expect(await shellState(h.win)).toEqual(before);
@@ -637,30 +684,31 @@ test('E5 failed immediate save restores confirmed value, retains config and live
     await restoreGate(h.app, 'shells:set-default-cli');
   }
   await choose(h.win, OTHER);
-  await expect(dialog(h.win).getByTestId(IDS.error)).toHaveCount(0);
+  await expect(settingsView(h.win).getByTestId(IDS.error)).toHaveCount(0);
   await confirmed(h.win, a, OTHER);
   expect(await shellState(h.win)).toEqual(before);
 });
 
-test('E5 held save stays bound to A; closing, switching and saving B cannot consume A completion (AC3/6/9/12)', async () => {
+for (const leaveWhilePending of [false, true]) {
+test(`E5 held save stays bound to A ${leaveWhilePending ? 'after leaving its tab' : 'during normal project selection'}; saving B cannot consume A completion (AC3/6/9/12)`, async () => {
   const { h, a, b } = await start();
   await selectProject(h.win, A);
   await assertLaunch(h, a, 'project-primary', true);
   await installGate(h.app, 'shells:set-default-cli', 'hold', a.id);
   try {
-    await openSettings(h.win, a);
+    await enterSettingsTab(h.win, a);
     await expect(choice(h.win)).toBeEnabled();
     await choice(h.win).selectOption({ label: OTHER });
-    await expect(dialog(h.win).getByText(COPY.saving, { exact: true })).toBeVisible();
+    await expect(settingsView(h.win).getByText(COPY.saving, { exact: true })).toBeVisible();
     await expect(choice(h.win)).toBeDisabled();
     await expect
       .poll(async () => (await gateEvidence(h.app, 'shells:set-default-cli')).held)
       .toBe(true);
     expect((await project(h.win, A)).config).toEqual(a.config);
-    await closeSettings(h.win);
+    if (leaveWhilePending) await leaveSettingsTab(h.win, 'Files');
     await selectProject(h.win, B);
     await assertLaunch(h, b, 'b-other', true);
-    await openSettings(h.win, b);
+    if (leaveWhilePending) await enterSettingsTab(h.win, b);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(OTHER);
     await choose(h.win, GLOBAL_ONLY);
@@ -675,20 +723,20 @@ test('E5 held save stays bound to A; closing, switching and saving B cannot cons
       () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
     );
     expect(await displayedChoice(h.win)).toBe(GLOBAL_ONLY);
-    await expect(dialog(h.win).getByTestId(IDS.projectName)).toHaveText(B);
+    await expect(settingsView(h.win).getByTestId(IDS.projectName)).toHaveText(B);
     expect((await project(h.win, B)).config).toEqual(savedB.config);
     expect(await shellState(h.win)).toEqual(processes);
     expect((await gateEvidence(h.app, 'shells:set-default-cli')).requests).toEqual([
       { projectId: a.id, name: OTHER },
       { projectId: b.id, name: GLOBAL_ONLY },
     ]);
-    await closeSettings(h.win);
+    await leaveSettingsTab(h.win);
     await assertMenuDefault(h.win, GLOBAL_ONLY);
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(OTHER);
     await expect(h.win).toHaveTitle(`${B} — MetaLogix IDE`);
-    await closeSettings(h.win);
+    await leaveSettingsTab(h.win);
     await killPrimary(h, b);
     await automaticSpawn(h, b);
     await assertLaunch(h, savedB, 'global-only', true);
@@ -696,6 +744,7 @@ test('E5 held save stays bound to A; closing, switching and saving B cannot cons
     await restoreGate(h.app, 'shells:set-default-cli');
   }
 });
+}
 
 test('E5 delayed star response remains attached to A after switching to B (AC6/8/9)', async () => {
   const { h, a, b } = await start();
@@ -729,7 +778,7 @@ test('E5 delayed star response remains attached to A after switching to B (AC6/8
     await reopenAndCheck(h, b, OTHER);
     expect((await project(h.win, B)).config).toEqual(b.config);
     expect(await shellState(h.win)).toEqual(processes);
-    await openSettings(h.win, a, true);
+    await enterSettingsTab(h.win, a, true);
     await expect(choice(h.win)).toBeEnabled();
     expect(await displayedChoice(h.win)).toBe(GLOBAL_ONLY);
     await expect(h.win).toHaveTitle(`${B} — MetaLogix IDE`);
@@ -742,20 +791,18 @@ test('E5 delayed star response remains attached to A after switching to B (AC6/8
 });
 
 for (const channel of ['projects:list', 'shells:cli-profiles-list'] as const) {
-  test(`E5 held ${channel} load cannot publish A into a newly opened B dialog (AC6/12)`, async () => {
+  test(`E5 held ${channel} load cannot publish A into newly selected B settings (AC6/12)`, async () => {
     const { h, a, b } = await start();
     await selectProject(h.win, A);
     await assertLaunch(h, a, 'project-primary', true);
     await installGate(h.app, channel, 'hold', channel === 'projects:list' ? null : a.id);
     try {
-      await openSettings(h.win, a);
-      await expect(dialog(h.win).getByTestId(IDS.loading)).toHaveText(COPY.loading);
-      await expect(dialog(h.win).locator('select:not(:disabled)')).toHaveCount(0);
+      await enterSettingsTab(h.win, a);
+      await expect(settingsView(h.win).getByTestId(IDS.loading)).toHaveText(COPY.loading);
+      await expect(settingsView(h.win).locator('select:not(:disabled)')).toHaveCount(0);
       await expect.poll(async () => (await gateEvidence(h.app, channel)).held).toBe(true);
-      await closeSettings(h.win);
       await selectProject(h.win, B);
       await assertLaunch(h, b, 'b-other', true);
-      await openSettings(h.win, b);
       await expect(choice(h.win)).toBeEnabled();
       expect(await displayedChoice(h.win)).toBe(OTHER);
       const countBefore = (await gateEvidence(h.app, channel)).completed;
@@ -766,8 +813,8 @@ for (const channel of ['projects:list', 'shells:cli-profiles-list'] as const) {
       await h.win.evaluate(
         () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
       );
-      await expect(dialog(h.win).getByTestId(IDS.projectName)).toHaveText(B);
-      await expect(dialog(h.win).getByTestId(IDS.projectPath)).toHaveText(b.path);
+      await expect(settingsView(h.win).getByTestId(IDS.projectName)).toHaveText(B);
+      await expect(settingsView(h.win).getByTestId(IDS.projectPath)).toHaveText(b.path);
       expect(await displayedChoice(h.win)).toBe(OTHER);
       expect((await project(h.win, A)).config).toEqual(a.config);
       expect((await project(h.win, B)).config).toEqual(b.config);
@@ -782,7 +829,7 @@ test('E5 live primary survives named save/reset, reattaches on return, then new 
   await selectProject(h.win, A);
   const originalPid = await assertLaunch(h, a, 'project-primary', true);
   const before = await shellState(h.win);
-  await openSettings(h.win, a);
+  await enterSettingsTab(h.win, a);
   await expect(choice(h.win)).toBeEnabled();
   await choose(h.win, OTHER);
   await confirmed(h.win, a, OTHER);
@@ -792,7 +839,7 @@ test('E5 live primary survives named save/reset, reattaches on return, then new 
   expect(await shellState(h.win)).toEqual(before);
   await choose(h.win, OTHER);
   const saved = await confirmed(h.win, a, OTHER);
-  await closeSettings(h.win);
+  await leaveSettingsTab(h.win);
   await selectProject(h.win, B);
   await assertLaunch(h, b, 'b-other', true);
   await selectProject(h.win, A);
@@ -855,77 +902,74 @@ test('E5 live primary survives named save/reset, reattaches on return, then new 
   expect((await project(h.win, A)).config).toEqual(saved.config);
 });
 
-test('E6 toolbar and keyboard row entry trap focus, save by keyboard, close with Escape and restore stable opener (AC1/3/9/12)', async () => {
+test('E6 main tab and sidebar entry work by keyboard, native choice saves and focus traverses without a modal trap (AC1/3/9/12)', async () => {
   const { h, a, b } = await start();
   await selectProject(h.win, A);
   await assertLaunch(h, a, 'project-primary', true);
   const before = await shellState(h.win);
-  const opener = h.win.getByRole('button', { name: COPY.open, exact: true });
-  await h.win.keyboard.press('Tab'); // Keyboard modality before focus-visible assertions.
-  await opener.focus();
-  await paintedFocus(opener);
-  await h.win.keyboard.press('Enter');
-  await expect(dialog(h.win)).toHaveAttribute('aria-modal', 'true');
-  await expect(choice(h.win)).toBeEnabled();
-  await expect.poll(() => focusInside(h.win)).toBe(true);
-  for (const key of ['Tab', 'Shift+Tab'] as const) {
-    for (let i = 0; i < 8; i++) {
-      await h.win.keyboard.press(key);
-      await expect.poll(() => focusInside(h.win)).toBe(true);
-    }
-  }
-  await choice(h.win).focus();
-  await expect(choice(h.win)).toBeFocused();
-  await usableBox(choice(h.win));
-  await paintedFocus(choice(h.win));
-  // Native closed-select typeahead chooses the S-prefixed saved profile without
-  // opening an OS popup that Electron's CDP keyboard client cannot commit.
-  await h.win.keyboard.press('s');
+  const settingsTab = h.win.getByRole('button', { name: COPY.tab, exact: true });
+  const envTab = h.win.getByRole('button', { name: 'Env', exact: true });
+  await h.win.keyboard.press('Tab'); // Keyboard modality for focus-visible assertions.
+  await envTab.focus();
   await h.win.keyboard.press('Tab');
-  await expect(dialog(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
+  await paintedFocus(settingsTab);
+  await h.win.keyboard.press('Enter');
+  await expect(settingsView(h.win)).toBeVisible();
+  await expect(h.win.getByRole('dialog')).toHaveCount(0);
+  await expect(choice(h.win)).toBeEnabled();
+  await choice(h.win).focus();
+  await paintedFocus(choice(h.win));
+  await usableBox(choice(h.win));
+  // Drive the real native popup: opening it is required before ArrowDown commits.
+  await h.win.keyboard.press('Space');
+  await h.win.keyboard.press('ArrowDown');
+  await h.win.keyboard.press('Enter');
+  await expect(settingsView(h.win).getByTestId(IDS.status)).toHaveText(COPY.saved);
   await confirmed(h.win, a, OTHER);
-  await h.win.keyboard.press(process.platform === 'darwin' ? 'Meta+t' : 'Control+t');
-  expect(await shellState(h.win), 'modal shortcut cannot launch a hidden shell').toEqual(before);
-  await h.win.keyboard.press('Escape');
-  await expect(dialog(h.win)).toHaveCount(0);
-  await expect(opener).toBeFocused();
+  await choice(h.win).focus();
+  await h.win.keyboard.press('Tab');
+  expect(await settingsView(h.win).evaluate((panel) => panel.contains(document.activeElement)),
+    'Tab leaves the only settings control rather than wrapping inside').toBe(false);
+  await h.win.keyboard.press('Shift+Tab');
+  await expect(choice(h.win)).toBeFocused();
+  await h.win.keyboard.press('Shift+Tab');
+  expect(await settingsView(h.win).evaluate((panel) => panel.contains(document.activeElement)),
+    'Shift+Tab traverses back into ordinary chrome').toBe(false);
+  await settingsTab.focus();
+  await paintedFocus(settingsTab);
+  await h.win.keyboard.press('Shift+Tab');
+  await paintedFocus(envTab);
+  await h.win.keyboard.press('Enter');
+  await expect(settingsView(h.win)).toHaveCount(0);
+  await expect(h.win.getByRole('heading', { name: 'Environment variables', exact: true })).toBeVisible();
   const stableRow = row(h.win, B);
   await stableRow.focus();
   await paintedFocus(stableRow);
   await h.win.keyboard.press('Shift+F10');
   const item = h.win.getByRole('menuitem', { name: COPY.contextMenuItem, exact: true });
   await expect(item).toBeVisible();
-  // Navigate from the menu's own autofocus with real keyboard input, not click.
   const itemCount = await h.win.getByRole('menu').getByRole('menuitem').count();
-  for (
-    let i = 0;
-    i < itemCount && !(await item.evaluate((el) => document.activeElement === el));
-    i++
-  )
+  for (let i = 0; i < itemCount && !(await item.evaluate((el) => document.activeElement === el)); i++)
     await h.win.keyboard.press('ArrowDown');
   await expect(item).toBeFocused();
   await h.win.keyboard.press('Enter');
-  await expect(dialog(h.win).getByTestId(IDS.projectName)).toHaveText(B);
+  await expect(settingsView(h.win).getByTestId(IDS.projectName)).toHaveText(B);
   await expect(choice(h.win)).toBeEnabled();
-  await expect.poll(() => focusInside(h.win)).toBe(true);
-  await h.win.keyboard.press('Shift+Tab');
-  await expect.poll(() => focusInside(h.win)).toBe(true);
-  const close = dialog(h.win).getByRole('button', { name: COPY.close, exact: true });
-  await close.focus();
-  await paintedFocus(close);
-  await h.win.keyboard.press('Escape');
-  await expect(dialog(h.win)).toHaveCount(0);
-  await expect(stableRow).toBeFocused();
-  await opener.focus();
-  await h.win.keyboard.press('Enter');
-  await expect(choice(h.win)).toBeEnabled();
-  await dialog(h.win).getByRole('button', { name: COPY.close, exact: true }).focus();
-  await h.win.keyboard.press('Enter');
-  await expect(dialog(h.win)).toHaveCount(0);
-  await expect(opener).toBeFocused();
   await expect(h.win).toHaveTitle(`${A} — MetaLogix IDE`);
-  expect(await shellState(h.win)).toEqual(before);
+  expect(await shellState(h.win), 'keyboard inactive-row entry leaves A live and B unlaunched').toEqual(before);
   expect((await project(h.win, B)).config).toEqual(b.config);
+  await settingsTab.focus();
+  await h.win.keyboard.press('Enter');
+  await expect(settingsView(h.win).getByTestId(IDS.projectName)).toHaveText(A);
+  await expect(choice(h.win)).toBeEnabled();
+  expect(await displayedChoice(h.win)).toBe(OTHER);
+  const shellTab = h.win.getByTestId('main-tab-bar').getByRole('button', { name: 'Shell', exact: true });
+  await shellTab.focus();
+  await h.win.keyboard.press('Enter');
+  await expect(settingsView(h.win)).toHaveCount(0);
+  await expect(h.win.getByTestId('shell-tab')).toBeVisible();
+  await expect(h.win.getByTestId('shell-tab').locator('textarea.xterm-helper-textarea')).not.toBeFocused();
+  expect(await shellState(h.win)).toEqual(before);
 });
 
 test('E6 long project identity and profile remain usable in both active themes at normal and constrained desktop sizes (AC1/2/12)', async () => {
@@ -957,45 +1001,48 @@ test('E6 long project identity and profile remain usable in both active themes a
       [900, 620],
     ] as const) {
       await resize(h.app, width, height);
-      await openSettings(h.win, a);
+      await enterSettingsTab(h.win, a);
       await expect(choice(h.win)).toBeEnabled();
       expect(await displayedChoice(h.win)).toBe(longProfile);
-      await expect(dialog(h.win).getByTestId(IDS.projectPath)).toHaveText(a.path);
+      await expect(settingsView(h.win).getByTestId(IDS.projectPath)).toHaveText(a.path);
       await h.win.screenshot({
-        path: `.claude/reports/project-settings-${theme}-${width}x${height}.png`,
+        path: `.claude/reports/project-settings-tab-${theme}-${width}x${height}.png`,
       });
       for (const control of [
         choice(h.win),
-        dialog(h.win).getByTestId(IDS.projectName),
-        dialog(h.win).getByTestId(IDS.projectPath),
-        dialog(h.win).getByRole('button', { name: COPY.done, exact: true }),
-        dialog(h.win).getByRole('button', { name: COPY.close, exact: true }),
+        settingsView(h.win).getByTestId(IDS.projectName),
+        settingsView(h.win).getByTestId(IDS.projectPath),
+        settingsView(h.win).getByRole('heading', { name: COPY.title, exact: true }),
+        settingsView(h.win).getByText(COPY.nextLaunchNotice, { exact: true }),
       ])
         await usableBox(control);
-      const paint = await dialog(h.win).evaluate((panel) => {
-        const style = getComputedStyle(panel);
+      await usableBox(settingsView(h.win));
+      const paint = await settingsView(h.win).evaluate((panel) => {
+        const main = panel.closest('main');
+        if (!main) throw new Error('settings tab must be part of the actual main sheet');
+        const style = getComputedStyle(main);
         const probe = document.createElement('span');
-        probe.style.backgroundColor = 'var(--panel-strong)';
-        panel.appendChild(probe);
+        probe.style.backgroundColor = 'var(--surface-sheet)';
+        main.appendChild(probe);
         const token = getComputedStyle(probe).backgroundColor;
         probe.remove();
         return {
           background: style.backgroundColor,
           token,
-          color: style.color,
+          color: getComputedStyle(panel).color,
           overflow: panel.scrollWidth > panel.clientWidth + 1,
         };
       });
-      expect(paint.background, 'panel paints the active application surface token').toBe(
+      expect(paint.background, 'settings tab inherits the active main-sheet surface token').toBe(
         paint.token,
       );
       expect(paint.background).not.toBe('rgba(0, 0, 0, 0)');
       expect(paint.color).not.toBe(paint.background);
       expect(paint.overflow, 'long content does not cause horizontal clipping').toBe(false);
       if (width === 1400) paints.push(paint.background);
-      await closeSettings(h.win);
+      await leaveSettingsTab(h.win);
     }
   }
   expect(paints).toHaveLength(2);
-  expect(paints[0], 'real theme controls repaint the project dialog').not.toBe(paints[1]);
+  expect(paints[0], 'real theme controls repaint the project settings tab').not.toBe(paints[1]);
 });

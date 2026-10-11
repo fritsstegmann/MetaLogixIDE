@@ -7,6 +7,7 @@ import { CHROME_TESTIDS } from '../../src/renderer/chrome-testids';
 import { SIDEBAR_WIDTH } from '../../src/renderer/sidebar-width';
 import { DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
 import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
+import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 import { CLAUDE_DOT } from '../../src/shared/claude-state';
 import type { EffectiveTheme } from '../../src/renderer/markdown/contract';
 import { commitAll, git, GIT_ENV, initRepo, porcelain } from './helpers/git-repo';
@@ -404,6 +405,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
           ['Files', tabBar.getByRole('button', { name: 'Files', exact: true })],
           ['Diff', win.getByTestId(DIFF_TESTIDS.tab)],
           ['Env', win.getByTestId(ENV_TESTIDS.tab)],
+          [PROJECT_SETTINGS_COPY.tab, win.getByTestId(PROJECT_SETTINGS_TESTIDS.tab)],
         ] as const) {
           expect((await box(tab)).height, `${at} ${label} tab height`).toBe(32);
           expect([await css(tab, 'padding-left'), await css(tab, 'padding-right')], `${at} ${label} tab padding`).toEqual(['12px', '12px']);

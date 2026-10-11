@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from 'n
 import { join } from 'node:path';
 import { DIFF_COPY, DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
 import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
+import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 import {
   baseEnv, hookCredentials, installNotificationSpy, launch, notifications, openProject, postRawHook, projectId,
   waitForShell, type Api, type Harness,
@@ -291,7 +292,7 @@ async function tabFill(loc: Locator): Promise<string> {
 
 /* ═══════════════════════════════ 1. placement ═══════════════════════════════ */
 
-test('tab bar reads Shell, Files, Diff, Env for any project; Diff activates with the shared active fill (AC1, AC2)', async () => {
+test('tab bar keeps existing tabs in order with Project settings immediately after Env; Diff activates with the shared active fill (AC1, AC2)', async () => {
   const win = await setup(['aTs'], { other: true });
   const tabBar = win.getByTestId(DIFF_TESTIDS.tabBar);
   const checkOrder = async () => {
@@ -301,6 +302,8 @@ test('tab bar reads Shell, Files, Diff, Env for any project; Diff activates with
     await expect(buttons.nth(2)).toHaveAttribute('data-testid', DIFF_TESTIDS.tab);
     await expect(buttons.nth(2)).toContainText(DIFF_COPY.tabLabel);
     await expect(buttons.nth(3)).toHaveAttribute('data-testid', ENV_TESTIDS.tab);
+    await expect(buttons.nth(4)).toHaveAttribute('data-testid', PROJECT_SETTINGS_TESTIDS.tab);
+    await expect(buttons.nth(4)).toHaveText(PROJECT_SETTINGS_COPY.tab);
   };
   await checkOrder();
 

@@ -199,32 +199,31 @@ export function row(win: Page, name: string): Locator {
 export async function selectProject(win: Page, name: string): Promise<void> {
   await row(win, name).click();
   await expect.poll(() => win.title()).toBe(`${name} — MetaLogix IDE`);
-  await expect(win.getByTestId('tabbar-new-shell')).toBeVisible();
 }
 
-export function dialog(win: Page): Locator {
-  return win.getByRole('dialog', { name: COPY.title, exact: true });
+export function settingsView(win: Page): Locator {
+  return win.getByRole('region', { name: COPY.title, exact: true });
 }
 
 export function choice(win: Page): Locator {
-  return dialog(win).getByRole('combobox', { name: COPY.defaultAgentLabel, exact: true });
+  return settingsView(win).getByRole('combobox', { name: COPY.defaultAgentLabel, exact: true });
 }
 
-export async function openSettings(win: Page, target: Project, fromRow = false): Promise<void> {
+export async function enterSettingsTab(win: Page, target: Project, fromRow = false): Promise<void> {
   if (fromRow) {
     await row(win, target.name).click({ button: 'right', position: { x: 8, y: 16 } });
     await win.getByRole('menuitem', { name: COPY.contextMenuItem, exact: true }).click();
   } else {
-    await win.getByRole('button', { name: COPY.open, exact: true }).click();
+    await win.getByRole('button', { name: COPY.tab, exact: true }).click();
   }
-  await expect(dialog(win)).toBeVisible();
-  await expect(dialog(win).getByTestId(IDS.projectName)).toHaveText(target.name);
-  await expect(dialog(win).getByTestId(IDS.projectPath)).toHaveText(target.path);
+  await expect(settingsView(win)).toBeVisible();
+  await expect(settingsView(win).getByTestId(IDS.projectName)).toHaveText(target.name);
+  await expect(settingsView(win).getByTestId(IDS.projectPath)).toHaveText(target.path);
 }
 
-export async function closeSettings(win: Page): Promise<void> {
-  await dialog(win).getByRole('button', { name: COPY.done, exact: true }).click();
-  await expect(dialog(win)).toHaveCount(0);
+export async function leaveSettingsTab(win: Page, tab: 'Shell' | 'Files' | 'Env' = 'Shell'): Promise<void> {
+  await win.getByRole('button', { name: tab, exact: true }).click();
+  await expect(settingsView(win)).toHaveCount(0);
 }
 
 export async function displayedChoice(win: Page): Promise<string> {
@@ -233,17 +232,17 @@ export async function displayedChoice(win: Page): Promise<string> {
 
 export async function choose(win: Page, name: string | null): Promise<void> {
   await choice(win).selectOption({ label: name ?? COPY.globalDefault });
-  await expect(dialog(win).getByTestId(IDS.status)).toHaveText(COPY.saved);
+  await expect(settingsView(win).getByTestId(IDS.status)).toHaveText(COPY.saved);
   await expect(choice(win)).toBeEnabled();
   await expect.poll(() => displayedChoice(win)).toBe(name ?? COPY.globalDefault);
 }
 
 export async function replaceLegacy(win: Page): Promise<void> {
-  await expect(dialog(win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
-  await dialog(win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }).click();
-  await expect(dialog(win).getByTestId(IDS.status)).toHaveText(COPY.saved);
-  await expect(dialog(win).getByTestId(IDS.legacyNotice)).toHaveCount(0);
-  await expect(dialog(win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
+  await expect(settingsView(win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
+  await settingsView(win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }).click();
+  await expect(settingsView(win).getByTestId(IDS.status)).toHaveText(COPY.saved);
+  await expect(settingsView(win).getByTestId(IDS.legacyNotice)).toHaveCount(0);
+  await expect(settingsView(win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
 }
 
 export async function output(win: Page, projectId: number, shellIndex = 0): Promise<string> {
