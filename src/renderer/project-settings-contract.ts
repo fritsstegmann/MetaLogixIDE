@@ -1,6 +1,6 @@
 import type { Project } from '@shared/types';
 
-/** Immutable opener identity; the settings session reads the latest persisted configuration. */
+/** Immutable tab target identity; the settings session reads the latest persisted configuration. */
 export type ProjectSettingsTarget = Readonly<Pick<Project, 'id' | 'name' | 'path'>>;
 
 /** Shared accessible copy for project settings and the existing default-star shortcut. */
@@ -8,6 +8,8 @@ export const PROJECT_SETTINGS_COPY = {
   open: 'Project settings',
   contextMenuItem: 'Project settings…',
   title: 'Project settings',
+  tab: 'Project settings',
+  noProject: 'Select a project to edit its settings.',
   defaultAgentLabel: 'Default agent',
   globalDefault: 'Use global default',
   nextLaunchNotice: 'Changes apply to the next automatic launch. Running shells are not changed.',
@@ -29,6 +31,8 @@ export const PROJECT_SETTINGS_COPY = {
 
 /** Stable selectors shared by UI and real-Electron acceptance tests. */
 export const PROJECT_SETTINGS_TESTIDS = {
+  tab: 'project-settings-tab',
+  view: 'project-settings-view',
   open: 'project-settings-open',
   dialog: 'project-settings-dialog',
   panel: 'project-settings-panel',
