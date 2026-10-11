@@ -888,11 +888,11 @@ for (const editor of EDITORS) {
     await expect(copyButton(panel, 1)).toBeEnabled();
 
     // AC28 tooltip on hover.
+    await focusWindow(win);
     await copyButton(panel, 1).hover();
     await expect(win.getByRole('tooltip').filter({ hasText: ENV_COPY.copyTooltip })).toBeVisible();
 
     // AC28/AC29/AC30: raw (unexpanded, unsaved) value; row stays masked; toast is constant.
-    await focusWindow(win);
     await writeClipboard('sentinel-before');
     await copyButton(panel, 1).click();
     await expect.poll(readClipboard).toBe(RAW);

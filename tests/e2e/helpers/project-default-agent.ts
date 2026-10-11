@@ -221,7 +221,10 @@ export async function enterSettingsTab(win: Page, target: Project, fromRow = fal
   await expect(settingsView(win).getByTestId(IDS.projectPath)).toHaveText(target.path);
 }
 
-export async function leaveSettingsTab(win: Page, tab: 'Shell' | 'Files' | 'Env' = 'Shell'): Promise<void> {
+export async function leaveSettingsTab(
+  win: Page,
+  tab: 'Shell' | 'Files' | 'Env' = 'Shell',
+): Promise<void> {
   await win.getByRole('button', { name: tab, exact: true }).click();
   await expect(settingsView(win)).toHaveCount(0);
 }
@@ -238,8 +241,12 @@ export async function choose(win: Page, name: string | null): Promise<void> {
 }
 
 export async function replaceLegacy(win: Page): Promise<void> {
-  await expect(settingsView(win).getByText(COPY.customCommandsNotice, { exact: true })).toBeVisible();
-  await settingsView(win).getByRole('button', { name: COPY.replaceCustomCommands, exact: true }).click();
+  await expect(
+    settingsView(win).getByText(COPY.customCommandsNotice, { exact: true }),
+  ).toBeVisible();
+  await settingsView(win)
+    .getByRole('button', { name: COPY.replaceCustomCommands, exact: true })
+    .click();
   await expect(settingsView(win).getByTestId(IDS.status)).toHaveText(COPY.saved);
   await expect(settingsView(win).getByTestId(IDS.legacyNotice)).toHaveCount(0);
   await expect(settingsView(win).getByText(COPY.nextLaunchNotice, { exact: true })).toBeVisible();
