@@ -113,9 +113,9 @@ export type SettingsMap = {
   /** 30..100 — percentage. 100 = fully opaque, applied to every window. */
   'window_opacity':                number;
   /**
-   * Global fallback CLI profiles. Used when a project doesn't set its own
-   * `cliProfiles`. The first entry is treated as the "primary" one that
-   * shellIndex 0 launches on project open.
+   * Global CLI profile catalog, merged with project profiles by name.
+   * Project entries shadow same-name global entries. Automatic primary launch
+   * uses a named default or launch-command settings, not catalog order.
    */
   'default_cli_profiles':          CliProfile[];
   /** Chosen Claude permission mode; `null` = not chosen yet (first-run modal). */

@@ -71,8 +71,8 @@ and [oh-my-pi](https://github.com/can1357/oh-my-pi/blob/main/docs/cli-reference.
 ### Project settings and default agent
 
 The **Project settings** tab sits immediately after **Env**.
-It shows the selected project's name, path, and **Default agent** field.
-Without a selected project, it shows a selection prompt.
+It shows the target project's name, path, and **Default agent** field.
+It shows a selection prompt only when neither an explicit target nor a selected project exists.
 The sidebar's **Project settings…** context action can target an inactive project without selecting it or starting its shell
 (`src/renderer/App.tsx`, `src/renderer/components/Sidebar.tsx`).
 
@@ -538,7 +538,7 @@ Settings → Environment, after "Launch commands".
 | Presentation | `src/renderer/components/env/InheritedEnvList.tsx` | The read-only "From app settings" list in the project Env tab. |
 | Presentation | `src/renderer/components/ProjectEnvTab.tsx` | The Env tab body. Reads the project fresh through `projects:list` when it mounts, edits the draft, and saves only `{ env }`. Save stays disabled until the stored values have loaded. Shows the inherited list below Save and Discard. |
 | Presentation | `src/renderer/components/settings/EnvironmentPanel.tsx` | Settings → Environment: `useAppEnv`, `saveAppEnv` and the shared editor. |
-| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `diff`, `env`) and `isMainTab`, the validator for the persisted tab. |
+| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `diff`, `env`, `settings`) and `isMainTab`, the validator for the persisted tab. |
 | Contract | `src/renderer/project-env-copy.ts` | Every string and test id of both editors (`ENV_COPY`, `ENV_TESTIDS`, `APP_ENV_COPY`, `APP_ENV_TESTIDS`). |
 
 Rules:
