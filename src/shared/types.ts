@@ -19,8 +19,8 @@ export interface LaunchCmd {
  * binary (resolved via PATH); the rest are its arguments. `env` overrides
  * are merged onto the inherited environment. Persisted per-project in
  * `ProjectConfig.cliProfiles`; global defaults live in the settings map
- * under `default_cli_profiles`, folded in when a project has none of its
- * own.
+ * under `default_cli_profiles`. Project entries shadow same-name global
+ * entries; the remaining global profiles are also offered.
  */
 export interface CliProfile {
   /** Human name shown in the menu (also the dedupe key). */
@@ -44,10 +44,9 @@ export interface ProjectConfig {
   linkedMetaprojectProjectId?: string | null;
   notes?: string;
   /**
-   * Named CLIs the "+ new shell" menu offers for this project. When empty
-   * or absent, the global `default_cli_profiles` are shown instead. Adding
-   * an entry here is how a project "remembers" a CLI the user spawned as a
-   * one-off (Custom Command… → Save to project).
+   * Named CLIs saved for this project. These shadow same-name global
+   * `default_cli_profiles`; other global profiles remain available.
+   * Custom Command… → Save to project remembers a one-off CLI here.
    */
   cliProfiles?: CliProfile[];
   /**
@@ -55,8 +54,8 @@ export interface ProjectConfig {
    * against project cliProfiles first, then the global default_cli_profiles
    * — so "OpenAI Codex" set here will pick up the global entry if the
    * project hasn't overridden it. Null / unset → falls back to
-   * `default_launch_cmd.first/subsequent` (the classic Claude default).
-   * Lets each folder pick its own agent without editing raw argv.
+   * `default_launch_cmd.first/subsequent`. Existing custom launch variants
+   * take precedence until an explicit default choice replaces them.
    */
   defaultCliName?: string | null;
 }
