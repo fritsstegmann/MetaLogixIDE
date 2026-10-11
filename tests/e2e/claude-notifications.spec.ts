@@ -157,11 +157,10 @@ test.describe('Claude Code system notifications', () => {
       await h.win.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await clickNotification(h.app, 3);
       await expect.poll(() => h.win.title(), { timeout: 5000 }).toBe('projb — MetaLogix IDE');
-      const active = await h.win.evaluate(() => {
+      await expect.poll(() => h.win.evaluate(() => {
         const el = document.activeElement;
         return el instanceof HTMLElement && el.classList.contains('xterm-helper-textarea');
-      });
-      expect(active, 'AC11 terminal focused after click').toBe(true);
+      }), { timeout: 5000, message: 'AC11 terminal focused after click' }).toBe(true);
 
       // AC4 continued: clicking the proja notification (index 2, its
       // "finished" one — still the most recent live one for that shell)
@@ -701,9 +700,9 @@ test.describe('Claude Code system notifications', () => {
         },
       });
       try {
-        await installNotificationSpy(app);
         const win = await app.firstWindow();
         await win.waitForLoadState('domcontentloaded');
+        await installNotificationSpy(app);
         let dialogShown = false;
         win.on('dialog', (d) => { dialogShown = true; void d.dismiss(); });
         await win.evaluate(async (path: string) => {
@@ -725,10 +724,10 @@ test.describe('Claude Code system notifications', () => {
         // at all — src/main/index.ts's done-poll loop).
         await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.minimize(); });
         await sendLine(win, projA, 0, '/work 9');
-        await win.waitForTimeout(11000);
-        expect(
-          (await notifications(app)).some((n) => n.body.startsWith('Command finished')),
-          'AC22 generic notifier covers a shell whose hooks never connected',
+        await waitForShell(win, projA, 0, 'work done (9s)');
+        await expect.poll(
+          async () => (await notifications(app)).some((n) => n.body.startsWith('Command finished')),
+          { timeout: 5000, message: 'AC22 generic notifier covers a shell whose hooks never connected' },
         ).toBe(true);
 
         // AC23: the app's own echo behaviour is unaffected by hook reporting

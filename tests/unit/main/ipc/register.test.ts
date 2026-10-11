@@ -11,6 +11,7 @@ import { ShellsRepo } from '@main/repos/shells-repo';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
+import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { commitAll, git, makeConflict, markerScript, stubGitEnv, tempProject } from '../git/temp-repo';
@@ -827,6 +828,7 @@ function envRig() {
     (ptyManager.spawn.mock.calls[n] as unknown as [number, number, ResolvedLaunch])[2];
   const setEnv = (id: number, env: Record<string, string>) => projects.updateConfig(id, { env });
   return {
+    db,
     dir,
     settings,
     projects,
@@ -841,6 +843,183 @@ function envRig() {
     pathA,
   };
 }
+
+describe('shells:set-default-cli — project default-agent boundary', () => {
+  const legacy: ProjectConfig = {
+    defaultCliName: 'Agent',
+    launchCmd: { first: { argv: ['legacy-first'], env: {} }, subsequent: { argv: ['legacy-subsequent'], env: {} } },
+    env: { KEEP: 'yes' }, cwdOverride: '/custom/cwd', model: 'opus', notes: 'keep',
+    linkedMetaprojectProjectId: 'linked',
+    cliProfiles: [{ name: 'Agent', argv: ['local-agent'], env: { KEEP: 'profile' } }],
+  };
+
+  it.each([
+    ['missing request', undefined], ['null request', null], ['array request', []], ['string request', 'request'],
+    ['missing id', { name: null }], ['string id', { projectId: '1', name: null }],
+    ['zero id', { projectId: 0, name: null }], ['negative id', { projectId: -1, name: null }],
+    ['fraction id', { projectId: 1.5, name: null }], ['unsafe id', { projectId: Number.MAX_SAFE_INTEGER + 1, name: null }],
+    ['NaN id', { projectId: NaN, name: null }], ['infinite id', { projectId: Infinity, name: null }],
+    ['missing name', { projectId: 1 }], ['empty name', { projectId: 1, name: '' }],
+    ['numeric name', { projectId: 1, name: 12 }], ['object name', { projectId: 1, name: {} }],
+  ])('rejects %s before any project access, write, event or PTY action', async (_label, request) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    const before = r.projects.get(r.a.id);
+    const get = vi.spyOn(r.projects, 'get');
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:set-default-cli', request)).rejects.toThrow(/project|name|request/i);
+    expect(get).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['missing project', 'missing profile'])('rejects %s without mutation or events', async (kind) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    const before = r.projects.get(r.a.id);
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:set-default-cli', {
+      projectId: kind === 'missing project' ? 99999 : r.a.id, name: 'missing',
+    })).rejects.toThrow(kind === 'missing project' ? /project/i : /profile/i);
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['Agent', null])('same-value explicit choice %j returns persisted replacement while preserving unrelated state', async (name) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, { ...legacy, defaultCliName: name });
+    r.projects.updateConfig(r.b.id, { defaultCliName: 'B', notes: 'other' });
+    const now = new Date('2026-09-01T10:00:00Z');
+    r.projects.setFirstLaunched(r.a.id, now);
+    r.shells.upsert({ projectId: r.a.id, shellIndex: 0, model: 'opus', launchArgv: ['running'], startedAt: 'now', lastActiveAt: 'now', pinned: true });
+    const beforeA = r.projects.get(r.a.id);
+    const beforeB = r.projects.get(r.b.id);
+    const beforeSettings = r.settings.getAll();
+    const beforeShells = r.shells.list();
+    const actualWrite = r.projects.updateConfig.bind(r.projects);
+    const write = vi.spyOn(r.projects, 'updateConfig').mockImplementation((id, patch) => {
+      expect(r.events).toEqual([]);
+      return actualWrite(id, patch);
+    });
+    const expected = { ...beforeA, config: { ...legacy, defaultCliName: name, launchCmd: null } };
+    await expect(r.call('shells:set-default-cli', {
+      projectId: r.a.id, name, env: { KEEP: 'overwrite' }, firstLaunchedAt: null, argv: ['untrusted'],
+    })).resolves.toStrictEqual({ project: expected });
+    expect(write.mock.calls).toEqual([[r.a.id, { defaultCliName: name, launchCmd: null }]]);
+    expect(r.projects.get(r.a.id)).toStrictEqual(expected);
+    expect(r.projects.get(r.b.id)).toStrictEqual(beforeB);
+    expect(r.settings.getAll()).toStrictEqual(beforeSettings);
+    expect(r.shells.list()).toStrictEqual(beforeShells);
+    expect(r.events).toEqual(['projects:changed']);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    expect(r.ptyManager.resize).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['first', 'subsequent'] as const)('named selection replaces a single legacy %s variant', async (variant) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, { ...legacy, launchCmd: { [variant]: { argv: ['legacy'], env: {} } } });
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ ...legacy, launchCmd: null });
+    expect(r.events).toEqual(['projects:changed']);
+    r.db.close();
+  });
+
+  it('uses exact global catalog names, rejects normalized alternatives, and resets with no profiles', async () => {
+    const r = envRig();
+    const name = '  字體 Agent  ';
+    r.settings.set('default_cli_profiles', [{ name, argv: ['/not-installed/agent'] }]);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ defaultCliName: name, launchCmd: null });
+    r.events.length = 0;
+    await expect(r.call('shells:set-default-cli', { projectId: r.a.id, name: name.trim() })).rejects.toThrow(/profile/i);
+    expect(r.events).toEqual([]);
+    expect(r.projects.get(r.a.id)?.config.defaultCliName).toBe(name);
+    r.settings.set('default_cli_profiles', []);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: null });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ defaultCliName: null, launchCmd: null });
+    r.db.close();
+  });
+
+  it('real SQLite persistence failure leaves the confirmed config and emits no success event', async () => {
+    const r = envRig();
+    const before = r.projects.updateConfig(r.a.id, legacy);
+    r.db.exec("CREATE TRIGGER reject_default_update BEFORE UPDATE OF config_json ON projects BEGIN SELECT RAISE(ABORT, 'blocked write'); END");
+    await expect(r.call('shells:set-default-cli', { projectId: r.a.id, name: null })).rejects.toThrow(/blocked write/);
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it('profile-list reads preserve untouched variants and project-first deduplication', async () => {
+    const r = envRig();
+    const before = r.projects.updateConfig(r.a.id, legacy);
+    r.settings.set('default_cli_profiles', [{ name: 'Agent', argv: ['global-agent'] }, { name: 'Other', argv: ['other'] }]);
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:cli-profiles-list', { projectId: r.a.id })).resolves.toStrictEqual({
+      profiles: [{ ...legacy.cliProfiles?.[0], scope: 'project' }, { name: 'Other', argv: ['other'], scope: 'global' }],
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it('a live primary reattaches after saving; only a later automatic spawn uses the new default', async () => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    r.ptyManager.isAlive.mockReturnValue(true);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    await expect(r.call('shells:launch', { projectId: r.a.id })).resolves.toStrictEqual({ shellIndex: 0 });
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.ptyManager.isAlive.mockReturnValue(false);
+    await r.call('shells:launch', { projectId: r.a.id });
+    expect(r.ptyManager.spawn).toHaveBeenCalledTimes(1);
+    expect(r.spawned(0).argv).toStrictEqual(['local-agent']);
+    expect(r.projects.get(r.a.id)?.config.launchCmd).toBeNull();
+    r.db.close();
+  });
+
+  it('explicit other-profile, inline command and plain-terminal launches ignore the saved default', async () => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, {
+      ...legacy,
+      cliProfiles: [...(legacy.cliProfiles ?? []), { name: 'Other', argv: ['other-agent', 'explicit'] }],
+    });
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    const before = r.projects.get(r.a.id);
+    await r.call('shells:launch-cli', { projectId: r.a.id, profileName: 'Other' });
+    await r.call('shells:launch-cli', { projectId: r.a.id, argv: ['inline-agent', 'explicit'] });
+    await r.call('shells:launch-plain', { projectId: r.a.id });
+    expect(r.spawned(0).argv).toStrictEqual(['other-agent', 'explicit']);
+    expect(r.spawned(1).argv).toStrictEqual(['inline-agent', 'explicit']);
+    expect(r.spawned(2).argv).toStrictEqual(defaultShellArgv());
+    expect(r.spawned(0).cwd).toBe(r.pathA);
+    expect(r.spawned(2).cwd).toBe(r.pathA);
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+});
 
 describe('projects:update-config — env validation (AC8, AC9)', () => {
   const seeded: ProjectConfig = {

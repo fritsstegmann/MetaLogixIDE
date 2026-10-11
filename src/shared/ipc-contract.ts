@@ -3,6 +3,7 @@ import type { ClaudePermissionMode } from './claude-permission-mode';
 import type { ClaudeShellStateEntry } from './claude-state';
 import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 import type { TerminalFontWeight } from './terminal-font-weight';
+import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -84,16 +85,16 @@ export interface IpcContract {
   // ∪ global defaults so the renderer sees one flat, deduplicated list.
   'shells:cli-profiles-list': {
     request: { projectId: number };
-    response: { profiles: Array<{ name: string; argv: string[]; env?: Record<string, string>; icon?: string; scope: 'project' | 'global' }> };
+    response: { profiles: ScopedCliProfile[] };
   };
   'shells:cli-profiles-remove': { request: { projectId: number; name: string }; response: { ok: true } };
   /**
-   * Set (or clear with `name: null`) the CLI profile that auto-launches
-   * when this project is opened. Name is resolved against project +
-   * global profiles at spawn time, so renaming a profile after pinning
-   * gracefully falls back to the classic Claude default.
+   * Set (or clear with `name: null`) the CLI profile for future automatic
+   * launches. Explicit choices replace both custom launch variants.
+   * Names resolve project-first, then globally; a later missing profile
+   * falls back to the configured global first/subsequent launch command.
    */
-  'shells:set-default-cli':     { request: { projectId: number; name: string | null }; response: { project: Project } };
+  'shells:set-default-cli':     { request: ProjectDefaultAgentRequest; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };

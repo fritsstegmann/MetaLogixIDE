@@ -11,6 +11,8 @@ import { FilesTab } from './components/FilesTab';
 import { ChatTab } from './components/ChatTab';
 import { GitPanel } from './components/GitPanel';
 import { Settings } from './components/Settings';
+import { ProjectSettingsTab } from './components/ProjectSettingsTab';
+import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS, type ProjectSettingsTarget } from './project-settings-contract';
 import type { SettingsSection } from './components/settings/nav-icons';
 import { ResizeHandle } from './components/ResizeHandle';
 import { FileFinder } from './components/FileFinder';
@@ -257,6 +259,8 @@ function MainApp() {
   // resize the projects list back to a tiny column when the user flips modes.
   const [chatPanelWidth, setChatPanelWidth] = usePersistedNumber('metaide.chatPanelWidth', 400, 300, 640);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectSettingsTarget, setProjectSettingsTarget] = useState<ProjectSettingsTarget | null>(null);
+  const settingsTarget = projectSettingsTarget ?? selected;
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
   const [finderOpen, setFinderOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
@@ -415,6 +419,7 @@ function MainApp() {
           : await api.invoke('projects:ensure-for-file', { path });
         await api.invoke('projects:open', { id: project.id });
         lastPickIdRef.current = project.id;
+        setProjectSettingsTarget(null);
         setSelected(project);
         try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
         setMainTab('files');
@@ -437,6 +442,7 @@ function MainApp() {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
           const { project } = await api.invoke('projects:open', { id: projectId });
+          setProjectSettingsTarget(null);
           setSelected(project);
         }
         setMainTab('shell');
@@ -523,6 +529,7 @@ function MainApp() {
   // ref the stale earlier setSelected would win, reverting the click.
   const lastPickIdRef = useRef<number | null>(null);
   async function pick(p: Project) {
+    setProjectSettingsTarget(null);
     lastPickIdRef.current = p.id;
     terminalFocus.cancelRequest();
     try {
@@ -546,6 +553,20 @@ function MainApp() {
     mainTabRef.current = 'env';
     setMainTab('env');
     void pick(p);
+  }
+
+  /** Opens an explicit sidebar target without selecting its project or launching a shell. */
+  function openProjectSettings(target: ProjectSettingsTarget): void {
+    setProjectSettingsTarget(target);
+    mainTabRef.current = 'settings';
+    setMainTab('settings');
+  }
+
+  /** The main tab always targets the selected project rather than a previous sidebar override. */
+  function openSelectedProjectSettings(): void {
+    setProjectSettingsTarget(null);
+    mainTabRef.current = 'settings';
+    setMainTab('settings');
   }
 
   /** One split pane's shell: the chip's label and dot inputs, falling back to the full shell list for a popped right shell that has left the strip. */
@@ -705,6 +726,11 @@ function MainApp() {
     }
   }
 
+  function applyDefaultAgentProject(project: Project): void {
+    if (selectedRef.current?.id !== project.id) return;
+    setSelected((current) => current?.id === project.id ? project : current);
+  }
+
   async function unloadCurrent() {
     if (!selected) return;
     try {
@@ -784,6 +810,7 @@ function MainApp() {
                 onSelect={pick}
                 onNewProject={() => setNewProjectOpen(true)}
                 onEditEnv={editEnv}
+                onProjectSettings={openProjectSettings}
                 width={sidebarWidth}
               />
               <ResizeHandle
@@ -863,7 +890,7 @@ function MainApp() {
           )}
         </AnimatePresence>
         <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
-          <div className="flex items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
+          <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
             <TabButton
@@ -892,10 +919,17 @@ function MainApp() {
                 </span>
               )}
             </TabButton>
-            <div className="ml-auto flex items-center gap-1.5 pr-2">
+            <TabButton
+              active={mainTab === 'settings'}
+              onClick={openSelectedProjectSettings}
+              testId={PROJECT_SETTINGS_TESTIDS.tab}
+            >
+              {PROJECT_SETTINGS_COPY.tab}
+            </TabButton>
+            <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pr-2">
               {selected && (
                 <>
-                  <span className="flex items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
+                  <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
                     <StatusDot state={selectedClaudeState} />
                     <span className="truncate font-medium">{selected.name}</span>
                     <button
@@ -965,12 +999,7 @@ function MainApp() {
                 onSelect={setActiveShellIndex}
                 onClose={killShell}
                 defaultCliName={selected.config.defaultCliName ?? null}
-                onDefaultCliChanged={(name) => {
-                  // Optimistic local update so the star reflects the click
-                  // immediately; the projects:changed broadcast from main
-                  // will backfill any remote-side normalisation.
-                  setSelected((cur) => cur ? { ...cur, config: { ...cur.config, defaultCliName: name } } : cur);
-                }}
+                onDefaultCliChanged={applyDefaultAgentProject}
                 onLaunchProfile={(name) => void launchCliProfile(name, 'tab')}
                 onLaunchPlainTab={newPlainShellAsTab}
                 onLaunchCustom={(name, cmdLine, save) => void launchCustomCli(name, cmdLine, save, 'tab')}
@@ -978,7 +1007,14 @@ function MainApp() {
                 onToggleSplit={() => (rightShellIndex != null ? split.closeSplit() : void openSplit())}
               />
             )}
-            {selected ? mainBody(selected) : <EmptyState />}
+            {mainTab === 'settings'
+              ? settingsTarget
+                ? <ProjectSettingsTab key={settingsTarget.id} target={settingsTarget} onSaved={applyDefaultAgentProject} />
+                : <section aria-label={PROJECT_SETTINGS_COPY.title} data-testid={PROJECT_SETTINGS_TESTIDS.view}
+                    className="flex-1 min-h-0 min-w-0 overflow-auto p-4 text-base text-[--text-muted] sm:p-6">
+                    {PROJECT_SETTINGS_COPY.noProject}
+                  </section>
+              : selected ? mainBody(selected) : <EmptyState />}
           </div>
         </main>
       </div>
@@ -1040,6 +1076,7 @@ function MainApp() {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
               const { project } = await api.invoke('projects:open', { id: projectId });
+              setProjectSettingsTarget(null);
               setSelected(project);
             }
             setMainTab('shell');

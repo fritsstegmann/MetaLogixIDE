@@ -9,17 +9,13 @@ import { ShellTabDot } from './ShellTabDot';
 import { shellChipLabel } from '../shell-label';
 import { SplitPill } from './SplitPill';
 import { PlusIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
+import type { ScopedCliProfile } from '@shared/project-default-agent';
+import type { Project } from '@shared/types';
+import { PROJECT_SETTINGS_COPY } from '@renderer/project-settings-contract';
 
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
 const ompIconUrl = new URL('../assets/cli-icons/omp.svg', import.meta.url).href;
 
-interface CliProfileEntry {
-  name: string;
-  argv: string[];
-  env?: Record<string, string>;
-  icon?: string;
-  scope: 'project' | 'global';
-}
 
 function NewShellMenu({
   projectId,
@@ -37,15 +33,16 @@ function NewShellMenu({
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
   /** Called when the star toggle sets/clears the folder-level default. */
-  onDefaultChanged: (name: string | null) => void;
+  onDefaultChanged: (project: Project) => void;
   onClose: () => void;
 }) {
-  const [profiles, setProfiles] = useState<CliProfileEntry[]>([]);
+  const [profiles, setProfiles] = useState<ScopedCliProfile[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customCmd, setCustomCmd] = useState('');
   const [customSave, setCustomSave] = useState(true);
 
+  const [savingDefault, setSavingDefault] = useState(false);
   useEffect(() => {
     (async () => {
       try {
@@ -141,6 +138,7 @@ function NewShellMenu({
         <div className="text-[10px] text-[--text-muted] mt-0.5">
           Opens as a new tab. Use the popout icon to move it to its own window.
         </div>
+        <p className="mt-2 text-xs leading-relaxed text-[--hue-orange-text]">{PROJECT_SETTINGS_COPY.menuDefaultNotice}</p>
       </div>
       {profiles.length === 0 && (
         <div className="px-3 py-4 text-xs text-[--text-muted] text-center">
@@ -181,18 +179,24 @@ function NewShellMenu({
               {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
               {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
             </button>
-            {/* Star: pin as this folder's auto-launch. Click again to clear. */}
             <button
-              className={`px-2 flex items-center transition-colors ${isDefault
+              disabled={savingDefault}
+              className={`px-2 flex items-center transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] ${isDefault
                 ? 'text-[color:var(--accent)] opacity-100'
-                : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
+                : 'opacity-0 group-hover:opacity-60 focus:opacity-100 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
               onClick={async () => {
+                if (savingDefault) return;
+                const capturedProjectId = projectId;
+                setSavingDefault(true);
                 try {
-                  await api.invoke('shells:set-default-cli', { projectId, name: isDefault ? null : p.name });
-                  onDefaultChanged(isDefault ? null : p.name);
+                  const { project } = await api.invoke('shells:set-default-cli', { projectId: capturedProjectId, name: isDefault ? null : p.name });
+                  if (project.id !== capturedProjectId) return;
+                  onDefaultChanged(project);
                   toast(isDefault ? `Cleared folder default` : `${p.name} will auto-launch in this folder`, { kind: 'success', timeoutMs: 1400 });
                 } catch (e) {
                   toast('Could not set default', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+                } finally {
+                  setSavingDefault(false);
                 }
               }}
               title={isDefault ? 'Clear folder default (fall back to global)' : `Make ${p.name} the auto-launch for this folder`}
@@ -260,7 +264,7 @@ export function ShellTabsBar({
   onClose: (idx: number) => void;
   /** Current per-folder auto-launch CLI, forwarded to NewShellMenu's star toggle. */
   defaultCliName: string | null;
-  onDefaultCliChanged: (name: string | null) => void;
+  onDefaultCliChanged: (project: Project) => void;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
@@ -317,7 +321,7 @@ export function ShellTabsBar({
         <AnimatePresence>
           {menuOpen && (
           <NewShellMenu
-            key="new-shell-menu"
+            key={`new-shell-menu-${projectId}`}
             projectId={projectId}
             defaultCliName={defaultCliName}
             onDefaultChanged={onDefaultCliChanged}
