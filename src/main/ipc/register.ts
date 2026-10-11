@@ -9,6 +9,7 @@ import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
+import { parseProjectDefaultAgent, setProjectDefaultAgent } from '@main/domain/project-default-agent';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
 import { parseProjectEnv, parseAppEnv } from '@shared/project-env';
 import type { Project, ProjectConfig, SettingsMap } from '@shared/types';
@@ -522,16 +523,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.projects.updateConfig(projectId, { cliProfiles: remaining });
     return { ok: true } as const;
   },
-  'shells:set-default-cli': async (s, { projectId, name }) => {
-    const project = s.projects.get(projectId);
-    if (!project) throw new Error(`no project ${projectId}`);
-    // Clearing (name === null) also removes any low-level launchCmd
-    // override so the project falls all the way back to the global
-    // default — otherwise a stale launchCmd would trump defaultCliName.
-    const patch: Partial<typeof project.config> = { defaultCliName: name };
-    if (name === null) patch.launchCmd = null;
-    const updated = s.projects.updateConfig(projectId, patch);
-    return { project: updated };
+  'shells:set-default-cli': async (s, request) => {
+    const parsed = parseProjectDefaultAgent(request);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const result = setProjectDefaultAgent(s, parsed.value);
+    if (!result.ok) throw new Error(result.error);
+    return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },

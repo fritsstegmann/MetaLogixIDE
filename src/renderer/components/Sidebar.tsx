@@ -16,6 +16,7 @@ import { ENV_COPY } from '@renderer/project-env-copy';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
 import { SIDEBAR_WIDTH } from '@renderer/sidebar-width';
 import { SidebarHeader } from './SidebarHeader';
+import { PROJECT_SETTINGS_COPY, type ProjectSettingsTarget } from '@renderer/project-settings-contract';
 
 interface Props {
   selectedProjectId: number | null;
@@ -23,10 +24,11 @@ interface Props {
   onNewProject?: () => void;
   /** Opens the environment variables editor for a project (context menu). */
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
   width?: number;
 }
 
-export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, width }: Props) {
+export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, onProjectSettings, width }: Props) {
   const { roots, refresh: refreshRoots } = useRoots();
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
@@ -106,6 +108,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
+                onProjectSettings={onProjectSettings}
               />
             ))}
           </Section>
@@ -122,6 +125,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
+                onProjectSettings={onProjectSettings}
               />
             ))}
           </Section>
@@ -138,6 +142,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
               onSelect={onSelect}
               onRename={askRename}
               onEditEnv={onEditEnv}
+              onProjectSettings={onProjectSettings}
             />
           ))}
         </Section>
@@ -211,6 +216,7 @@ function ProjectRow({
   onSelect,
   onRename,
   onEditEnv,
+  onProjectSettings,
   indent = 0,
 }: {
   project: Project;
@@ -220,10 +226,12 @@ function ProjectRow({
   /** Lifted so the Rename dialog lives at Sidebar level and stays open across rerenders. */
   onRename: (p: Project) => void;
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
   indent?: number;
 }) {
   const claudeState = useProjectClaudeState(project.id);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const rowRef = useRef<HTMLButtonElement>(null);
   async function unload(e: React.MouseEvent) {
     e.stopPropagation();
     try { await api.invoke('shells:kill', { projectId: project.id, shellIndex: 0 }); }
@@ -246,9 +254,20 @@ function ProjectRow({
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY });
   }
+  function openKeyboardMenu(event: React.KeyboardEvent<HTMLButtonElement>): void {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setMenu({ x: bounds.left, y: bounds.bottom });
+  }
   const menuItems: ContextMenuItem[] = [
     { label: 'Rename folder…',  onClick: () => onRename(project) },
     { label: ENV_COPY.contextMenuItem, onClick: () => onEditEnv(project) },
+    { label: PROJECT_SETTINGS_COPY.contextMenuItem, onClick: () => {
+      rowRef.current?.focus();
+      onProjectSettings({ id: project.id, name: project.name, path: project.path });
+    } },
     { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
     { label: 'Copy full path',   onClick: () => void copyPath() },
   ];
@@ -261,10 +280,14 @@ function ProjectRow({
       }`}
     >
       <button
+        ref={rowRef}
+        onKeyDown={openKeyboardMenu}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
         onClick={() => onSelect(project)}
         data-testid="project-row"
         data-alive={alive ? '1' : '0'}
-        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left"
+        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] rounded-lg"
         style={{ paddingLeft: indent }}
       >
         {alive ? (
@@ -295,7 +318,7 @@ function ProjectRow({
       )}
       <AnimatePresence>
         {menu && (
-          <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+          <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={menuItems} autoFocus onClose={() => setMenu(null)} />
         )}
       </AnimatePresence>
     </div>
@@ -332,6 +355,7 @@ function RootBlock({
   onSelect,
   onRename,
   onEditEnv,
+  onProjectSettings,
 }: {
   root: Root;
   projects: Project[];
@@ -340,6 +364,7 @@ function RootBlock({
   onSelect: (p: Project) => void;
   onRename: (p: Project) => void;
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
 }) {
   const [collapsed, setCollapsedState] = useState<Set<number>>(readCollapsed);
   const open = !collapsed.has(root.id);
@@ -377,6 +402,7 @@ function RootBlock({
           onSelect={onSelect}
           onRename={onRename}
           onEditEnv={onEditEnv}
+          onProjectSettings={onProjectSettings}
           indent={12}
         />
       ))}

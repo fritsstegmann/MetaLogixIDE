@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { resolveLaunch } from '@main/domain/launch';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import type { Database } from 'better-sqlite3';
+import { findCliProfile, resolveLaunch } from '@main/domain/launch';
+import { setProjectDefaultAgent } from '@main/domain/project-default-agent';
 import type { Project } from '@shared/types';
 import { DEFAULT_SETTINGS } from '@main/repos/settings-repo';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
@@ -246,5 +248,108 @@ describe('resolveLaunch — app-wide env (AC9, AC10)', () => {
     });
     const r = resolveLaunch(p, settingsWith({ X: 'app' }), '/home/u', {});
     expect(r.env.T).toBe('[]');
+  });
+});
+
+describe('resolveLaunch — project default-agent regression matrix', () => {
+  let db: Database;
+  let settings: SettingsRepo;
+
+  beforeEach(() => {
+    db = openDb(':memory:');
+    runMigrations(db, resolve(__dirname, '../../../../migrations'));
+    settings = new SettingsRepo(db);
+    settings.seedDefaults();
+    settings.set('default_cli_profiles', [{ name: 'Agent', argv: ['global-agent', 'global-arg'], env: { SOURCE: 'global' } }]);
+    settings.set('default_launch_cmd.first', { argv: ['global-first'], env: { VARIANT: 'first' } });
+    settings.set('default_launch_cmd.subsequent', { argv: ['global-subsequent', '--continue'], env: { VARIANT: 'subsequent' } });
+    settings.set('app_env', { APP: 'app' });
+  });
+
+  afterEach(() => db.close());
+
+  it('project catalog shadows a same-name global and missing lookup returns null', () => {
+    const profile = { name: 'Agent', argv: ['local'], env: { SOURCE: 'local' } };
+    const p = project({ config: { cliProfiles: [profile] } });
+    expect(findCliProfile(p, settings, 'Agent')).toBe(profile);
+    expect(findCliProfile(project(), settings, 'Agent')).toStrictEqual(settings.get('default_cli_profiles')[0]);
+    expect(findCliProfile(p, settings, 'missing')).toBeNull();
+  });
+
+  it.each([null, '2026-09-01 10:00:00'])('named project profile uses identical argv/env without invented resume flags (%j)', (firstLaunchedAt) => {
+    const p = project({
+      firstLaunchedAt,
+      config: {
+        defaultCliName: 'Agent', cwdOverride: '/r/x/sub',
+        cliProfiles: [{ name: 'Agent', argv: ['local-agent', '${env.SOURCE}', '${env.BIN}', '${PROJECT_NAME}'], env: { SOURCE: 'profile', TEMPLATE: '${HOME}/tpl' } }],
+        env: { SOURCE: 'project', BIN: '${PROJECT_PATH}/bin:${env.PATH}' },
+      },
+    });
+    const launch = resolveLaunch(p, settings, '/home/u', { PATH: '/usr/bin' });
+    expect(launch.argv).toStrictEqual(['local-agent', 'project', '/r/x/bin:/usr/bin', 'x']);
+    expect(launch.env).toStrictEqual({ APP: 'app', SOURCE: 'project', TEMPLATE: '/home/u/tpl', BIN: '/r/x/bin:/usr/bin' });
+    expect(launch.cwd).toBe('/r/x/sub');
+    expect(launch.variant).toBe(firstLaunchedAt ? 'subsequent' : 'first');
+  });
+
+  it.each([null, '2026-09-01 10:00:00'])('named global profile uses its existing command for both variants (%j)', (firstLaunchedAt) => {
+    const launch = resolveLaunch(project({ firstLaunchedAt, config: { defaultCliName: 'Agent' } }), settings, '/home/u', {});
+    expect(launch.argv).toStrictEqual(['global-agent', 'global-arg']);
+    expect(launch.env).toStrictEqual({ APP: 'app', SOURCE: 'global' });
+  });
+
+  it.each([undefined, null, 'missing'])('unset, reset or stale saved name %j uses current global first/subsequent commands', (name) => {
+    const config = name === undefined ? {} : { defaultCliName: name };
+    const first = project({ config });
+    const subsequent = project({ config, firstLaunchedAt: '2026-09-01 10:00:00' });
+    expect(resolveLaunch(first, settings, '/home/u', {}).argv).toStrictEqual(['global-first']);
+    expect(resolveLaunch(subsequent, settings, '/home/u', {}).argv).toStrictEqual(['global-subsequent', '--continue']);
+    expect(resolveLaunch(first, settings, '/home/u', {}).env).toStrictEqual({ APP: 'app', VARIANT: 'first' });
+    expect(resolveLaunch(subsequent, settings, '/home/u', {}).env).toStrictEqual({ APP: 'app', VARIANT: 'subsequent' });
+    settings.set('default_launch_cmd.first', { argv: ['edited-first'], env: {} });
+    settings.set('default_launch_cmd.subsequent', { argv: ['edited-subsequent'], env: {} });
+    expect(resolveLaunch(first, settings, '/home/u', {}).argv).toStrictEqual(['edited-first']);
+    expect(resolveLaunch(subsequent, settings, '/home/u', {}).argv).toStrictEqual(['edited-subsequent']);
+    expect(first.config).toStrictEqual(config);
+    expect(subsequent.config).toStrictEqual(config);
+  });
+
+  it.each(['Agent', 'missing', null])('untouched first-only legacy override takes precedence only for its variant (name %j)', (name) => {
+    const config = { defaultCliName: name, launchCmd: { first: { argv: ['legacy-first'], env: { LEGACY: 'yes' } } } };
+    const first = project({ config });
+    const subsequent = project({ config, firstLaunchedAt: '2026-09-01 10:00:00' });
+    expect(resolveLaunch(first, settings, '/home/u', {}).argv).toStrictEqual(['legacy-first']);
+    expect(resolveLaunch(first, settings, '/home/u', {}).env).toStrictEqual({ APP: 'app', LEGACY: 'yes' });
+    expect(resolveLaunch(subsequent, settings, '/home/u', {}).argv)
+      .toStrictEqual(name === 'Agent' ? ['global-agent', 'global-arg'] : ['global-subsequent', '--continue']);
+    expect(first.config).toStrictEqual(config);
+  });
+
+  it('untouched subsequent-only and both-variant overrides retain variant-specific precedence', () => {
+    const config = { defaultCliName: 'Agent', launchCmd: { subsequent: { argv: ['legacy-resume'], env: {} } } };
+    expect(resolveLaunch(project({ config }), settings, '/home/u', {}).argv).toStrictEqual(['global-agent', 'global-arg']);
+    expect(resolveLaunch(project({ config, firstLaunchedAt: 'launched' }), settings, '/home/u', {}).argv).toStrictEqual(['legacy-resume']);
+    const both = { ...config, launchCmd: { ...config.launchCmd, first: { argv: ['legacy-first'], env: {} } } };
+    expect(resolveLaunch(project({ config: both }), settings, '/home/u', {}).argv).toStrictEqual(['legacy-first']);
+    expect(resolveLaunch(project({ config: both, firstLaunchedAt: 'launched' }), settings, '/home/u', {}).argv).toStrictEqual(['legacy-resume']);
+  });
+
+  it.each(['Agent', null])('explicit choice %j replaces both variants before next resolution', (name) => {
+    let p = project({
+      config: { defaultCliName: name, launchCmd: { first: { argv: ['legacy-first'], env: {} }, subsequent: { argv: ['legacy-subsequent'], env: {} } } },
+    });
+    const projects = {
+      get: () => p,
+      updateConfig: (_id: number, patch: Partial<Project['config']>): Project => {
+        p = { ...p, config: { ...p.config, ...patch } };
+        return p;
+      },
+    };
+    expect(setProjectDefaultAgent({ projects, settings }, { projectId: p.id, name }).ok).toBe(true);
+    expect(resolveLaunch(p, settings, '/home/u', {}).argv).toStrictEqual(name ? ['global-agent', 'global-arg'] : ['global-first']);
+    expect(resolveLaunch({ ...p, firstLaunchedAt: 'launched' }, settings, '/home/u', {}).argv)
+      .toStrictEqual(name ? ['global-agent', 'global-arg'] : ['global-subsequent', '--continue']);
+    expect(p.firstLaunchedAt).toBeNull();
+    expect(p.config).toStrictEqual({ defaultCliName: name, launchCmd: null });
   });
 });
