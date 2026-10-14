@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
-import { ProjectSwitcher } from './components/ProjectSwitcher';
 import { StatusBar } from './components/StatusBar';
 import { TitleGroup } from './components/TitleGroup';
 import { CHROME_TESTIDS } from './chrome-testids';
@@ -15,10 +14,13 @@ import { ProjectSettingsTab } from './components/ProjectSettingsTab';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS, type ProjectSettingsTarget } from './project-settings-contract';
 import type { SettingsSection } from './components/settings/nav-icons';
 import { ResizeHandle } from './components/ResizeHandle';
-import { FileFinder } from './components/FileFinder';
 import { NewProjectDialog } from './components/NewProjectDialog';
 import { ActivityBar, type ActivityView } from './components/ActivityBar';
-import { CommandPalette, type Command } from './components/CommandPalette';
+import { CommandPalette } from './components/CommandPalette';
+import { ShortcutsHelp } from './components/ShortcutsHelp';
+import type { PaletteRequest, PaletteSeed } from './command-palette-contract';
+import { buildPaletteCommands } from './palette-commands';
+import { paletteKeyAction } from './palette-keys';
 import { ProjectSearch } from './components/ProjectSearch';
 import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
@@ -155,7 +157,6 @@ function MainApp() {
   // useEffect with an empty dep list) always reads the current project.
   const selectedRef = useRef<Project | null>(null);
   useEffect(() => { selectedRef.current = selected; }, [selected]);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [aliveCount, setAliveCount] = useState(0);
   const [mainTab, setMainTab] = usePersistedState<MainTab>('metaide.mainTab', 'shell', isMainTab);
   const mainTabRef = useRef(mainTab);
@@ -262,10 +263,16 @@ function MainApp() {
   const [projectSettingsTarget, setProjectSettingsTarget] = useState<ProjectSettingsTarget | null>(null);
   const settingsTarget = projectSettingsTarget ?? selected;
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
-  const [finderOpen, setFinderOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteRequest, setPaletteRequest] = useState<PaletteRequest | null>(null);
+  const paletteOpenRef = useRef(false);
+  paletteOpenRef.current = paletteRequest != null;
+  const paletteSeqRef = useRef(0);
+  const openPalette = useCallback((seed: PaletteSeed) => {
+    paletteSeqRef.current += 1;
+    setPaletteRequest({ seq: paletteSeqRef.current, seed });
+  }, []);
   const [helpOpen, setHelpOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
@@ -277,10 +284,18 @@ function MainApp() {
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
   shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
-  const overlayOpen = switcherOpen || settingsOpen || (finderOpen && selected != null) || newProjectOpen
-    || paletteOpen || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
+  const overlayOpen = paletteRequest != null || settingsOpen || newProjectOpen
+    || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
     || permissionMode.status === 'unchosen';
   useWindowTerminalFocus(overlayOpen);
+  // A request issued while the palette is still open is refused by the overlay rule, so it waits for the close to commit.
+  const focusAfterPaletteRef = useRef<number | null>(null);
+  useEffect(() => {
+    const projectId = focusAfterPaletteRef.current;
+    if (paletteRequest != null || projectId == null) return;
+    focusAfterPaletteRef.current = null;
+    terminalFocus.requestProjectFocus(projectId);
+  }, [paletteRequest]);
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
@@ -308,34 +323,57 @@ function MainApp() {
     }
   }, [selected, activeShellIndex, isPopped]);
 
-  const commands = useMemo<Command[]>(() => [
-    { id: 'nav.projects',    category: 'Go',       title: 'Open project switcher',           hint: '⌘K',   run: () => setSwitcherOpen(true) },
-    { id: 'nav.find-file',   category: 'Go',       title: 'Find file in project',            hint: '⌘P',   run: () => setFinderOpen(true) },
-    { id: 'nav.find-in-project', category: 'Go',   title: 'Find in project…',                hint: '⌘⇧F',  run: () => setSearchOpen(true) },
-    { id: 'nav.scrollback-search', category: 'Go', title: 'Search all shells…',              hint: '⌘⇧O',  run: () => setScrollbackOpen(true) },
-    { id: 'shell.prompts',   category: 'Shell',    title: 'Open prompt library',             hint: '⌘⇧K',  run: () => setPromptsOpen(true) },
-    { id: 'view.tasks',      category: 'View',     title: 'Show tasks panel',                              run: () => setActiveView('tasks') },
-    { id: 'view.sidebar',    category: 'View',     title: sidebarOpen ? 'Hide sidebar' : 'Show sidebar', hint: '⌘B', run: () => toggleSidebar(false) },
-    { id: 'view.shell',      category: 'View',     title: 'Switch to Shell tab',                           run: () => setMainTab('shell') },
-    { id: 'view.files',      category: 'View',     title: 'Switch to Files tab',                           run: () => setMainTab('files') },
-    { id: 'view.diff',       category: 'View',     title: DIFF_COPY.paletteTitle,                          run: () => setMainTab('diff') },
-    { id: 'view.env',        category: 'View',     title: 'Switch to Env tab',                             run: () => setMainTab('env') },
-    { id: 'view.help',       category: 'View',     title: 'Show keyboard shortcut cheat sheet',   hint: '⌘/', run: () => setHelpOpen(true) },
-    { id: 'proj.new',        category: 'Project',  title: 'New project…',                    hint: '⌘⇧N',  run: () => setNewProjectOpen(true) },
-    { id: 'shell.unload',    category: 'Shell',    title: 'Unload current session',                        run: async () => { if (selected) { await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 }); toast('Session unloaded', { kind: 'success' }); } } },
-    { id: 'shell.popout',    category: 'Shell',    title: 'Pop current shell into a new window',          run: async () => { if (selected) await api.invoke('windows:popout-shell', { projectId: selected.id, shellIndex: 0 }); } },
-    { id: 'shell.find',      category: 'Shell',    title: 'Find in terminal',                  hint: '⌘F', run: () => { /* handled inside ShellTab when focused */ toast('Focus the shell first, then ⌘F', { kind: 'info' }); } },
-    { id: 'shell.zoom.in',   category: 'Shell',    title: 'Zoom in',                          hint: '⌘=', run: () => { /* handled inside ShellTab */ } },
-    { id: 'shell.zoom.out',  category: 'Shell',    title: 'Zoom out',                         hint: '⌘-', run: () => { /* handled inside ShellTab */ } },
-    { id: 'shell.zoom.reset',category: 'Shell',    title: 'Reset zoom',                       hint: '⌘0', run: () => { /* handled inside ShellTab */ } },
-    { id: 'theme.system',    category: 'Theme',    title: 'Follow system theme',                          run: () => setThemeMode('system') },
-    { id: 'theme.light',     category: 'Theme',    title: 'Use light theme',                              run: () => setThemeMode('light') },
-    { id: 'theme.dark',      category: 'Theme',    title: 'Use dark theme',                               run: () => setThemeMode('dark') },
-    { id: 'theme.default',   category: 'Theme',    title: 'Use Default palette',                           run: () => setThemePalette('default') },
-    { id: 'theme.catppuccin', category: 'Theme',   title: 'Use Catppuccin palette',                        run: () => setThemePalette('catppuccin') },
-    { id: 'theme.rose-pine', category: 'Theme',    title: 'Use Rosé Pine palette',                         run: () => setThemePalette('rose-pine') },
-    { id: 'app.settings',    category: 'App',      title: 'Open Settings',                    hint: '⌘,',  run: () => setSettingsOpen(true) },
-  ], [selected, sidebarOpen, setThemeMode, setThemePalette]);
+  /** Launches a plain shell in the selected project: a new tab (⌘T) or, with `newWindow`, a new window (⌘⇧T). */
+  const openNewTerminal = useCallback((newWindow: boolean) => {
+    const p = selectedRef.current;
+    if (!p) return;
+    void (async () => {
+      try {
+        const { shellIndex } = await api.invoke('shells:launch-plain', { projectId: p.id });
+        if (newWindow) {
+          await api.invoke('windows:popout-shell', { projectId: p.id, shellIndex });
+          toast(`New terminal in ${p.name}`, { kind: 'info' });
+        } else {
+          setMainTab('shell');
+          setActiveShellIndex(shellIndex);
+        }
+      } catch (err) {
+        toast('Failed to open terminal', { kind: 'error', detail: String(err).replace(/^Error:\s*/, '') });
+      }
+    })();
+  }, [setActiveShellIndex, setMainTab]);
+  const openNewTerminalRef = useRef(openNewTerminal);
+  openNewTerminalRef.current = openNewTerminal;
+
+  const commands = useMemo(() => buildPaletteCommands({
+    hasProject: selected != null,
+    sidebarOpen,
+    openPalette,
+    openProjectSearch: () => setSearchOpen(true),
+    openScrollbackSearch: () => setScrollbackOpen(true),
+    openPrompts: () => setPromptsOpen(true),
+    showTasks: () => setActiveView('tasks'),
+    toggleSidebar: () => toggleSidebar(false),
+    showTab: setMainTab,
+    openHelp: () => setHelpOpen(true),
+    openNewProject: () => setNewProjectOpen(true),
+    unloadSession: async () => {
+      if (!selected) return;
+      await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 });
+      toast('Session unloaded', { kind: 'success' });
+    },
+    popOutShell: async () => {
+      if (selected) await api.invoke('windows:popout-shell', { projectId: selected.id, shellIndex: 0 });
+    },
+    findInTerminal: () => toast('Focus the shell first, then ⌘F', { kind: 'info' }),
+    openNewTerminal,
+    setThemeMode,
+    setThemePalette,
+    openSettings: (section) => {
+      if (section) setSettingsSection(section);
+      setSettingsOpen(true);
+    },
+  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -457,46 +495,32 @@ function MainApp() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (shortcutsBlockedRef.current) return;
+      const palette = paletteKeyAction(e, paletteOpenRef.current);
+      if (palette.kind === 'swallow') return;
+      if (palette.kind === 'toggle' || palette.kind === 'open') {
+        e.preventDefault();
+        if (palette.kind === 'open') openPalette(palette.seed);
+        else if (paletteOpenRef.current) setPaletteRequest(null);
+        else openPalette('');
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === 'k')                          { e.preventDefault(); setSwitcherOpen(true); }
       if (mod && e.key === '\\')                         { e.preventDefault(); toggleSidebar(false); }
       if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); toggleSidebar(false); }
       if (mod && e.key === ',')                          { e.preventDefault(); setSettingsOpen(true); }
-      if (mod && e.key === 'p' && !e.shiftKey)           { e.preventDefault(); setFinderOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); setNewProjectOpen(true); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); setPaletteOpen(true); }
       if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setSearchOpen(true); }
       // ⌘⇧K → prompt library (paste snippets into the active shell)
       if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setPromptsOpen(true); }
       // ⌘⇧O → search across every alive shell's scrollback
       if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); setScrollbackOpen(true); }
       if (mod && e.key === '/')                          { e.preventDefault(); setHelpOpen((v) => !v); }
-      if (mod && e.key.toLowerCase() === 't') {
-        e.preventDefault();
-        const p = selectedRef.current;
-        if (!p) return;
-        (async () => {
-          try {
-            const { shellIndex } = await api.invoke('shells:launch-plain', { projectId: p.id });
-            if (e.shiftKey) {
-              // ⌘⇧T → new window
-              await api.invoke('windows:popout-shell', { projectId: p.id, shellIndex });
-              toast(`New terminal in ${p.name}`, { kind: 'info' });
-            } else {
-              // ⌘T → new tab in the main window
-              setMainTab('shell');
-              setActiveShellIndex(shellIndex);
-            }
-          } catch (err) {
-            toast('Failed to open terminal', { kind: 'error', detail: String(err).replace(/^Error:\s*/, '') });
-          }
-        })();
-      }
-      if (e.key === 'Escape')                            { setSettingsOpen(false); setFinderOpen(false); setNewProjectOpen(false); setPaletteOpen(false); setHelpOpen(false); setSearchOpen(false); setPromptsOpen(false); setScrollbackOpen(false); }
+      if (mod && e.key.toLowerCase() === 't')            { e.preventDefault(); openNewTerminalRef.current(e.shiftKey); }
+      if (e.key === 'Escape')                            { setSettingsOpen(false); setPaletteRequest(null); setNewProjectOpen(false); setHelpOpen(false); setSearchOpen(false); setPromptsOpen(false); setScrollbackOpen(false); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [openPalette, toggleSidebar]);
 
   // Keep the OS window title in sync with the current project so it reads
   // "lawreader — MetaLogix IDE" in Mission Control, Dock previews, and every
@@ -1019,23 +1043,13 @@ function MainApp() {
         </main>
       </div>
 
-      <StatusBar project={selected} aliveCount={aliveCount} />
-      <ProjectSwitcher open={switcherOpen} onClose={() => setSwitcherOpen(false)} onPick={pick} />
+      <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} />
       <Settings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         section={settingsSection}
         onSection={setSettingsSection}
         envDrafts={envDrafts}
-      />
-      <FileFinder
-        open={finderOpen && selected != null}
-        projectId={selected?.id ?? null}
-        onClose={() => setFinderOpen(false)}
-        onPick={(relPath) => {
-          setMainTab('files');
-          setOpenInFiles({ relPath, line: null });
-        }}
       />
       <NewProjectDialog
         open={newProjectOpen}
@@ -1045,13 +1059,17 @@ function MainApp() {
         onCreated={(project) => { setNewProjectOpen(false); void pick(project); toast(`Created ${project.name}`, { kind: 'success' }); }}
       />
       <CommandPalette
-        open={paletteOpen}
+        request={paletteRequest}
         commands={commands}
-        onClose={() => setPaletteOpen(false)}
+        currentProject={selected}
+        onPickProject={(p) => { void pick(p); }}
+        onPickCurrent={(p) => { if (mainTabRef.current === 'shell') focusAfterPaletteRef.current = p.id; }}
+        onPickFile={(relPath) => { setMainTab('files'); setOpenInFiles({ relPath, line: null }); }}
+        onClose={() => setPaletteRequest(null)}
       />
       <ToastStack />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-         <ProjectSearch
+      <ProjectSearch
         open={searchOpen && selected != null}
         projectId={selected?.id ?? null}
         onClose={() => setSearchOpen(false)}
@@ -1200,60 +1218,6 @@ function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonPr
     </button>
   );
 }
-
-const SHORTCUT_GROUPS: Array<{ title: string; items: Array<[string, string]> }> = [
-  { title: 'Go',       items: [['⌘K', 'Project switcher'], ['⌘P', 'Find file in project'], ['⌘⇧F', 'Find in project']] },
-  { title: 'Views',    items: [['⌘B', 'Toggle sidebar'], ['⌘,', 'Settings'], ['⌘/', 'This cheat sheet']] },
-  { title: 'Palette',  items: [['⌘⇧P', 'Command palette'], ['⌘⇧N', 'New project']] },
-  { title: 'Shell',    items: [['⌘F', 'Find in terminal'], ['⌘⇧O', 'Search all shells'], ['⌘⇧K', 'Prompt library'], ['⌘=', 'Zoom in'], ['⌘-', 'Zoom out'], ['⌘0', 'Reset zoom']] },
-];
-
-function ShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
-  if (!open) return null;
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
-      data-testid="shortcuts-help"
-    >
-      <div
-        className="bg-[--panel-strong] w-[560px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-4 py-3 border-b border-[--border] flex items-center justify-between">
-          <div className="font-semibold text-sm">Keyboard shortcuts</div>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
-            title="Close (Esc)"
-            aria-label="Close shortcuts"
-          >
-            <XIcon />
-          </button>
-        </div>
-        <div className="p-5 grid grid-cols-2 gap-x-8 gap-y-4">
-          {SHORTCUT_GROUPS.map((g) => (
-            <div key={g.title}>
-              <div className="text-[10px] uppercase tracking-wider text-[--text-muted] font-semibold mb-2">{g.title}</div>
-              <div className="space-y-1.5">
-                {g.items.map(([keys, desc]) => (
-                  <div key={keys} className="flex items-center justify-between gap-4 text-sm">
-                    <span className="text-[--text-muted]">{desc}</span>
-                    <kbd>{keys}</kbd>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="px-4 py-2 border-t border-[--border] text-[11px] text-[--text-muted] text-right">
-          <kbd>Esc</kbd> to close
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 function EmptyState() {
   const { roots } = useRoots();

@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Loc
 import { mkdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DIFF_COPY, DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
+import { PALETTE_COPY, PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 import {
@@ -333,8 +334,8 @@ test('command palette "Switch to Diff tab" activates the Diff tab (AC4)', async 
   await win.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
   });
-  const palette = win.getByTestId('command-palette');
-  await palette.getByPlaceholder('Run a command…').fill(DIFF_COPY.paletteTitle);
+  const palette = win.getByTestId(PALETTE_TESTIDS.root);
+  await palette.getByPlaceholder(PALETTE_COPY.placeholder).fill(`>${DIFF_COPY.paletteTitle}`);
   await palette.getByText(DIFF_COPY.paletteTitle, { exact: true }).click();
   await expect(panelOf(win)).toBeVisible();
   await expect(win.locator('[data-testid="shell-tab"]')).toHaveCount(0);

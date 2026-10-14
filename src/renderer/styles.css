@@ -634,8 +634,8 @@ input::placeholder, textarea::placeholder {
 
 /* ── Motion ──
  * Built-in CSS easings are too soft; these give UI motion a decisive start.
- * Keyboard-summoned surfaces (palette, finders, switcher, prompt library,
- * shortcuts help) deliberately do NOT animate — they're opened hundreds of
+ * Keyboard-summoned surfaces (command palette, project search, scrollback
+ * search, prompt library, shortcuts help) deliberately do NOT animate — they're opened hundreds of
  * times a day and any delay reads as lag. */
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -728,9 +728,9 @@ input::placeholder, textarea::placeholder {
 .status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
 .status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
 
-/* AC21: on the accent-filled active ProjectSwitcher row, no amber/red fill
- * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
- * (white clears 3:1 against both themes' accent). */
+/* AC21: on the highlighted project row of the command palette, the amber/red
+ * fills do not reach 3:1 against the row in every palette, so the dot gets a
+ * 1px white ring (palette-dot-contrast.test.ts decides that it is needed). */
 .status-dot-ring {
   box-shadow: 0 0 0 1px #fff;
 }
@@ -876,7 +876,7 @@ kbd {
   --surface-field: color-mix(in oklab, var(--text) 6%, transparent);
   --accent-soft: color-mix(in oklab, var(--accent) 22%, transparent);
   --accent-soft-text: color-mix(in oklab, var(--accent) 65%, var(--text));
-  /* Floating surface over a dialog (font list); mixing in white always raises it. */
+  /* Floating surface (font list); mixing in white always raises it. Inside a modal it derives from the glass panel (see .modal-sheet). */
   --surface-raised: color-mix(in oklab, var(--panel-strong) 92%, white);
   /* Off track of a switch. */
   --switch-off: color-mix(in oklab, var(--text) 22%, transparent);
@@ -930,3 +930,85 @@ kbd {
 :root[data-palette="catppuccin"][data-theme="light"] { --hue-orange-default: #fe640b; }
 :root[data-palette="rose-pine"] { --hue-orange-default: #ebbcba; }
 :root[data-palette="rose-pine"][data-theme="light"] { --hue-orange-default: #d7827e; }
+
+/* ── Modal material (D1T "Vibrant Sheet + theme-tinted scrim") ──
+ * One frosted-glass material for every modal: a theme-tinted, lightly blurred
+ * scrim and, as its DOM sibling (see ModalFrame), a translucent panel lifted
+ * toward white with a heavy saturated blur. The panel colour is rebuilt opaque
+ * from --panel-strong (an explicit "/ 1": a relative colour otherwise inherits
+ * the origin's alpha) and given an explicit alpha, so the alpha is exact.
+ * Invariant: no theme or palette block sets --modal-panel, --modal-scrim-filter
+ * or --modal-panel-filter, so the reduced-transparency override below always wins.
+ */
+:root {
+  --modal-panel-base: color-mix(in oklab, rgb(from var(--panel-strong) r g b / 1) calc(100% - var(--modal-lift)), white);
+  --modal-panel: rgb(from var(--modal-panel-base) r g b / var(--modal-panel-alpha));
+  --modal-text-muted: color-mix(in oklab, var(--text) 45%, var(--text-muted));
+  --modal-row-active: var(--accent-soft);
+  --modal-row-active-text: var(--text);
+  --modal-hairline: color-mix(in oklab, var(--text) 12%, transparent);
+  --modal-radius: 14px;
+  --modal-dialog-radius: 16px;
+  --modal-scrim-filter: blur(6px) saturate(120%);
+  --modal-panel-filter: blur(40px) saturate(180%);
+
+  /* Dark (default for all palettes). */
+  --modal-scrim: rgb(from rgb(from var(--bg) r g b) calc(r * .6) calc(g * .6) calc(b * .6) / .40);
+  --modal-lift: 6%;
+  --modal-panel-alpha: .78;
+  --modal-raised-lift: 8%;
+  --modal-edge: inset 0 0 0 .5px rgb(255 255 255 / .10), inset 0 1px 0 rgb(255 255 255 / .06);
+  --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .35), 0 24px 64px -16px rgb(0 0 0 / .55);
+}
+:root[data-theme="light"] {
+  --modal-scrim: rgb(from var(--bg) r g b / .30);
+  --modal-lift: 50%;
+  --modal-panel-alpha: .80;
+  --modal-raised-lift: 30%;
+  --modal-edge: inset 0 0 0 .5px rgb(0 0 0 / .10), inset 0 1px 0 rgb(255 255 255 / .6);
+  --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .08), 0 24px 64px -16px rgb(0 0 0 / .25);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --modal-scrim: rgb(from var(--bg) r g b / .30);
+    --modal-lift: 50%;
+    --modal-panel-alpha: .80;
+    --modal-raised-lift: 30%;
+    --modal-edge: inset 0 0 0 .5px rgb(0 0 0 / .10), inset 0 1px 0 rgb(255 255 255 / .6);
+    --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .08), 0 24px 64px -16px rgb(0 0 0 / .25);
+  }
+}
+/* OS "Reduce transparency": opaque panel, no blur on either layer; the scrim keeps its tint. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --modal-panel: var(--modal-panel-base);
+    --modal-scrim-filter: none;
+    --modal-panel-filter: none;
+  }
+}
+
+.modal-scrim {
+  background: var(--modal-scrim);
+  backdrop-filter: var(--modal-scrim-filter);
+}
+/* Positions the sheet; clicks outside the sheet fall through to the scrim.
+ * Never give it a filter, opacity or transform (it would become a Backdrop Root). */
+.modal-layer { pointer-events: none; }
+.modal-layer > * { pointer-events: auto; }
+.modal-sheet {
+  --surface-raised: color-mix(in oklab, var(--modal-panel-base) calc(100% - var(--modal-raised-lift)), white);
+  background: var(--modal-panel);
+  backdrop-filter: var(--modal-panel-filter);
+  box-shadow: var(--modal-edge), var(--modal-shadow);
+  border-radius: var(--modal-dialog-radius);
+}
+.modal-sheet--compact { border-radius: var(--modal-radius); }
+.modal-sheet kbd {
+  border: 0;
+  box-shadow: none;
+  background: var(--surface-field);
+  color: var(--modal-text-muted);
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 3px 6px;
+}

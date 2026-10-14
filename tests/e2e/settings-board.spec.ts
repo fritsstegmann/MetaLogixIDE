@@ -258,7 +258,8 @@ test('AC1-AC3, AC8: dialog shell geometry, semantics and footer fill in every pa
     expectPx(p.height, 640, `${at} panel height`);
     expect(await style(panel, 'border-top-left-radius')).toBe('16px');
     const panelBg = await style(panel, 'background-color');
-    expect(panelBg, `${at} panel bg`).toBe(await resolveIn(panel, 'background-color', 'var(--panel-strong)'));
+    // Command palette D1T: the panel wears the shared translucent modal material.
+    expect(panelBg, `${at} panel bg`).toBe(await resolveIn(panel, 'background-color', 'var(--modal-panel)'));
     expect(panelBg).not.toBe('rgb(31, 33, 48)');
 
     const header = title.locator('xpath=..');
