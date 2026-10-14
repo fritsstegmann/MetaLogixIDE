@@ -288,6 +288,14 @@ function MainApp() {
     || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
     || permissionMode.status === 'unchosen';
   useWindowTerminalFocus(overlayOpen);
+  // A request issued while the palette is still open is refused by the overlay rule, so it waits for the close to commit.
+  const focusAfterPaletteRef = useRef<number | null>(null);
+  useEffect(() => {
+    const projectId = focusAfterPaletteRef.current;
+    if (paletteRequest != null || projectId == null) return;
+    focusAfterPaletteRef.current = null;
+    terminalFocus.requestProjectFocus(projectId);
+  }, [paletteRequest]);
   useReportViewedShells({ selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex });
   const { roots } = useRoots();
   const { isPopped } = usePoppedShells();
@@ -1055,6 +1063,7 @@ function MainApp() {
         commands={commands}
         currentProject={selected}
         onPickProject={(p) => { void pick(p); }}
+        onPickCurrent={(p) => { if (mainTabRef.current === 'shell') focusAfterPaletteRef.current = p.id; }}
         onPickFile={(relPath) => { setMainTab('files'); setOpenInFiles({ relPath, line: null }); }}
         onClose={() => setPaletteRequest(null)}
       />

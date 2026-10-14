@@ -80,7 +80,8 @@ export function mix(a: Colour, b: Colour, p: number): Colour {
   return { c: fromOklab(A.map((v, i) => v * p + (B[i] ?? 0) * (1 - p)) as [number, number, number]), a: 1 };
 }
 
-function luminance({ c }: Colour): number {
+/** WCAG 2 relative luminance of an opaque colour. */
+export function luminance({ c }: Colour): number {
   const [r, g, b] = c.map(lin) as [number, number, number];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
@@ -105,6 +106,15 @@ export interface ThemeColours {
 /** The opaque panel colour before alpha: `--panel-strong` lifted toward white. */
 export function panelBase(theme: ThemeColours, p: ModalParams): Colour {
   return mix({ c: theme.panelStrong.c, a: 1 }, solid('#ffffff'), 1 - p.lift);
+}
+
+/**
+ * Alpha of `color-mix(in oklab, origin (1 - lift), white)`: the weighted mean of both alphas, white
+ * being opaque. An origin built with relative colour syntax and no `/ alpha` inherits the alpha of
+ * its source colour, so a translucent `--panel-strong` leaves the mix translucent.
+ */
+export function liftedAlpha(originAlpha: number, lift: number): number {
+  return originAlpha * (1 - lift) + lift;
 }
 
 /** The scrim colour: flattened `--bg`, darkened in dark themes, at the scrim alpha. */

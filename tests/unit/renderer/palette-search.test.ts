@@ -3,10 +3,10 @@
  * dropped (AC6), list order on an empty query and match order within each group otherwise (AC7,
  * AC13), the 50/40 row caps (AC13, AC34), prefix modes (AC33, AC41, AC42, AC44), every empty-state
  * (AC14, AC36, AC38, AC41, AC42) and the flat row list the highlight indexes into (AC3). Also covers
- * `availableCommands` (AC12) and `stepHighlight` (AC3, AC14).
+ * `stepHighlight` (AC3, AC14).
  */
 import { describe, it, expect } from 'vitest';
-import { availableCommands, searchPalette, stepHighlight } from '@renderer/palette-search';
+import { searchPalette, stepHighlight } from '@renderer/palette-search';
 import { parsePaletteQuery } from '@renderer/palette-query';
 import {
   PALETTE_COPY,
@@ -238,18 +238,6 @@ describe('searchPalette — "@" files mode (AC33-AC38)', () => {
 
   it('lists no projects or commands in files mode (AC33)', () => {
     expect(view('@tools').rows.every((r) => r.kind === 'file')).toBe(true);
-  });
-});
-
-describe('availableCommands (AC12)', () => {
-  const cmds = [command('a', 'App', 'A'), { ...command('b', 'Shell', 'B'), needsProject: true }];
-
-  it('drops project-dependent commands when no project is selected', () => {
-    expect(availableCommands(cmds, false).map((c) => c.id)).toEqual(['a']);
-  });
-
-  it('keeps every command when a project is selected', () => {
-    expect(availableCommands(cmds, true).map((c) => c.id)).toEqual(['a', 'b']);
   });
 });
 

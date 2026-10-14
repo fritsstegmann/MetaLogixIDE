@@ -103,11 +103,6 @@ export const searchPalette: SearchPalette = (parsed, input) => {
   return view(parsed, capGroups(groups, PALETTE_ROW_CAP), { kind: 'no-results', query: text });
 };
 
-/** The commands to offer: project-dependent ones only when a project is selected (AC12). */
-export function availableCommands(commands: readonly PaletteCommand[], hasProject: boolean): readonly PaletteCommand[] {
-  return hasProject ? commands : commands.filter((c) => !c.needsProject);
-}
-
 export type HighlightStep = { readonly kind: 'move'; readonly index: number } | { readonly kind: 'pick' } | { readonly kind: 'close' };
 
 /**

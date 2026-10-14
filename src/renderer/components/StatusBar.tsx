@@ -20,7 +20,7 @@ interface StatusBarProps {
 }
 
 /** The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version. */
-export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps) {
+export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps): React.JSX.Element {
   const { status: git } = useGitStatus(project?.id ?? null);
   const ports = usePorts(project?.id ?? null);
   // App version shown at the far right so users know exactly which build

@@ -188,7 +188,7 @@ describe('reduced transparency (AC24)', () => {
 });
 
 describe('AC23: every dark/light modal token is defined in the dark, light and system-light blocks', () => {
-  const tokens = ['--modal-scrim', '--modal-lift', '--modal-panel-alpha', '--modal-edge', '--modal-shadow'];
+  const tokens = ['--modal-scrim', '--modal-lift', '--modal-panel-alpha', '--modal-raised-lift', '--modal-edge', '--modal-shadow'];
 
   it.each(tokens)('%s is declared in the shared/dark block', (token) => {
     expect(modalShared).toContain(`${token}:`);

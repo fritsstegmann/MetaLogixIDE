@@ -1,7 +1,9 @@
 /**
  * AC23/AC24: the D1T modal material clears WCAG 4.5:1 for panel text, muted text and the
  * highlighted row, over both `--bg` and `--panel-strong`, in every palette x theme combination,
- * and the reduced-transparency (opaque) panel clears 4.5:1 for text and muted text too. Colours
+ * and the reduced-transparency (opaque) panel clears 4.5:1 for text and muted text too. AC24: the
+ * opaque panel really has alpha 1 (its relative-colour origin may not inherit `--panel-strong`'s
+ * alpha). R14: `--surface-raised`, as a modal sheet resolves it, sits lighter than the glass. Colours
  * and the D1T parameters (lift, alpha, scrim darken factor) are parsed straight out of
  * `styles.css`, using the composite model in `helpers/modal-composite.ts` (the same model the
  * design record's contrast table was built from), so a regression in either file fails this test.
@@ -11,9 +13,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   flatten,
+  liftedAlpha,
+  luminance,
   mix,
   modalSurface,
   over,
+  panelBase,
   ratio,
   reducedSurface,
   rgba,
@@ -174,6 +179,35 @@ function highlighted(c: Case, panelSurface: Colour): Colour {
 
 const GATE = 4.5;
 
+const PANEL_BASE_EXPR = extractVar(modalShared, '--modal-panel-base');
+
+/** Alpha of `--modal-panel-base`'s relative-colour origin: its explicit `/ a`, else `--panel-strong`'s own. */
+function panelBaseOriginAlpha(theme: ThemeColours): number {
+  const m = /rgb\(from var\(--panel-strong\) r g b(?:\s*\/\s*([\d.]+))?\)/.exec(PANEL_BASE_EXPR);
+  if (!m) throw new Error(`could not parse --modal-panel-base origin: ${PANEL_BASE_EXPR}`);
+  return m[1] === undefined ? theme.panelStrong.a : parseFloat(m[1]);
+}
+
+const SHEET_RULE = extractBlock(css, /\.modal-sheet\s*\{/);
+const SURFACE_TOKENS = extractBlock(css, /:root\s*\{\s*--surface-chrome:/);
+const RAISED_EXPR = /--surface-raised:/.test(SHEET_RULE)
+  ? extractVar(SHEET_RULE, '--surface-raised')
+  : extractVar(SURFACE_TOKENS, '--surface-raised');
+
+/** White share of `--surface-raised`: a literal `N%` origin share, or `calc(100% - var(--modal-raised-lift))`. */
+function raisedWhiteShare(dark: boolean): number {
+  const literal = /\)\s*([\d.]+)%,\s*white\)/.exec(RAISED_EXPR)?.[1];
+  if (literal !== undefined) return 1 - parseFloat(literal) / 100;
+  if (!/calc\(100% - var\(--modal-raised-lift\)\)/.test(RAISED_EXPR)) throw new Error(`could not parse --surface-raised: ${RAISED_EXPR}`);
+  return parseFloat(extractVar(dark ? modalShared : modalLightBlock, '--modal-raised-lift')) / 100;
+}
+
+/** `--surface-raised` as an element inside `.modal-sheet` resolves it: its origin token mixed toward white. */
+function raisedInModal(theme: ThemeColours, params: ModalParams): Colour {
+  const origin = /var\(--modal-panel-base\)/.test(RAISED_EXPR) ? panelBase(theme, params) : { c: theme.panelStrong.c, a: 1 };
+  return mix(origin, solid('#ffffff'), 1 - raisedWhiteShare(theme.dark));
+}
+
 describe.each(CASES)('$label AC23 contrast', (c) => {
   const label = c.label;
   const theme = themeFor(c);
@@ -206,6 +240,20 @@ describe.each(CASES)('$label AC23 contrast', (c) => {
   it.each(['bg', 'panelStrong'] as const)(`${label}: reduced transparency muted text clears ${GATE}:1 over %s`, (under) => {
     const surface = reducedSurface(theme, params, base[under]);
     expect(ratio(muted, surface)).toBeGreaterThanOrEqual(GATE);
+  });
+
+  it(`${label}: the reduced-transparency panel is opaque (AC24)`, () => {
+    expect(liftedAlpha(panelBaseOriginAlpha(theme), params.lift)).toBeCloseTo(1, 6);
+  });
+
+  it.each(['bg', 'panelStrong'] as const)(`${label}: a raised surface inside a modal is lighter than the glass over %s (R14)`, (under) => {
+    const glass = modalSurface(theme, params, base[under]);
+    expect(luminance(raisedInModal(theme, params))).toBeGreaterThan(luminance(glass));
+  });
+
+  it(`${label}: a raised surface inside a modal is lighter than the panel alone over the theme base (R14, the settings-board oracle)`, () => {
+    const panel = over({ c: panelBase(theme, params).c, a: params.panelAlpha }, solid(theme.dark ? '#000000' : '#ffffff'));
+    expect(luminance(raisedInModal(theme, params))).toBeGreaterThan(luminance(panel));
   });
 });
 

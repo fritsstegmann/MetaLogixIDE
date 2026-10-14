@@ -132,6 +132,8 @@ export interface CommandPaletteProps {
   readonly commands: readonly PaletteCommand[];
   readonly currentProject: Project | null;
   readonly onPickProject: (project: Project) => void;
+  /** The already-current project was picked: focus its terminal once the palette has closed (AC8, R13). */
+  readonly onPickCurrent: (project: Project) => void;
   readonly onPickFile: (relPath: string) => void;
   readonly onClose: () => void;
 }

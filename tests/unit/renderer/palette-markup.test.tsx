@@ -59,6 +59,7 @@ function render({ seed = '', current = null, request }: RenderOpts = {}): string
       commands={COMMANDS}
       currentProject={current}
       onPickProject={() => undefined}
+      onPickCurrent={() => undefined}
       onPickFile={() => undefined}
       onClose={() => undefined}
     />,
@@ -203,13 +204,12 @@ describe('CommandPalette — combobox and listbox (AC3, AC20)', () => {
       expect(heading, g.attrs['aria-labelledby']).toBeDefined();
       return text(outer(html, heading as El));
     });
-    expect(titles).toEqual(['Projects', 'View', 'App']);
+    expect(titles).toEqual(['Projects', 'View', 'Shell', 'App']);
     for (const g of groups) expect(options(outer(html, g)).length).toBeGreaterThan(0);
   });
 
-  it('hides project-dependent commands without a current project (AC12)', () => {
-    expect(render()).not.toContain('Unload current session');
-    expect(render({ current: project(1, 'alpha') })).toContain('Unload current session');
+  it('renders the commands it is given unfiltered; App drops project-dependent ones (AC12, buildPaletteCommands)', () => {
+    expect(render()).toContain('Unload current session');
   });
 
   it('shows the empty state outside the listbox and leaves Enter nothing to pick (AC14, AC36)', () => {

@@ -28,6 +28,12 @@ function openingTag(html: string, attr: string): string {
 const classes = (tag: string) => /class="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? [];
 
 describe('ShortcutsHelp', () => {
+  it('makes the dialog itself focusable so it can take focus on open (aria-modal)', () => {
+    const dialog = openingTag(render(), 'role="dialog"');
+    expect(dialog).toContain('aria-modal="true"');
+    expect(dialog).toContain('tabindex="-1"');
+  });
+
   it('renders nothing while closed', () => {
     expect(render(false)).toBe('');
   });

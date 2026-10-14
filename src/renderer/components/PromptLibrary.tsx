@@ -51,14 +51,16 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
   }, [projectId]);
 
   useEffect(() => { if (open) void refresh(); }, [open, refresh]);
+  const escRef = useRef({ onClose, editing });
+  escRef.current = { onClose, editing };
   useEffect(() => {
     if (!open) return;
     // Focus the search box on open so users can type-to-filter immediately.
     const id = window.setTimeout(() => searchRef.current?.focus(), 30);
-    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape' && !editing) onClose(); }
+    function onEsc(e: KeyboardEvent) { if (e.key === 'Escape' && !escRef.current.editing) escRef.current.onClose(); }
     document.addEventListener('keydown', onEsc);
     return () => { window.clearTimeout(id); document.removeEventListener('keydown', onEsc); };
-  }, [open, onClose, editing]);
+  }, [open]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();

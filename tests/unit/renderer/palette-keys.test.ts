@@ -28,6 +28,14 @@ describe('paletteKeyAction', () => {
     expect(paletteKeyAction(key('p', { ctrlKey: true }), isOpen)).toEqual({ kind: 'open', seed: '@' });
   });
 
+  it('treats Option chords as non-palette keys: Cmd+Option+K / Cmd+Option+P pass while closed, are swallowed while open', () => {
+    for (const k of ['k', 'p', 'P']) {
+      const e = key(k, { metaKey: true, altKey: true, shiftKey: k === 'P' });
+      expect(paletteKeyAction(e, false), k).toEqual({ kind: 'pass' });
+      expect(paletteKeyAction(e, true), k).toEqual({ kind: 'swallow' });
+    }
+  });
+
   it('leaves Cmd+Shift+K to the prompt library', () => {
     expect(paletteKeyAction(key('k', { metaKey: true, shiftKey: true }), false)).toEqual({ kind: 'pass' });
     expect(paletteKeyAction(key('K', { metaKey: true, shiftKey: true }), false)).toEqual({ kind: 'pass' });

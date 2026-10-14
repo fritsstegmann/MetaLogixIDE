@@ -176,7 +176,7 @@ appearances inherit it:
 |---|---|
 | `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
 | `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
-| `--surface-raised` | Floating lists over a dialog, such as the font list. It is the dialog surface mixed with white, so it is always lighter than the dialog. |
+| `--surface-raised` | Floating lists over a dialog, such as the font list. Inside a modal (`.modal-sheet`) it is the opaque modal panel colour mixed with white by `--modal-raised-lift` (8% dark, 30% light), so it is always lighter than the glass. |
 | `--switch-off` | The track of a switch that is off. |
 | `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
 | `--hue-orange-text` | Small coloured text, such as the Diff count. |
@@ -266,7 +266,9 @@ match quality. At most 50 rows render (40 in file mode). Commands that need a
 selected project are hidden when there is none. Choosing a project uses the
 same pick path as the sidebar; choosing the current one closes the palette and
 focuses its terminal. A command runs after the palette closes, and a failure
-raises an error toast.
+raises an error toast. Closing returns focus to where it was before the palette
+opened, unless a project or file pick, or a modal a command opened, has
+already placed it (`restoresOpenerOnClose` in `palette-run.ts`).
 
 | Layer | File | Responsibility |
 |---|---|---|

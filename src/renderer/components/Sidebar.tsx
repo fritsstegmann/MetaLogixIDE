@@ -419,7 +419,7 @@ export function RenameProjectDialog({
   project: Project | null;
   onClose: () => void;
   onDone: () => void | Promise<void>;
-}) {
+}): React.JSX.Element | null {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);

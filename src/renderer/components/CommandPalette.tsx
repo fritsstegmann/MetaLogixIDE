@@ -2,19 +2,25 @@
  * The ⌘K command palette: projects, commands, Settings sections and (with "@") files in one
  * searchable list, rendered through `ModalFrame` on the palette tier with no motion. `request`
  * opens it (null = closed); every new `request.seq` resets the query to `request.seed` with the
- * caret at the end and the highlight on the first row. It records the focused element on open and
- * restores it on close (AC2). Picks go to `onPickProject` / `onPickFile`; commands run after
- * `onClose`, with an error toast if they fail (AC16).
+ * caret at the end and the highlight on the first row. It records the focused element on open and,
+ * on close, restores it as `restoresOpenerOnClose` decides (AC2). Picks go to `onPickProject`,
+ * `onPickCurrent` or `onPickFile`; commands run after `onClose`, with an error toast if they fail (AC16).
  */
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { PALETTE_COPY, PALETTE_TESTIDS, type CommandPaletteProps, type PaletteRequest } from '@renderer/command-palette-contract';
+import { useEffect, useId, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import {
+  PALETTE_COPY,
+  PALETTE_TESTIDS,
+  type CommandPaletteProps,
+  type PaletteRequest,
+  type PaletteRow,
+} from '@renderer/command-palette-contract';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { usePaletteFiles } from '@renderer/hooks/usePaletteFiles';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { toast } from '@renderer/hooks/useToasts';
 import { parsePaletteQuery } from '@renderer/palette-query';
-import { runPaletteRow } from '@renderer/palette-run';
-import { availableCommands, searchPalette, stepHighlight } from '@renderer/palette-search';
+import { restoresOpenerOnClose, runPaletteRow } from '@renderer/palette-run';
+import { searchPalette, stepHighlight } from '@renderer/palette-search';
 import { ModalFrame } from './ModalFrame';
 import { SearchIcon } from './palette/category-icons';
 import { PaletteFooter } from './palette/PaletteFooter';
@@ -25,17 +31,26 @@ function reportCommandError(error: unknown): void {
   toast(PALETTE_COPY.commandFailed, { kind: 'error', detail: String(error).replace(/^Error:\s*/, '') });
 }
 
-/** Remembers the focused element when `open` turns true and gives it focus back when it turns false. */
-function useRestoreFocus(open: boolean): void {
+type PickedRef = MutableRefObject<PaletteRow['kind'] | null>;
+
+/**
+ * Remembers the focused element when `open` turns true; when it turns false, gives focus back if
+ * `restoresOpenerOnClose` says so. Returns the ref a pick records its row kind in before closing.
+ */
+function useRestoreFocus(open: boolean): PickedRef {
   const opener = useRef<HTMLElement | null>(null);
+  const picked: PickedRef = useRef(null);
   useEffect(() => {
     if (open) {
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      picked.current = null;
       return;
     }
-    restoreFocus(opener.current);
+    const active = document.activeElement;
+    if (restoresOpenerOnClose(picked.current, active === null || active === document.body)) restoreFocus(opener.current);
     opener.current = null;
   }, [open]);
+  return picked;
 }
 
 /** Query and highlight state, reset from the seed whenever a new request arrives (AC37, AC43). */
@@ -72,15 +87,41 @@ function usePaletteView({ open, query, commands, currentProjectId }: PaletteView
   const { aliveIds } = useAliveShellIds();
   const parsed = useMemo(() => parsePaletteQuery(query), [query]);
   const files = usePaletteFiles(open, parsed.mode === 'files', currentProjectId);
-  const offered = useMemo(() => availableCommands(commands, currentProjectId != null), [commands, currentProjectId]);
   const view = useMemo(
-    () => searchPalette(parsed, { projects, currentProjectId, commands: offered, files }),
-    [parsed, projects, currentProjectId, offered, files],
+    () => searchPalette(parsed, { projects, currentProjectId, commands, files }),
+    [parsed, projects, currentProjectId, commands, files],
   );
   useEffect(() => {
     if (open) refresh().catch((e: unknown) => console.error('[palette] projects:list failed', e));
   }, [open, refresh]);
   return { view, aliveIds };
+}
+
+interface PaletteActionsDeps extends Pick<CommandPaletteProps, 'onClose' | 'onPickProject' | 'onPickCurrent' | 'onPickFile'> {
+  readonly rows: readonly PaletteRow[];
+  readonly activeIndex: number;
+  readonly setActive: (index: number) => void;
+  readonly picked: PickedRef;
+}
+
+/** `pick(index)` runs a row, recording its kind for the close-time focus decision; `onKeyDown` drives the highlight (AC3, AC14). */
+function usePaletteActions({ rows, activeIndex, setActive, picked, ...handlers }: PaletteActionsDeps) {
+  const pick = (index: number): void => {
+    const row = rows[index];
+    if (!row) return;
+    picked.current = row.kind;
+    void runPaletteRow(row, { ...handlers, onCommandError: reportCommandError });
+  };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    const step = e.nativeEvent.isComposing ? null : stepHighlight(e.key, activeIndex, rows.length);
+    if (!step) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (step.kind === 'move') setActive(step.index);
+    else if (step.kind === 'close') handlers.onClose();
+    else pick(activeIndex);
+  };
+  return { pick, onKeyDown };
 }
 
 interface SearchFieldProps {
@@ -123,10 +164,10 @@ function SearchField({ inputRef, query, listboxId, activeId, truncatedFiles, onQ
   );
 }
 
-export function CommandPalette({ request, commands, currentProject, onPickProject, onPickFile, onClose }: CommandPaletteProps): React.JSX.Element | null {
+export function CommandPalette({ request, commands, currentProject, onClose, ...picks }: CommandPaletteProps): React.JSX.Element | null {
   const open = request != null;
   const idPrefix = useId();
-  useRestoreFocus(open);
+  const picked = useRestoreFocus(open);
   const { query, setQuery, active, setActive, inputRef } = useSeededQuery(request);
   const { view, aliveIds } = usePaletteView({ open, query, commands, currentProjectId: currentProject?.id ?? null });
   const activeIndex = Math.min(active, Math.max(view.rows.length - 1, 0));
@@ -134,22 +175,9 @@ export function CommandPalette({ request, commands, currentProject, onPickProjec
   useEffect(() => {
     if (activeId) document.getElementById(activeId)?.scrollIntoView({ block: 'nearest' });
   }, [activeId]);
+  const { pick, onKeyDown } = usePaletteActions({ rows: view.rows, activeIndex, setActive, picked, onClose, ...picks });
 
   if (!open) return null;
-
-  const pick = (index: number): void => {
-    const row = view.rows[index];
-    if (row) void runPaletteRow(row, { onClose, onPickProject, onPickFile, onCommandError: reportCommandError });
-  };
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    const step = e.nativeEvent.isComposing ? null : stepHighlight(e.key, activeIndex, view.rows.length);
-    if (!step) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (step.kind === 'move') setActive(step.index);
-    else if (step.kind === 'close') onClose();
-    else pick(activeIndex);
-  };
 
   return (
     <ModalFrame

@@ -132,11 +132,11 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
                     onClick={() => openMatch(m)}
                     onMouseEnter={() => setActiveIdx(flatIdx)}
                     className={`w-full text-left flex gap-3 px-3 py-1 text-[12px] font-mono ${
-                      active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel]'
+                      active ? 'bg-[--modal-row-active] text-[--modal-row-active-text]' : 'hover:bg-[--panel]'
                     }`}
                   >
-                    <span className={`w-10 text-right shrink-0 ${active ? 'text-[--accent-text]/70' : 'text-[--modal-text-muted]'}`}>{m.line}</span>
-                    <PreviewLine text={m.preview} query={query} regex={regex} caseSensitive={caseSensitive} active={active} />
+                    <span className={`w-10 text-right shrink-0 ${active ? 'text-[--modal-row-active-text]' : 'text-[--modal-text-muted]'}`}>{m.line}</span>
+                    <PreviewLine text={m.preview} query={query} regex={regex} caseSensitive={caseSensitive} />
                   </button>
                 );
               })}
@@ -154,7 +154,7 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
   );
 }
 
-function PreviewLine({ text, query, regex, caseSensitive, active }: { text: string; query: string; regex: boolean; caseSensitive: boolean; active: boolean }) {
+function PreviewLine({ text, query, regex, caseSensitive }: { text: string; query: string; regex: boolean; caseSensitive: boolean }) {
   const parts = useMemo(() => {
     if (!query || query.length < 2) return [{ t: text, hit: false }];
     let re: RegExp;
@@ -181,9 +181,7 @@ function PreviewLine({ text, query, regex, caseSensitive, active }: { text: stri
       {parts.map((p, i) => (
         <span
           key={i}
-          className={p.hit
-            ? (active ? 'bg-white/25 rounded-sm px-0.5' : 'bg-[color:var(--accent)]/25 text-[--text] rounded-sm px-0.5')
-            : ''}
+          className={p.hit ? 'bg-[color:var(--accent)]/25 text-[--text] rounded-sm px-0.5' : ''}
         >
           {p.t}
         </span>
