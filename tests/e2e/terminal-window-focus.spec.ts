@@ -71,6 +71,7 @@ import { test, expect, _electron as electron, type Page, type ElectronApplicatio
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 
@@ -298,10 +299,11 @@ test('AC4: an open overlay blocks auto-focus even with activeElement forced to <
   try {
     await openProject(win, 'alpha');
 
-    // Command palette (⌘⇧P).
+    // Command palette (⌘⇧P, seeded with ">").
     await win.keyboard.press('ControlOrMeta+Shift+P');
-    const palette = win.locator('[data-testid="command-palette"]');
+    const palette = win.getByTestId(PALETTE_TESTIDS.root);
     await expect(palette).toBeVisible({ timeout: 2000 });
+    await expect(win.getByTestId(PALETTE_TESTIDS.input)).toHaveValue('>');
     await blurToBody(win);
     await refocus(win);
     await expect(palette, 'positive control: the overlay is still open in this state').toBeVisible();
@@ -309,10 +311,11 @@ test('AC4: an open overlay blocks auto-focus even with activeElement forced to <
     await win.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 
-    // File finder (⌘P).
+    // File search (⌘P): the same palette, seeded with "@" (the FileFinder modal is retired).
     await win.keyboard.press('ControlOrMeta+p');
-    const finder = win.locator('[data-testid="file-finder"]');
+    const finder = win.getByTestId(PALETTE_TESTIDS.root);
     await expect(finder).toBeVisible({ timeout: 2000 });
+    await expect(win.getByTestId(PALETTE_TESTIDS.input)).toHaveValue('@');
     await blurToBody(win);
     await refocus(win);
     await expect(finder, 'positive control: the overlay is still open in this state').toBeVisible();
@@ -486,7 +489,7 @@ test('AC10: notification click always switches project/shell, and honours D5 (ov
     await win.keyboard.press('Escape');
     await openProject(win, 'alpha');
     await win.keyboard.press('ControlOrMeta+Shift+P');
-    const palette = win.locator('[data-testid="command-palette"]');
+    const palette = win.getByTestId(PALETTE_TESTIDS.root);
     await expect(palette).toBeVisible({ timeout: 2000 });
     await blurToBody(win);
 

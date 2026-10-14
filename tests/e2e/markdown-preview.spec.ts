@@ -37,6 +37,7 @@ import {
   MERMAID_STATE_ATTR,
   MERMAID_THEME_ATTR,
 } from '../../src/renderer/markdown/contract';
+import { PALETTE_COPY, PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 
 const PROJECT = 'mdproj';
 const FIXTURES = resolve(process.cwd(), 'tests/e2e/fixtures/markdown');
@@ -896,8 +897,8 @@ test.describe('markdown preview: diagram theme', () => {
         }),
       );
     });
-    const palette = win.getByTestId('command-palette');
-    await palette.getByPlaceholder('Run a command…').fill('Use dark theme');
+    const palette = win.getByTestId(PALETTE_TESTIDS.root);
+    await palette.getByPlaceholder(PALETTE_COPY.placeholder).fill('>Use dark theme');
     await palette.getByText('Use dark theme', { exact: true }).click();
     await expect(win.locator('html')).toHaveAttribute('data-theme', 'dark');
     const darkAgain = await expectTheme('dark');

@@ -18,6 +18,7 @@ import { test, expect, _electron as electron, type Page } from '@playwright/test
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PALETTE_COPY } from '../../src/renderer/command-palette-contract';
 
 /**
  * Reads the shell's terminal state via `shells:snapshot` (main's headless
@@ -107,14 +108,14 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
   await expect(win.getByTestId('settings-modal')).toHaveCount(0);
   await expect(dialog).toBeVisible();
 
-  // ── AC4: ⌘K does not open the project switcher while the dialog is up ─────
+  // ── AC4: ⌘K does not open the command palette while the dialog is up ──────
   // Kept as a synthetic dispatch (not win.keyboard.press): real ⌘K risks
   // being intercepted by macOS Spotlight before it ever reaches the
   // Electron window. The ⌘, chord above now covers the real-input case.
   await win.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
   });
-  await expect(win.getByPlaceholder('Switch to project…')).toHaveCount(0);
+  await expect(win.getByPlaceholder(PALETTE_COPY.placeholder)).toHaveCount(0);
   await expect(dialog).toBeVisible();
 
   // ── Confirm with Auto (the preselected default) ────────────────────────────
@@ -122,11 +123,11 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
   await expect(dialog).toHaveCount(0);
 
   // Positive control: the locators above genuinely detect these overlays once
-  // the app is unblocked — ⌘K now opens the switcher, and Escape now closes it.
+  // the app is unblocked — ⌘K now opens the palette, and Escape now closes it.
   await win.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
   });
-  const switcherInput = win.getByPlaceholder('Switch to project…');
+  const switcherInput = win.getByPlaceholder(PALETTE_COPY.placeholder);
   await expect(switcherInput).toBeVisible({ timeout: 3000 });
   await win.keyboard.press('Escape');
   await expect(switcherInput).toHaveCount(0);

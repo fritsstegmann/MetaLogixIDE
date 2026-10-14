@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SIDEBAR_TESTIDS } from '../../../src/renderer/sidebar-copy';
+import { PALETTE_TESTIDS } from '../../../src/renderer/command-palette-contract';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 
@@ -36,8 +37,14 @@ export const PRIMARY = '.split-left';
  * `SHELL=/bin/sh` makes new Terminal tabs and the split's auto-spawned shell a plain POSIX
  * shell: with the isolated HOME, the user's own shell (zsh) would show its
  * new-user setup menu instead of echoing typed commands.
+ *
+ * `unsetEnv` removes variables from the launch environment, e.g.
+ * `METAIDE_CLAUDE_PERMISSION_MODE` to get the first-run permission dialog.
  */
-export async function launch(projectNames: string[] = ['alpha']): Promise<Launched> {
+export async function launch(
+  projectNames: string[] = ['alpha'],
+  opts: { unsetEnv?: readonly string[] } = {},
+): Promise<Launched> {
   const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
   const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-switch-home-'));
   const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-switch-root-'));
@@ -47,17 +54,20 @@ export async function launch(projectNames: string[] = ['alpha']): Promise<Launch
     mkdirSync(join(proj, '.git'));
     writeFileSync(join(proj, 'notes.txt'), 'hello from notes\n');
   }
+  const base: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: isolatedHome,
+    SHELL: '/bin/sh',
+    METAIDE_TEST_MODE: '1',
+    METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+    METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+    METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+  };
+  const unset = new Set(opts.unsetEnv ?? []);
+  const env = Object.fromEntries(Object.entries(base).filter(([k, v]) => v !== undefined && !unset.has(k))) as Record<string, string>;
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+    env,
   });
   const win = await app.firstWindow();
   await win.waitForLoadState('domcontentloaded');
@@ -241,15 +251,15 @@ export async function clickRowsInOneTask(
   }, { names, after, filterSel: SIDEBAR_FILTER_INPUT });
 }
 
-/** The project switcher's search input (the switcher has no test id). */
+/** The ⌘K command palette's search input (the palette replaced the project switcher). */
 export function switcherInput(win: Page) {
-  return win.locator('input[placeholder="Switch to project…"]');
+  return win.getByTestId(PALETTE_TESTIDS.input);
 }
 
-/** A project's result button in the open project switcher. */
+/** A project's row (option) in the open command palette, by exact name. */
 export function switcherResult(win: Page, name: string) {
-  return win.locator('div.fixed', { has: switcherInput(win) })
-    .locator('li button')
+  return win.getByTestId(PALETTE_TESTIDS.root)
+    .getByRole('option')
     .filter({ has: win.getByText(name, { exact: true }) })
     .first();
 }

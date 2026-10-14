@@ -16,6 +16,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { SPLIT_TESTIDS } from '../../src/renderer/split-copy';
 import { SIDEBAR_TESTIDS } from '../../src/renderer/sidebar-copy';
+import { PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 import { launch, openProject, projectIdByName, projectRow, marker, type Launched } from './helpers/focus';
 import {
   sampleDuring, contentWidth, frameLog, recordIpc, ipcLog, recordKeydowns, keydownTimes, transformParts,
@@ -370,11 +371,15 @@ test('AC49: ⌘B, ⌘\\ and the palette sidebar command toggle the sidebar in on
     await expect(addBtn).toBeVisible();
 
     for (const title of ['Hide sidebar', 'Show sidebar']) {
+      // ⌘⇧P opens the palette seeded with ">" (commands mode); typing appends after it.
       await win.keyboard.press('ControlOrMeta+Shift+P');
-      await expect(win.getByTestId('command-palette')).toBeVisible();
+      await expect(win.getByTestId(PALETTE_TESTIDS.root)).toBeVisible();
+      await expect(win.getByTestId(PALETTE_TESTIDS.input)).toHaveValue('>');
       await win.keyboard.type(title);
+      await expect(win.getByTestId(PALETTE_TESTIDS.root).locator('[role="option"][aria-selected="true"]'), `${title} is the highlighted row Enter runs`)
+        .toContainText(title);
       await instant(`palette ${title}`, () => win.keyboard.press('Enter'), 'Enter');
-      await expect(win.getByTestId('command-palette')).toHaveCount(0);
+      await expect(win.getByTestId(PALETTE_TESTIDS.root)).toHaveCount(0);
     }
     await expect(addBtn).toBeVisible();
   });
