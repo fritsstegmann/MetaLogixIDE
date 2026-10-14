@@ -634,8 +634,8 @@ input::placeholder, textarea::placeholder {
 
 /* ── Motion ──
  * Built-in CSS easings are too soft; these give UI motion a decisive start.
- * Keyboard-summoned surfaces (palette, finders, switcher, prompt library,
- * shortcuts help) deliberately do NOT animate — they're opened hundreds of
+ * Keyboard-summoned surfaces (command palette, project search, scrollback
+ * search, prompt library, shortcuts help) deliberately do NOT animate — they're opened hundreds of
  * times a day and any delay reads as lag. */
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -728,9 +728,9 @@ input::placeholder, textarea::placeholder {
 .status-dot[data-claude-state="busy"]    { background-color: var(--claude-busy); }
 .status-dot[data-claude-state="blocked"] { background-color: var(--claude-blocked); }
 
-/* AC21: on the accent-filled active ProjectSwitcher row, no amber/red fill
- * reaches 3:1 against the accent, so the dot gets a 1px white ring instead
- * (white clears 3:1 against both themes' accent). */
+/* AC21: on the highlighted project row of the command palette, the amber/red
+ * fills do not reach 3:1 against the row in every palette, so the dot gets a
+ * 1px white ring (palette-dot-contrast.test.ts decides that it is needed). */
 .status-dot-ring {
   box-shadow: 0 0 0 1px #fff;
 }

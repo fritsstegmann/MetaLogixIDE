@@ -130,7 +130,7 @@ Existing terminals refresh their foreground, cursor, selection, and ANSI colors
 when either document theme attribute changes.
 Mermaid diagrams render again on palette changes, including changes between
 palettes with the same light/dark appearance. Explicit diagram themes remain independent.
-The Command Palette also provides commands for all three palettes.
+The command palette also provides commands for all three palettes.
 
 Each palette card in Settings previews its own palette, whichever palette is
 active. The previews are literal colours in
@@ -237,6 +237,74 @@ and palettes. Root labels are abbreviated by `src/renderer/abbreviate-path.ts`:
 the macOS home becomes `~`, leading segments shrink to their first character,
 and the last segment stays whole (`~/P/P/acme`). The tooltip shows the full
 path.
+
+### Command palette
+
+One palette (`src/renderer/components/CommandPalette.tsx`) replaces the
+project switcher, the separate command palette and the file finder. It lists
+projects, the app's commands, one "Settings: <section>" entry per Settings
+section, and the project's files.
+
+The first character of the query selects the mode:
+
+| Prefix | Mode | Lists |
+|---|---|---|
+| none | all | projects, commands, Settings entries (never files) |
+| `#` | projects | projects only |
+| `>` | commands | commands and Settings entries |
+| `@` | files | files of the selected project |
+
+Shortcuts: ⌘K / Ctrl-K toggles the palette with an empty query, ⌘⇧P opens it
+with `>`, and ⌘P opens it with `@`. Pressing ⌘⇧P or ⌘P while it is open
+switches its mode. The status bar keeps one hint, a button that opens the
+palette. The palette opens above any other open modal; Esc closes only the
+palette.
+
+Groups keep a fixed order (projects, then the command categories Go, Project,
+View, Shell, Theme, App, then Settings); within a group, rows are ordered by
+match quality. At most 50 rows render (40 in file mode). Commands that need a
+selected project are hidden when there is none. Choosing a project uses the
+same pick path as the sidebar; choosing the current one closes the palette and
+focuses its terminal. A command runs after the palette closes, and a failure
+raises an error toast.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/renderer/command-palette-contract.ts` | Types, copy, test ids, group order and row caps shared by the component, App, the unit tests and the E2E suite. |
+| Logic | `src/renderer/palette-keys.ts` | Maps a keydown to toggle, open with a seed, swallow (other mod-chords while open) or pass. |
+| Logic | `src/renderer/palette-commands.ts` | Builds the command list from App's actions, including the Settings entries and the two new-terminal commands. |
+| Logic | `src/renderer/palette-query.ts`, `palette-search.ts`, `palette-run.ts` | Prefix parsing, fuzzy search (fuse.js) into groups, rows and empty states, and safe command execution. Pure. |
+| Adapter | `src/renderer/hooks/usePaletteFiles.ts` | Loads the file list (`files:list-all`, 5000-file cap) on entering file mode and reuses it until the palette closes. |
+| Presentation | `src/renderer/components/CommandPalette.tsx`, `components/palette/*` | Input (combobox with `aria-activedescendant`), listbox, rows, footer with key hints and the prefix legend. |
+| Composition | `src/renderer/App.tsx` | Holds the open request (`{ seq, seed }`; a new `seq` re-seeds an open palette) and routes keys, project picks and file picks. |
+
+### Modal material
+
+Every modal uses one frosted-glass material: a full-window scrim tinted from
+`--bg` with a light blur, and a translucent panel lifted toward white with a
+heavy, saturated blur. The tokens (`--modal-*`) and classes (`.modal-scrim`,
+`.modal-layer`, `.modal-sheet`, `.modal-sheet--compact`) live at the end of
+`src/renderer/styles.css`. Muted text inside a modal uses `--modal-text-muted`
+and the highlighted row uses `--text` on `--modal-row-active`, so text keeps
+4.5:1 contrast in every palette and appearance.
+
+`src/renderer/components/ModalFrame.tsx` renders the scrim and, as its
+sibling, a pointer-transparent layer that holds the panel. They must stay
+siblings: an element with `backdrop-filter` is a Backdrop Root, so a panel
+nested inside the blurred scrim could only blur the scrim's flat tint. The
+layer therefore carries no filter, opacity or transform. A modal's test id sits
+on the layer; the scrim carries `<test id>-scrim` and receives backdrop clicks.
+
+Stacking order: other modals (z 50/51) < palette (52/53) < toasts (60) <
+permission dialog (100/101). `src/renderer/modal-glass.ts` lists every modal
+surface with its tier, motion and radius. Mouse-opened modals (Settings, New
+project, Permission mode) opt into the existing fade; keyboard-summoned ones do
+not animate.
+
+When the OS asks for reduced transparency (`prefers-reduced-transparency`),
+the panel becomes opaque and neither layer is blurred; the scrim keeps its
+tint. No theme block may set `--modal-panel` or the two filter tokens, so this
+override always applies.
 
 ### Markdown preview pipeline
 
@@ -374,7 +442,7 @@ JS realm, so a module-level instance gives one owner per window.
 | Logic | `src/renderer/terminal-focus.ts` | Classifies the active element, holds the focus rules, and builds the coordinator. DOM-free. |
 | Adapter | `src/renderer/hooks/useWindowTerminalFocus.ts` | Creates the window's one `terminalFocus` coordinator. Owns the `window` `focus` and `blur` listeners and passes the overlay flag in a layout effect. This is defensive: it keeps the flag current before any later task, such as an awaited IPC reply, issues a request. React 18 already flushes passive effects at the end of a click or key commit, so the existing tests pass with either effect. |
 | Presentation | `src/renderer/components/ShellTab.tsx` | Registers its terminal, and reports when it opens, when it is used, and when it unmounts. |
-| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, forwards `shell:focus-request`, popout open and scrollback-search jumps to `requestFocus`, and project switches (sidebar, switcher, new-project dialog) to `requestProjectFocus`. |
+| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, forwards `shell:focus-request`, popout open and scrollback-search jumps to `requestFocus`, and project switches (sidebar, command palette, new-project dialog) to `requestProjectFocus`. |
 
 Rules:
 
@@ -480,7 +548,7 @@ to every window. Renderers never read terminal text for it.
 | Logic | `src/renderer/claude-state.ts` | Pure snapshot and delta reducers, and the worst state of a shell, a project or all shells. |
 | Presentation | `src/renderer/hooks/useClaudeStates.ts` | One store per window. Fetches the snapshot on first use, applies deltas, and fetches again on `alive-shells:changed`. |
 | Presentation | `src/renderer/components/StatusDot.tsx` | The dot: colour from `data-claude-state`, `title` and `aria-label` from the state label. |
-| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the active Project Switcher row. |
+| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the highlighted project row of the command palette. |
 
 Rules:
 

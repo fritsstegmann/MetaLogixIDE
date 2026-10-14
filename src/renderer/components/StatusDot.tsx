@@ -6,7 +6,7 @@
  * colour is never the only carrier. `inactiveWhenIdle` gives the D1
  * exception for an inactive shell tab: grey and static when idle, coloured
  * and pulsing when busy or blocked. `ring` adds the 1px white ring AC21
- * requires on the accent-filled active ProjectSwitcher row.
+ * requires on the highlighted project row of the command palette.
  */
 import { CLAUDE_DOT, CLAUDE_STATE_LABEL, type ClaudeShellState } from '@shared/claude-state';
 
