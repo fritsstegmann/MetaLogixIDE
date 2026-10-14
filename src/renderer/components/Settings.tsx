@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
 import { SettingsSectionPanel } from '@renderer/components/settings/SettingsSectionPanel';
-import { SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
+import { SETTINGS_NAV_ITEMS, SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
 import { versionLabel } from '@renderer/components/settings/version-label';
 import { useAppVersion } from '@renderer/hooks/useAppVersion';
 import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
@@ -183,13 +183,7 @@ interface SettingsNavProps {
   readonly version: string | null;
 }
 
-const NAV_ITEMS: readonly { readonly section: SettingsSection; readonly label: string }[] = [
-  { section: 'general', label: 'General' },
-  { section: 'roots', label: 'Root directories' },
-  { section: 'launch', label: 'Launch commands' },
-  { section: 'env', label: APP_ENV_COPY.navLabel },
-  { section: 'metaproject', label: 'Metaproject' },
-];
+const NAV_ITEMS = SETTINGS_NAV_ITEMS;
 
 function SettingsNav({
   section,

@@ -930,3 +930,80 @@ kbd {
 :root[data-palette="catppuccin"][data-theme="light"] { --hue-orange-default: #fe640b; }
 :root[data-palette="rose-pine"] { --hue-orange-default: #ebbcba; }
 :root[data-palette="rose-pine"][data-theme="light"] { --hue-orange-default: #d7827e; }
+
+/* ── Modal material (D1T "Vibrant Sheet + theme-tinted scrim") ──
+ * One frosted-glass material for every modal: a theme-tinted, lightly blurred
+ * scrim and, as its DOM sibling (see ModalFrame), a translucent panel lifted
+ * toward white with a heavy saturated blur. The panel colour is rebuilt opaque
+ * from --panel-strong and given an explicit alpha, so the alpha is exact.
+ * Invariant: no theme or palette block sets --modal-panel, --modal-scrim-filter
+ * or --modal-panel-filter, so the reduced-transparency override below always wins.
+ */
+:root {
+  --modal-panel-base: color-mix(in oklab, rgb(from var(--panel-strong) r g b) calc(100% - var(--modal-lift)), white);
+  --modal-panel: rgb(from var(--modal-panel-base) r g b / var(--modal-panel-alpha));
+  --modal-text-muted: color-mix(in oklab, var(--text) 45%, var(--text-muted));
+  --modal-row-active: var(--accent-soft);
+  --modal-row-active-text: var(--text);
+  --modal-hairline: color-mix(in oklab, var(--text) 12%, transparent);
+  --modal-radius: 14px;
+  --modal-dialog-radius: 16px;
+  --modal-scrim-filter: blur(6px) saturate(120%);
+  --modal-panel-filter: blur(40px) saturate(180%);
+
+  /* Dark (default for all palettes). */
+  --modal-scrim: rgb(from rgb(from var(--bg) r g b) calc(r * .6) calc(g * .6) calc(b * .6) / .40);
+  --modal-lift: 6%;
+  --modal-panel-alpha: .78;
+  --modal-edge: inset 0 0 0 .5px rgb(255 255 255 / .10), inset 0 1px 0 rgb(255 255 255 / .06);
+  --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .35), 0 24px 64px -16px rgb(0 0 0 / .55);
+}
+:root[data-theme="light"] {
+  --modal-scrim: rgb(from var(--bg) r g b / .30);
+  --modal-lift: 50%;
+  --modal-panel-alpha: .80;
+  --modal-edge: inset 0 0 0 .5px rgb(0 0 0 / .10), inset 0 1px 0 rgb(255 255 255 / .6);
+  --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .08), 0 24px 64px -16px rgb(0 0 0 / .25);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --modal-scrim: rgb(from var(--bg) r g b / .30);
+    --modal-lift: 50%;
+    --modal-panel-alpha: .80;
+    --modal-edge: inset 0 0 0 .5px rgb(0 0 0 / .10), inset 0 1px 0 rgb(255 255 255 / .6);
+    --modal-shadow: 0 0 0 .5px rgb(0 0 0 / .08), 0 24px 64px -16px rgb(0 0 0 / .25);
+  }
+}
+/* OS "Reduce transparency": opaque panel, no blur on either layer; the scrim keeps its tint. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --modal-panel: var(--modal-panel-base);
+    --modal-scrim-filter: none;
+    --modal-panel-filter: none;
+  }
+}
+
+.modal-scrim {
+  background: var(--modal-scrim);
+  backdrop-filter: var(--modal-scrim-filter);
+}
+/* Positions the sheet; clicks outside the sheet fall through to the scrim.
+ * Never give it a filter, opacity or transform (it would become a Backdrop Root). */
+.modal-layer { pointer-events: none; }
+.modal-layer > * { pointer-events: auto; }
+.modal-sheet {
+  background: var(--modal-panel);
+  backdrop-filter: var(--modal-panel-filter);
+  box-shadow: var(--modal-edge), var(--modal-shadow);
+  border-radius: var(--modal-dialog-radius);
+}
+.modal-sheet--compact { border-radius: var(--modal-radius); }
+.modal-sheet kbd {
+  border: 0;
+  box-shadow: none;
+  background: var(--surface-field);
+  color: var(--modal-text-muted);
+  font-size: 11px;
+  border-radius: 5px;
+  padding: 3px 6px;
+}
