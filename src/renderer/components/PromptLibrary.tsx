@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
+import { ModalFrame } from '@renderer/components/ModalFrame';
 import { toast } from '@renderer/hooks/useToasts';
 
 interface Prompt {
@@ -114,14 +115,17 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="prompt-library">
-      <div
-        className="bg-[--panel-strong] w-[720px] max-w-[92vw] h-[560px] max-h-[85vh] rounded-xl shadow-2xl border border-[--border] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalFrame
+      testId="prompt-library"
+      tier="modal"
+      motion="none"
+      layerClassName="flex items-center justify-center"
+      onDismiss={onClose}
+    >
+      <div className="modal-sheet w-[720px] max-w-[92vw] h-[560px] max-h-[85vh] flex flex-col overflow-hidden">
         <div className="px-4 py-2.5 border-b border-[--border] flex items-center gap-3">
           <div className="font-semibold text-sm">Prompt library</div>
-          <span className="text-[10px] text-[--text-muted]">
+          <span className="text-[10px] text-[--modal-text-muted]">
             {projectId != null ? 'global + this project' : 'global only'}
           </span>
           <input
@@ -139,7 +143,7 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
           </button>
           <button
             onClick={onClose}
-            className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel]"
+            className="text-[--modal-text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel]"
             aria-label="Close"
           >
             ✕
@@ -156,10 +160,10 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
         ) : (
           <div className="flex-1 min-h-0 overflow-y-auto">
             {loading && prompts.length === 0 && (
-              <div className="p-6 text-center text-xs text-[--text-muted]">Loading…</div>
+              <div className="p-6 text-center text-xs text-[--modal-text-muted]">Loading…</div>
             )}
             {!loading && filtered.length === 0 && (
-              <div className="p-6 text-center text-xs text-[--text-muted]">
+              <div className="p-6 text-center text-xs text-[--modal-text-muted]">
                 No prompts yet. Click <span className="text-[--text]">New</span> to add one.
               </div>
             )}
@@ -168,7 +172,7 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
                 <li key={p.id} className="px-4 py-2.5 hover:bg-[--panel] group">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-[--text] truncate flex-1">{p.title}</span>
-                    <span className={`text-[9px] px-1 py-0.5 rounded ${p.projectId != null ? 'bg-sky-500/20 text-sky-400' : 'bg-[--panel] text-[--text-muted]'}`}>
+                    <span className={`text-[9px] px-1 py-0.5 rounded ${p.projectId != null ? 'bg-sky-500/20 text-sky-400' : 'bg-[--panel] text-[--modal-text-muted]'}`}>
                       {p.projectId != null ? 'this project' : 'global'}
                     </span>
                     <button
@@ -189,24 +193,24 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
                     </button>
                     <button
                       onClick={() => setEditing(p)}
-                      className="text-[10px] text-[--text-muted] hover:text-[--text] px-1.5 py-1"
+                      className="text-[10px] text-[--modal-text-muted] hover:text-[--text] px-1.5 py-1"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => void remove(p)}
-                      className="text-[10px] text-[--text-muted] hover:text-[--danger] px-1.5 py-1"
+                      className="text-[10px] text-[--modal-text-muted] hover:text-[--danger] px-1.5 py-1"
                     >
                       Delete
                     </button>
                   </div>
-                  <div className="mt-1 text-[11px] text-[--text-muted] whitespace-pre-wrap line-clamp-2 font-mono">
+                  <div className="mt-1 text-[11px] text-[--modal-text-muted] whitespace-pre-wrap line-clamp-2 font-mono">
                     {p.body}
                   </div>
                   {p.tags.length > 0 && (
                     <div className="mt-1 flex gap-1 flex-wrap">
                       {p.tags.map((t) => (
-                        <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-[--panel] border border-[--border] text-[--text-muted]">{t}</span>
+                        <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-[--panel] border border-[--border] text-[--modal-text-muted]">{t}</span>
                       ))}
                     </div>
                   )}
@@ -216,7 +220,7 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
           </div>
         )}
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -237,7 +241,7 @@ function EditForm({
   const canProject = projectId != null;
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-      <div className="text-xs font-semibold text-[--text-muted]">{initial.id ? 'Edit prompt' : 'New prompt'}</div>
+      <div className="text-xs font-semibold text-[--modal-text-muted]">{initial.id ? 'Edit prompt' : 'New prompt'}</div>
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -253,7 +257,7 @@ function EditForm({
         className="w-full bg-[--panel] border border-[--border] rounded-md px-2.5 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-[--accent]/60"
       />
       <div className="flex items-center gap-3 text-xs">
-        <label className="flex items-center gap-1.5 text-[--text-muted]">
+        <label className="flex items-center gap-1.5 text-[--modal-text-muted]">
           Scope
           <select
             value={scope}
@@ -264,7 +268,7 @@ function EditForm({
             <option value="project" disabled={!canProject}>This project</option>
           </select>
         </label>
-        <label className="flex items-center gap-1.5 text-[--text-muted] flex-1">
+        <label className="flex items-center gap-1.5 text-[--modal-text-muted] flex-1">
           Tags
           <input
             value={tags}
@@ -288,7 +292,7 @@ function EditForm({
         </button>
         <button
           onClick={onCancel}
-          className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
+          className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--modal-text-muted] hover:text-[--text] hover:bg-[--panel]"
         >
           Cancel
         </button>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { ClaudePermissionMode } from '@shared/claude-permission-mode';
+import { ModalFrame } from '@renderer/components/ModalFrame';
 import { PERMISSION_MODE_COPY, PERMISSION_MODE_TEST_IDS } from '@renderer/permission-mode-copy';
 import { classifyDialogKey, nextFocusIndex } from './permission-mode-keys';
 
@@ -47,7 +48,7 @@ function ModeOption({ mode, checked, onSelect, inputRef }: OptionProps) {
             <span className="rounded-full border border-[--accent] px-2 py-0.5 text-xs font-medium text-[--text]">{copy.badge}</span>
           )}
         </span>
-        <span id={descId} className="mt-1 block text-sm leading-relaxed text-[--text-muted]">{copy.description}</span>
+        <span id={descId} className="mt-1 block text-sm leading-relaxed text-[--modal-text-muted]">{copy.description}</span>
       </span>
     </label>
   );
@@ -99,7 +100,12 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
   }
 
   return (
-    <div className="modal-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+    <ModalFrame
+      testId={PERMISSION_MODE_TEST_IDS.dialog}
+      tier="blocking"
+      motion="fade"
+      layerClassName="flex items-center justify-center p-4"
+    >
       <form
         ref={formRef}
         role="dialog"
@@ -107,19 +113,18 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
         aria-labelledby={TITLE_ID}
         aria-describedby={INTRO_ID}
         onSubmit={onSubmit}
-        className="modal-panel bg-[--panel-strong] w-[520px] max-w-full max-h-full overflow-y-auto rounded-xl shadow-2xl border border-[--border]"
-        data-testid={PERMISSION_MODE_TEST_IDS.dialog}
+        className="modal-panel modal-sheet w-[520px] max-w-full max-h-full overflow-y-auto"
       >
         <div className="px-5 pt-5 pb-4 space-y-4">
           <div className="space-y-1">
             <h2 id={TITLE_ID} className="text-lg font-semibold text-[--text]">{PERMISSION_MODE_COPY.dialogTitle}</h2>
-            <p id={INTRO_ID} className="text-sm text-[--text-muted]">{PERMISSION_MODE_COPY.dialogIntro}</p>
+            <p id={INTRO_ID} className="text-sm text-[--modal-text-muted]">{PERMISSION_MODE_COPY.dialogIntro}</p>
           </div>
           <div role="radiogroup" aria-labelledby={TITLE_ID} className="space-y-2">
             <ModeOption mode="auto" checked={selected === 'auto'} onSelect={setSelected} inputRef={autoRef} />
             <ModeOption mode="bypass" checked={selected === 'bypass'} onSelect={setSelected} />
           </div>
-          <p className="text-sm text-[--text-muted]">{PERMISSION_MODE_COPY.changeLaterNote}</p>
+          <p className="text-sm text-[--modal-text-muted]">{PERMISSION_MODE_COPY.changeLaterNote}</p>
           {error && (
             <p role="alert" className="text-sm text-[--danger]" data-testid={PERMISSION_MODE_TEST_IDS.dialogError}>{error}</p>
           )}
@@ -135,6 +140,6 @@ export function PermissionModeDialog({ onConfirm, error }: Props) {
           </button>
         </div>
       </form>
-    </div>
+    </ModalFrame>
   );
 }

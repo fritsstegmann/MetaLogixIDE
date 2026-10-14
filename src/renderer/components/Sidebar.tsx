@@ -11,6 +11,7 @@ import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { ModalFrame } from './ModalFrame';
 import { StatusDot } from './StatusDot';
 import { ENV_COPY } from '@renderer/project-env-copy';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
@@ -412,7 +413,7 @@ function RootBlock({
  * that live shells will be killed and the git working dir path changes.
  * Focus is auto-set to the input; ⏎ submits, Esc dismisses.
  */
-function RenameProjectDialog({
+export function RenameProjectDialog({
   project, onClose, onDone,
 }: {
   project: Project | null;
@@ -453,14 +454,17 @@ function RenameProjectDialog({
     }
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="rename-project">
-      <div
-        className="bg-[--panel-strong] w-[440px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalFrame
+      testId="rename-project"
+      tier="modal"
+      motion="none"
+      layerClassName="flex items-center justify-center"
+      onDismiss={onClose}
+    >
+      <div className="modal-sheet w-[440px] max-w-[92vw] overflow-hidden">
         <div className="px-4 py-3 border-b border-[--border]">
           <div className="font-semibold text-sm">Rename project folder</div>
-          <div className="text-[11px] text-[--text-muted] truncate mt-0.5" title={project.path}>{project.path}</div>
+          <div className="text-[11px] text-[--modal-text-muted] truncate mt-0.5" title={project.path}>{project.path}</div>
         </div>
         <div className="p-4 space-y-3">
           <input
@@ -471,7 +475,7 @@ function RenameProjectDialog({
             placeholder="New folder name"
             className="w-full bg-[--panel] border border-[--border] rounded-md px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
           />
-          <div className="text-[11px] text-[--text-muted] leading-relaxed">
+          <div className="text-[11px] text-[--modal-text-muted] leading-relaxed">
             Renames the folder on disk and updates every reference here. Any
             live shells for this project will be closed first (the pty holds
             the old path). If this is a git repo, the working tree moves with
@@ -481,7 +485,7 @@ function RenameProjectDialog({
         <div className="px-4 py-3 border-t border-[--border] flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
+            className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--modal-text-muted] hover:text-[--text] hover:bg-[--panel]"
           >
             Cancel
           </button>
@@ -494,7 +498,7 @@ function RenameProjectDialog({
           </button>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 

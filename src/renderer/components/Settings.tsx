@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
+import { ModalFrame } from '@renderer/components/ModalFrame';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
 import { SettingsSectionPanel } from '@renderer/components/settings/SettingsSectionPanel';
 import { SETTINGS_NAV_ITEMS, SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
@@ -83,9 +84,9 @@ function useFontDiscoverySession(open: boolean): FontDiscoverySession {
 
 // The global :focus-visible rule would square the corners and ring the whole panel when it takes initial focus.
 const PANEL_CLASS =
-  'modal-panel relative flex h-[640px] max-h-[92vh] w-[820px] max-w-[92vw] flex-col overflow-hidden rounded-2xl bg-[--panel-strong] shadow-2xl focus-visible:rounded-2xl focus-visible:outline-none';
+  'modal-panel modal-sheet relative flex h-[640px] max-h-[92vh] w-[820px] max-w-[92vw] flex-col overflow-hidden focus-visible:rounded-2xl focus-visible:outline-none';
 
-/** The open dialog: backdrop, focus-managed panel, header, nav, the active section and the footer. */
+/** The open dialog: frosted-glass frame, focus-managed panel, header, nav, the active section and the footer. */
 function SettingsDialog({
   section,
   onSection,
@@ -99,10 +100,12 @@ function SettingsDialog({
   const panelRef = useRef<HTMLDivElement>(null);
   const onKeyDown = useDialogFocus(panelRef);
   return (
-    <div
-      className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
-      data-testid="settings-modal"
+    <ModalFrame
+      testId="settings-modal"
+      tier="modal"
+      motion="fade"
+      layerClassName="flex items-center justify-center"
+      onDismiss={onClose}
     >
       <div
         ref={panelRef}
@@ -111,7 +114,6 @@ function SettingsDialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={PANEL_CLASS}
-        onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <SettingsHeader titleId={titleId} onClose={onClose} />
@@ -131,7 +133,7 @@ function SettingsDialog({
         </div>
         <SettingsFooter onClose={onClose} />
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -165,7 +167,7 @@ function SettingsHeader({
       <button
         type="button"
         onClick={onClose}
-        className="no-drag flex h-9 w-9 items-center justify-center rounded-[10px] text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:rounded-[10px]"
+        className="no-drag flex h-9 w-9 items-center justify-center rounded-[10px] text-[--modal-text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:rounded-[10px]"
         title="Close (Esc)"
         data-testid="settings-close"
         aria-label="Close settings"
@@ -209,7 +211,7 @@ function SettingsNav({
           {item.label}
         </SectionButton>
       ))}
-      <div className="mt-auto hidden px-3 pt-3 text-[11.5px] text-[--text-muted] sm:block">
+      <div className="mt-auto hidden px-3 pt-3 text-[11.5px] text-[--modal-text-muted] sm:block">
         {versionLabel(version)}
       </div>
     </nav>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
+import { ModalFrame } from '@renderer/components/ModalFrame';
 
 interface Match { relPath: string; line: number; col: number; preview: string }
 
@@ -77,15 +78,14 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
 
   if (!open) return null;
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-16 bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
-      data-testid="project-search"
+    <ModalFrame
+      testId="project-search"
+      tier="modal"
+      motion="none"
+      layerClassName="flex items-start justify-center pt-16"
+      onDismiss={onClose}
     >
-      <div
-        className="bg-[--panel-strong] w-[780px] max-w-[92vw] max-h-[80vh] rounded-xl shadow-2xl border border-[--border] overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="modal-sheet modal-sheet--compact w-[780px] max-w-[92vw] max-h-[80vh] overflow-hidden flex flex-col">
         <div className="flex items-center gap-2 px-3 border-b border-[--border]">
           <SearchIcon />
           <input
@@ -99,13 +99,13 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
               else if (e.key === 'Enter' && flatFocusable[activeIdx]) { openMatch(flatFocusable[activeIdx]); }
               else if (e.key === 'Escape') onClose();
             }}
-            className="flex-1 bg-transparent py-3 outline-none placeholder:text-[--text-muted] font-mono text-sm"
+            className="flex-1 bg-transparent py-3 outline-none placeholder:text-[--modal-text-muted] font-mono text-sm"
           />
           <ToolbarToggle title="Match case" active={caseSensitive} onClick={() => setCaseSensitive((v) => !v)}>Aa</ToolbarToggle>
           <ToolbarToggle title="Regular expression" active={regex} onClick={() => setRegex((v) => !v)}>.*</ToolbarToggle>
         </div>
 
-        <div className="px-3 py-1.5 border-b border-[--border] text-[11px] text-[--text-muted] flex items-center gap-3">
+        <div className="px-3 py-1.5 border-b border-[--border] text-[11px] text-[--modal-text-muted] flex items-center gap-3">
           {loading && <span>Searching…</span>}
           {!loading && !error && (
             <span>
@@ -118,11 +118,11 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           {grouped.length === 0 && !loading && query.length >= 2 && !error && (
-            <div className="p-6 text-center text-sm text-[--text-muted]">No matches.</div>
+            <div className="p-6 text-center text-sm text-[--modal-text-muted]">No matches.</div>
           )}
           {grouped.map(([file, hits]) => (
             <div key={file} className="border-b border-[--border] last:border-b-0">
-              <div className="px-3 py-1 text-[11px] font-mono text-[--text-muted] bg-[--panel]/60 sticky top-0">{file}</div>
+              <div className="px-3 py-1 text-[11px] font-mono text-[--modal-text-muted] bg-[--panel]/60 sticky top-0">{file}</div>
               {hits.map((m) => {
                 const flatIdx = matches.indexOf(m);
                 const active = flatIdx === activeIdx;
@@ -135,7 +135,7 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
                       active ? 'bg-[color:var(--accent)] text-[--accent-text]' : 'hover:bg-[--panel]'
                     }`}
                   >
-                    <span className={`w-10 text-right shrink-0 ${active ? 'text-[--accent-text]/70' : 'text-[--text-muted]'}`}>{m.line}</span>
+                    <span className={`w-10 text-right shrink-0 ${active ? 'text-[--accent-text]/70' : 'text-[--modal-text-muted]'}`}>{m.line}</span>
                     <PreviewLine text={m.preview} query={query} regex={regex} caseSensitive={caseSensitive} active={active} />
                   </button>
                 );
@@ -144,13 +144,13 @@ export function ProjectSearch({ open, projectId, onClose, onOpenMatch }: Props) 
           ))}
         </div>
 
-        <div className="px-3 py-2 border-t border-[--border] text-[11px] text-[--text-muted] flex gap-3 justify-end">
+        <div className="px-3 py-2 border-t border-[--border] text-[11px] text-[--modal-text-muted] flex gap-3 justify-end">
           <span className="flex items-center gap-1"><kbd>↑↓</kbd> navigate</span>
           <span className="flex items-center gap-1"><kbd>↩</kbd> open</span>
           <span className="flex items-center gap-1"><kbd>Esc</kbd> close</span>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -200,7 +200,7 @@ function ToolbarToggle({ title, active, onClick, children }: { title: string; ac
       className={`h-6 w-8 flex items-center justify-center rounded text-[11px] font-mono border ${
         active
           ? 'bg-[color:var(--accent)] text-[--accent-text] border-transparent'
-          : 'bg-[--panel] text-[--text-muted] border-[--border] hover:text-[--text]'
+          : 'bg-[--panel] text-[--modal-text-muted] border-[--border] hover:text-[--text]'
       }`}
     >
       {children}
@@ -210,7 +210,7 @@ function ToolbarToggle({ title, active, onClick, children }: { title: string; ac
 
 function SearchIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--text-muted]">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[--modal-text-muted]">
       <circle cx="11" cy="11" r="7" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>

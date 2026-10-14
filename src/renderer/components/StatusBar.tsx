@@ -4,6 +4,7 @@ import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { usePorts } from '@renderer/hooks/usePorts';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { PALETTE_COPY, PALETTE_TESTIDS } from '@renderer/command-palette-contract';
 
 interface LiveShell {
   projectId: number; shellIndex: number; projectName: string; pid: number;
@@ -11,7 +12,15 @@ interface LiveShell {
   launchName: string; hanging: boolean;
 }
 
-export function StatusBar({ project, aliveCount }: { project: Project | null; aliveCount: number }) {
+interface StatusBarProps {
+  readonly project: Project | null;
+  readonly aliveCount: number;
+  /** Opens the command palette exactly as ⌘K does. */
+  readonly onOpenPalette: () => void;
+}
+
+/** The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version. */
+export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps) {
   const { status: git } = useGitStatus(project?.id ?? null);
   const ports = usePorts(project?.id ?? null);
   // App version shown at the far right so users know exactly which build
@@ -56,11 +65,7 @@ export function StatusBar({ project, aliveCount }: { project: Project | null; al
         </span>
       )}
       <span className="ml-auto min-w-0 overflow-hidden flex items-center gap-3 opacity-70 whitespace-nowrap">
-        <span className="flex items-center gap-1"><kbd>⌘K</kbd> project</span>
-        <span className="flex items-center gap-1"><kbd>⌘P</kbd> file</span>
-        <span className="flex items-center gap-1"><kbd>⌘⇧F</kbd> search</span>
-        <span className="flex items-center gap-1"><kbd>⌘B</kbd> sidebar</span>
-        <span className="flex items-center gap-1"><kbd>⌘,</kbd> settings</span>
+        <PaletteHint onOpen={onOpenPalette} />
         {version && (
           <>
             <span className="opacity-40">·</span>
@@ -228,5 +233,20 @@ function BranchIcon() {
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
     </svg>
+  );
+}
+
+/** The status bar's single "⌘K command palette" hint: a muted button that opens the palette (AC29-AC31). */
+export function PaletteHint({ onOpen }: { readonly onOpen: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={PALETTE_COPY.statusHintLabel}
+      data-testid={PALETTE_TESTIDS.statusHint}
+      className="flex items-center gap-1 rounded-sm hover:text-[--text]"
+    >
+      <kbd>{PALETTE_COPY.statusHintKey}</kbd> {PALETTE_COPY.statusHintText}
+    </button>
   );
 }
