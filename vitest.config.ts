@@ -11,6 +11,10 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Cap the worker pool: the default uses every core, in every session sharing this machine.
+    // minWorkers must be set too, or its core-count default conflicts with the cap.
+    maxWorkers: 4,
+    minWorkers: 1,
     // .claude/ holds mutation-test copies of the tree; dist/ and out/ hold
     // packaged builds whose bundled node_modules ship their own tests.
     exclude: ['tests/e2e/**', 'node_modules/**', '.claude/**', 'dist/**', 'out/**'],
