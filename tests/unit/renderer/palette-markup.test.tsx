@@ -204,7 +204,7 @@ describe('CommandPalette — combobox and listbox (AC3, AC20)', () => {
       expect(heading, g.attrs['aria-labelledby']).toBeDefined();
       return text(outer(html, heading as El));
     });
-    expect(titles).toEqual(['Projects', 'View', 'Shell', 'App']);
+    expect(titles).toEqual(['Running', 'Projects', 'View', 'Shell', 'App']);
     for (const g of groups) expect(options(outer(html, g)).length).toBeGreaterThan(0);
   });
 
@@ -233,11 +233,13 @@ describe('CommandPalette — combobox and listbox (AC3, AC20)', () => {
 });
 
 describe('CommandPalette — project rows (AC7)', () => {
-  it('shows name and path in each project row', () => {
+  it('shows the name and the root folder, with the full path in the root label\'s tooltip', () => {
     const html = render();
-    const first = text(outer(html, options(html)[0] as El));
-    expect(first).toContain('alpha');
-    expect(first).toContain('/work/alpha');
+    const row = outer(html, options(html)[0] as El);
+    expect(text(row)).toContain('alpha');
+    const label = one(row, PALETTE_TESTIDS.projectRoot);
+    expect(text(outer(row, label))).toBe('/work');
+    expect(label.attrs.title).toBe('/work/alpha');
   });
 
   it('marks the current project with muted "Current" text and "current" in its name, when not highlighted', () => {
@@ -273,6 +275,7 @@ describe('CommandPalette — project rows (AC7)', () => {
 
   it('never rings the dot on a row that is not highlighted', () => {
     state.projects = [project(2, 'beta'), project(1, 'alpha')];
+    state.alive = new Set([1, 2]);
     const html = render();
     const live = outer(html, options(html)[1] as El);
     const dot = elements(live).find((e) => e.attrs['data-claude-state'] === 'busy');
@@ -280,11 +283,26 @@ describe('CommandPalette — project rows (AC7)', () => {
     expect(dot?.classes).not.toContain('status-dot-ring');
   });
 
-  it('shows a hollow ring and no status dot for a project without a live shell', () => {
+  it('shows a hollow ring, no status dot and no state text for a project without a live shell', () => {
     const html = render();
     const idle = outer(html, options(html)[1] as El);
     expect(elements(idle).some((e) => 'data-claude-state' in e.attrs)).toBe(false);
     expect(elements(idle).some((e) => e.attrs['data-lead'] === 'hollow')).toBe(true);
+    expect(byTestId(idle, PALETTE_TESTIDS.projectStatus)).toEqual([]);
+  });
+
+  it('shows a running project\'s Claude state as text and the Open ↩ hint on the highlighted row', () => {
+    const html = render();
+    const row = outer(html, options(html)[0] as El);
+    expect(text(outer(row, one(row, PALETTE_TESTIDS.projectStatus)))).toBe(PALETTE_COPY.projectStatus.busy);
+    expect(text(row)).toContain(PALETTE_COPY.openHint);
+    expect(text(outer(html, options(html)[1] as El))).not.toContain(PALETTE_COPY.openHint);
+  });
+
+  it('puts running projects under a Running heading with its count', () => {
+    state.alive = new Set([1, 2]);
+    const html = render();
+    expect(text(html)).toContain(`${PALETTE_COPY.groupTitles.running}2`);
   });
 
   it('escapes a project name instead of rendering it as markup (§5)', () => {
@@ -324,9 +342,9 @@ describe('CommandPalette — command rows, footer and capped marker', () => {
     for (const seed of ['', '>', '@'] as const) {
       const html = render({ seed });
       const legend = outer(html, one(html, PALETTE_TESTIDS.legend));
-      const kbds = [...legend.matchAll(/<kbd>([^<]*)<\/kbd>/g)].map((m) => decode(m[1] ?? ''));
+      const kbds = [...legend.matchAll(/<kbd[^>]*>([^<]*)<\/kbd>/g)].map((m) => decode(m[1] ?? ''));
       expect(kbds).toEqual(['@', '#', '>']);
-      expect(text(legend).replace(/\s+/g, '')).toBe('@files#projects>commands');
+      expect(text(legend).replace(/\s+/g, '')).toBe('@Files#Projects>Commands');
     }
   });
 
@@ -334,7 +352,7 @@ describe('CommandPalette — command rows, footer and capped marker', () => {
     const html = render();
     for (const word of Object.values(PALETTE_COPY.keyHints)) expect(text(html)).toContain(word);
     expect(html).toContain('<kbd>↑↓</kbd>');
-    expect(html).toContain('<kbd>Esc</kbd>');
+    expect(html).toContain('<kbd>esc</kbd>');
   });
 
   it('shows the capped marker only for a capped file index (AC34)', () => {

@@ -53,7 +53,7 @@ const READY_FILES: PaletteFilesState = {
 };
 
 function input(over: Partial<PaletteSearchInput> = {}): PaletteSearchInput {
-  return { projects: PROJECTS, currentProjectId: null, commands: COMMANDS, files: READY_FILES, ...over };
+  return { projects: PROJECTS, currentProjectId: null, aliveIds: new Set(), commands: COMMANDS, files: READY_FILES, ...over };
 }
 
 function view(raw: string, over: Partial<PaletteSearchInput> = {}): PaletteView {
@@ -67,6 +67,26 @@ function label(row: PaletteRow): string {
 }
 
 const groupIds = (v: PaletteView): string[] => v.groups.map((g) => g.id);
+
+describe('searchPalette — running projects', () => {
+  it('puts projects with a live shell in a Running group before Projects, each keeping list order', () => {
+    const v = view('', { aliveIds: new Set([2, 3]) });
+    expect(groupIds(v).slice(0, 2)).toEqual(['running', 'projects']);
+    expect(v.groups[0]?.title).toBe(PALETTE_COPY.groupTitles.running);
+    expect(v.groups[0]?.rows.map(label)).toEqual(['p:zebra', 'p:tools']);
+    expect(v.groups[1]?.rows.map(label)).toEqual(['p:alpha-tools']);
+    expect(v.rows.slice(0, 3).map(label)).toEqual(['p:zebra', 'p:tools', 'p:alpha-tools']);
+  });
+
+  it('keeps match order inside Running and drops it when no running project matches', () => {
+    expect(view('tools', { aliveIds: new Set([1, 2]) }).groups[0]?.rows.map(label)).toEqual(['p:tools', 'p:alpha-tools']);
+    expect(groupIds(view('zebra', { aliveIds: new Set([1]) }))[0]).toBe('projects');
+  });
+
+  it('splits projects the same way in "#" mode', () => {
+    expect(groupIds(view('#', { aliveIds: new Set([1]) }))).toEqual(['running', 'projects']);
+  });
+});
 
 describe('searchPalette — normal mode', () => {
   it('orders groups projects, Go, Project, View, Shell, Theme, App, Settings and drops empty ones (AC6)', () => {

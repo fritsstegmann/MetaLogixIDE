@@ -1012,3 +1012,25 @@ kbd {
   border-radius: 5px;
   padding: 3px 6px;
 }
+/* Command palette: a recessed footer strip; legend prefixes are bare, hue-tinted glyphs (colour set
+ * inline); the highlighted project row's "Open ↩" hint is an accent-tinted chip with a bare key. */
+.modal-sheet .palette-footer {
+  background: rgb(from var(--bg) r g b / .35);
+  box-shadow: inset 0 0.5px 0 var(--modal-hairline);
+}
+.modal-sheet .palette-footer kbd { font-size: 12px; }
+.modal-sheet .palette-footer kbd.palette-prefix {
+  background: none;
+  padding: 0;
+  font-weight: 600;
+}
+.modal-sheet .palette-open-hint {
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+.modal-sheet .palette-open-hint kbd {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 12.5px;
+}

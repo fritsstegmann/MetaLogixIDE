@@ -408,7 +408,7 @@ test.describe('rows', () => {
     });
   });
 
-  test('AC7: projects follow projects:list order, show name, path and the live dot, and mark the current one', async () => {
+  test('AC7: projects follow projects:list order, show name, root folder (path on hover) and the live dot, and mark the current one', async () => {
     await withApp(['alpha', 'beta', 'gamma'], async ({ win }) => {
       await openProject(win, 'gamma');
       await openProject(win, 'alpha');
@@ -422,7 +422,7 @@ test.describe('rows', () => {
       for (const [i, p] of listed.entries()) {
         const row = projectRows.nth(i);
         await expect(row.getByText(p.name, { exact: true }), `row ${i} is ${p.name}`).toHaveCount(1);
-        await expect(row, `row ${i} shows its path`).toContainText(p.path);
+        await expect(row.getByTestId(PALETTE_TESTIDS.projectRoot), `row ${i} has its path as the root label's tooltip`).toHaveAttribute('title', p.path);
       }
 
       // Live dot: alpha and gamma have live shells, beta has none.

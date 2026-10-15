@@ -13,6 +13,7 @@ import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { ModalFrame } from './ModalFrame';
 import { StatusDot } from './StatusDot';
+import { RootFolderGlyph, rootFolderName } from './RootFolderGlyph';
 import { ENV_COPY } from '@renderer/project-env-copy';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
 import { SIDEBAR_WIDTH } from '@renderer/sidebar-width';
@@ -523,23 +524,3 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-/** Human-friendly folder name for a root — the trailing segment of the path.
- * Dropping the `~/D/` prefix: single-letter parent abbreviations plus CSS
- * truncation made the row read as "~/D/Pro" / "~/D/my" / etc. which users
- * perceived as weird-char noise. The full absolute path still lives in the
- * row's `title=` tooltip for anyone who wants to see where it points. */
-function rootFolderName(path: string): string {
-  const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
-  const trimmed = path.length > 1 ? path.replace(/[\\/]+$/u, '') : path;
-  const last = trimmed.split(sep).pop();
-  return last && last.length > 0 ? last : trimmed;
-}
-
-/** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
-function RootFolderGlyph({ color }: { color: string }) {
-  return (
-    <svg aria-hidden data-testid="root-hue" width="13" height="13" viewBox="0 0 24 24" fill={color} fillOpacity={0.25} stroke={color} strokeWidth="1.8" strokeLinejoin="round" className="shrink-0">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  );
-}

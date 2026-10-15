@@ -11,12 +11,14 @@ import {
   PALETTE_COPY,
   PALETTE_TESTIDS,
   type CommandPaletteProps,
+  type PaletteMode,
   type PaletteRequest,
   type PaletteRow,
 } from '@renderer/command-palette-contract';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { usePaletteFiles } from '@renderer/hooks/usePaletteFiles';
 import { useProjects } from '@renderer/hooks/useProjects';
+import { useRoots } from '@renderer/hooks/useRoots';
 import { toast } from '@renderer/hooks/useToasts';
 import { parsePaletteQuery } from '@renderer/palette-query';
 import { restoresOpenerOnClose, runPaletteRow } from '@renderer/palette-run';
@@ -81,20 +83,22 @@ interface PaletteViewDeps {
   readonly currentProjectId: number | null;
 }
 
-/** Every provider (projects refreshed on open, alive shells, lazily loaded files) searched into a view. */
+/** Every provider (projects refreshed on open, alive shells, roots, lazily loaded files) searched into a view. */
 function usePaletteView({ open, query, commands, currentProjectId }: PaletteViewDeps) {
   const { projects, refresh } = useProjects();
   const { aliveIds } = useAliveShellIds();
+  const { roots } = useRoots();
+  const rootsById = useMemo(() => new Map(roots.map((r) => [r.id, r])), [roots]);
   const parsed = useMemo(() => parsePaletteQuery(query), [query]);
   const files = usePaletteFiles(open, parsed.mode === 'files', currentProjectId);
   const view = useMemo(
-    () => searchPalette(parsed, { projects, currentProjectId, commands, files }),
-    [parsed, projects, currentProjectId, commands, files],
+    () => searchPalette(parsed, { projects, currentProjectId, aliveIds, commands, files }),
+    [parsed, projects, currentProjectId, aliveIds, commands, files],
   );
   useEffect(() => {
     if (open) refresh().catch((e: unknown) => console.error('[palette] projects:list failed', e));
   }, [open, refresh]);
-  return { view, aliveIds };
+  return { view, aliveIds, rootsById };
 }
 
 interface PaletteActionsDeps extends Pick<CommandPaletteProps, 'onClose' | 'onPickProject' | 'onPickCurrent' | 'onPickFile'> {
@@ -130,13 +134,14 @@ interface SearchFieldProps {
   readonly listboxId: string;
   readonly activeId: string | undefined;
   readonly truncatedFiles: boolean;
+  readonly mode: PaletteMode;
   readonly onQuery: (query: string) => void;
   readonly onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
 }
 
-function SearchField({ inputRef, query, listboxId, activeId, truncatedFiles, onQuery, onKeyDown }: SearchFieldProps): React.JSX.Element {
+function SearchField({ inputRef, query, listboxId, activeId, truncatedFiles, mode, onQuery, onKeyDown }: SearchFieldProps): React.JSX.Element {
   return (
-    <div className="flex h-[46px] shrink-0 items-center gap-2.5 px-4 shadow-[inset_0_-0.5px_0_var(--modal-hairline)]">
+    <div className="flex h-[54px] shrink-0 items-center gap-3 pl-4 pr-3">
       <SearchIcon />
       <input
         ref={inputRef}
@@ -153,11 +158,19 @@ function SearchField({ inputRef, query, listboxId, activeId, truncatedFiles, onQ
         autoComplete="off"
         spellCheck={false}
         data-testid={PALETTE_TESTIDS.input}
-        className="min-w-0 flex-1 bg-transparent text-[15px] tracking-[-0.01em] outline-none placeholder:text-[--modal-text-muted]"
+        className="min-w-0 flex-1 bg-transparent text-[16px] tracking-[-0.01em] outline-none focus-visible:outline-none placeholder:text-[--modal-text-muted]"
       />
       {truncatedFiles && (
         <span data-testid={PALETTE_TESTIDS.capped} className="shrink-0 text-[12px] text-[--modal-text-muted]">
           {PALETTE_COPY.cappedTitle}
+        </span>
+      )}
+      {mode !== 'all' && (
+        <span
+          data-testid={PALETTE_TESTIDS.modeChip}
+          className="shrink-0 rounded-md bg-[--modal-row-active] px-2 py-1 text-[12px] font-medium text-[--accent]"
+        >
+          {PALETTE_COPY.modeChip[mode]}
         </span>
       )}
     </div>
@@ -169,7 +182,7 @@ export function CommandPalette({ request, commands, currentProject, onClose, ...
   const idPrefix = useId();
   const picked = useRestoreFocus(open);
   const { query, setQuery, active, setActive, inputRef } = useSeededQuery(request);
-  const { view, aliveIds } = usePaletteView({ open, query, commands, currentProjectId: currentProject?.id ?? null });
+  const { view, aliveIds, rootsById } = usePaletteView({ open, query, commands, currentProjectId: currentProject?.id ?? null });
   const activeIndex = Math.min(active, Math.max(view.rows.length - 1, 0));
   const activeId = view.rows.length > 0 ? optionId(idPrefix, activeIndex) : undefined;
   useEffect(() => {
@@ -197,10 +210,11 @@ export function CommandPalette({ request, commands, currentProject, onClose, ...
           listboxId={listboxId(idPrefix)}
           activeId={activeId}
           truncatedFiles={view.truncatedFiles}
+          mode={view.mode}
           onQuery={(q) => { setQuery(q); setActive(0); }}
           onKeyDown={onKeyDown}
         />
-        <PaletteList view={view} activeIndex={activeIndex} idPrefix={idPrefix} aliveIds={aliveIds} onHover={setActive} onPick={pick} />
+        <PaletteList view={view} activeIndex={activeIndex} idPrefix={idPrefix} aliveIds={aliveIds} rootsById={rootsById} onHover={setActive} onPick={pick} />
         <PaletteFooter />
       </div>
     </ModalFrame>

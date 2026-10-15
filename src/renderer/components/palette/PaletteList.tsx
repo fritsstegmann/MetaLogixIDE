@@ -6,7 +6,8 @@
  * `onHover(index)` and `onPick(index)` with indexes into `view.rows`.
  */
 import type { ReactNode } from 'react';
-import { PALETTE_COPY, PALETTE_TESTIDS, type PaletteEmpty, type PaletteRow, type PaletteView } from '@renderer/command-palette-contract';
+import type { Root } from '@shared/types';
+import { PALETTE_COPY, PALETTE_TESTIDS, type PaletteEmpty, type PaletteGroup, type PaletteRow, type PaletteView } from '@renderer/command-palette-contract';
 import { CommandRow } from './CommandRow';
 import { FileRow } from './FileRow';
 import { ProjectRow } from './ProjectRow';
@@ -40,12 +41,19 @@ interface RowContentProps {
   readonly row: PaletteRow;
   readonly active: boolean;
   readonly aliveIds: ReadonlySet<number>;
+  readonly rootsById: ReadonlyMap<number, Root>;
 }
 
-function RowContent({ row, active, aliveIds }: RowContentProps): React.JSX.Element {
+function RowContent({ row, active, aliveIds, rootsById }: RowContentProps): React.JSX.Element {
   if (row.kind === 'command') return <CommandRow command={row.command} />;
   if (row.kind === 'file') return <FileRow file={row.file} active={active} />;
-  return <ProjectRow project={row.project} current={row.current} active={active} alive={aliveIds.has(row.project.id)} />;
+  const { project } = row;
+  return <ProjectRow project={project} root={rootsById.get(project.rootId)} current={row.current} active={active} alive={aliveIds.has(project.id)} />;
+}
+
+/** Project groups show their row count after the heading. */
+function isProjectGroup(id: PaletteGroup['id']): boolean {
+  return id === 'running' || id === 'projects';
 }
 
 function rowKey(row: PaletteRow): string {
@@ -72,7 +80,7 @@ function PaletteOption({ id, active, onHover, onPick, children }: PaletteOptionP
       onMouseDown={(e) => e.preventDefault()}
       onMouseMove={() => { if (!active) onHover(); }}
       onClick={onPick}
-      className={`mx-1.5 flex h-[34px] cursor-default items-center gap-2.5 rounded-lg px-2.5 text-[13px] ${
+      className={`mx-2 flex h-9 cursor-default items-center gap-3 rounded-lg px-2.5 text-[14px] ${
         active ? 'bg-[--modal-row-active] text-[--modal-row-active-text]' : 'text-[--text]'
       }`}
     >
@@ -86,11 +94,12 @@ interface PaletteListProps {
   readonly activeIndex: number;
   readonly idPrefix: string;
   readonly aliveIds: ReadonlySet<number>;
+  readonly rootsById: ReadonlyMap<number, Root>;
   readonly onHover: (index: number) => void;
   readonly onPick: (index: number) => void;
 }
 
-export function PaletteList({ view, activeIndex, idPrefix, aliveIds, onHover, onPick }: PaletteListProps): React.JSX.Element {
+export function PaletteList({ view, activeIndex, idPrefix, aliveIds, rootsById, onHover, onPick }: PaletteListProps): React.JSX.Element {
   const starts = view.groups.map((_, g) => view.groups.slice(0, g).reduce((n, prev) => n + prev.rows.length, 0));
   return (
     <>
@@ -99,12 +108,13 @@ export function PaletteList({ view, activeIndex, idPrefix, aliveIds, onHover, on
         id={listboxId(idPrefix)}
         aria-label={PALETTE_COPY.inputLabel}
         data-testid={PALETTE_TESTIDS.listbox}
-        className="max-h-[min(440px,60vh)] overflow-y-auto pb-1.5"
+        className="max-h-[min(460px,60vh)] overflow-y-auto pb-2"
       >
         {view.groups.map((group, g) => (
           <div key={group.id} role="group" aria-labelledby={`${idPrefix}-group-${group.id}`} data-testid={PALETTE_TESTIDS.group}>
-            <div id={`${idPrefix}-group-${group.id}`} className="px-4 pb-1 pt-2.5 text-[11px] font-semibold tracking-[0.01em] text-[--modal-text-muted]">
-              {group.title}
+            <div className="flex items-baseline gap-2 px-[18px] pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[--modal-text-muted]">
+              <span id={`${idPrefix}-group-${group.id}`}>{group.title}</span>
+              {isProjectGroup(group.id) && <span aria-hidden="true" className="tabular-nums">{group.rows.length}</span>}
             </div>
             {group.rows.map((row, r) => {
               const index = (starts[g] ?? 0) + r;
@@ -116,7 +126,7 @@ export function PaletteList({ view, activeIndex, idPrefix, aliveIds, onHover, on
                   onHover={() => onHover(index)}
                   onPick={() => onPick(index)}
                 >
-                  <RowContent row={row} active={index === activeIndex} aliveIds={aliveIds} />
+                  <RowContent row={row} active={index === activeIndex} aliveIds={aliveIds} rootsById={rootsById} />
                 </PaletteOption>
               );
             })}
