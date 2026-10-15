@@ -1,7 +1,8 @@
 /**
  * Palette search: turns the parsed query and every provider's items into the `PaletteView` the
  * palette renders. The mode picks the providers (normal: projects, commands and Settings; "#":
- * projects; ">": commands and Settings; "@": files). Each provider is fuzzy-matched with fuse.js;
+ * projects; ">": commands and Settings; "@": files). Projects split into `running` (a live shell) and
+ * `projects` (the rest), each keeping list or match order. Each provider is fuzzy-matched with fuse.js;
  * groups keep the fixed `GROUP_ORDER` with empty ones dropped, rows keep list order on an empty
  * query and match order otherwise, and the total is capped (50 rows, 40 in files mode). Pure; the
  * fuse indexes are cached per source array so a keystroke does not rebuild them.
@@ -60,16 +61,17 @@ function capGroups(groups: readonly PaletteGroup[], cap: number): PaletteGroup[]
   return out;
 }
 
-function projectGroup(text: string, input: PaletteSearchInput): PaletteGroup {
+function projectGroups(text: string, input: PaletteSearchInput): PaletteGroup[] {
   const rows = matchProjects(input.projects, text).map(
-    (project): PaletteRow => ({ kind: 'project', project, current: project.id === input.currentProjectId }),
+    (project): PaletteRow & { kind: 'project' } => ({ kind: 'project', project, current: project.id === input.currentProjectId }),
   );
-  return group('projects', rows);
+  const running = (row: { project: Project }): boolean => input.aliveIds.has(row.project.id);
+  return [group('running', rows.filter(running)), group('projects', rows.filter((r) => !running(r)))];
 }
 
 function commandGroups(text: string, input: PaletteSearchInput): PaletteGroup[] {
   const matched = matchCommands(input.commands, text);
-  return GROUP_ORDER.filter((id) => id !== 'projects').map((id) =>
+  return GROUP_ORDER.filter((id) => id !== 'running' && id !== 'projects').map((id) =>
     group(id, matched.filter((c) => c.category === id).map((command): PaletteRow => ({ kind: 'command', command }))),
   );
 }
@@ -94,12 +96,12 @@ export const searchPalette: SearchPalette = (parsed, input) => {
   if (mode === 'files') return filesView(parsed, input);
   if (mode === 'projects') {
     const empty: PaletteEmpty = input.projects.length === 0 ? { kind: 'no-projects' } : { kind: 'no-projects-match', query: text };
-    return view(parsed, capGroups([projectGroup(text, input)], PALETTE_ROW_CAP), empty);
+    return view(parsed, capGroups(projectGroups(text, input), PALETTE_ROW_CAP), empty);
   }
   if (mode === 'commands') {
     return view(parsed, capGroups(commandGroups(text, input), PALETTE_ROW_CAP), { kind: 'no-commands-match', query: text });
   }
-  const groups = [projectGroup(text, input), ...commandGroups(text, input)];
+  const groups = [...projectGroups(text, input), ...commandGroups(text, input)];
   return view(parsed, capGroups(groups, PALETTE_ROW_CAP), { kind: 'no-results', query: text });
 };
 

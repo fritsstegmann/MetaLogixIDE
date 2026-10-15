@@ -12,7 +12,7 @@ interface FileRowProps {
 export function FileRow({ file, active }: FileRowProps): React.JSX.Element {
   return (
     <>
-      <span className="shrink-0 truncate font-medium max-w-[50%]">{file.name}</span>
+      <span className="shrink-0 truncate max-w-[50%]">{file.name}</span>
       <span className="min-w-0 flex-1 truncate text-[12px] text-[--modal-text-muted]">{file.relPath}</span>
       {active && <kbd>↩</kbd>}
     </>

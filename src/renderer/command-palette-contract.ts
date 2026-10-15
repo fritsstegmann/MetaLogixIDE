@@ -3,6 +3,7 @@
  * palette component, App wiring, unit tests and e2e suite all agree on. Change a value here and
  * every consumer follows; never restate a string or test id in a consumer.
  */
+import type { ClaudeShellState } from '@shared/claude-state';
 import type { Project } from '@shared/types';
 
 /** Search mode, chosen by the first character of the query. */
@@ -33,10 +34,11 @@ export interface PaletteCommand {
   readonly run: () => void | Promise<void>;
 }
 
-export type PaletteGroupId = 'projects' | PaletteCategory | 'files';
+/** `running` holds the projects with a live shell, `projects` the rest. */
+export type PaletteGroupId = 'running' | 'projects' | PaletteCategory | 'files';
 
 /** Fixed group order (AC6). Files mode has a single `files` group. */
-export const GROUP_ORDER: readonly PaletteGroupId[] = ['projects', 'Go', 'Project', 'View', 'Shell', 'Theme', 'App', 'Settings'];
+export const GROUP_ORDER: readonly PaletteGroupId[] = ['running', 'projects', 'Go', 'Project', 'View', 'Shell', 'Theme', 'App', 'Settings'];
 
 /** Most rows rendered in the all, projects and commands modes (AC13). */
 export const PALETTE_ROW_CAP = 50;
@@ -100,6 +102,8 @@ export interface ParsedPaletteQuery {
 export interface PaletteSearchInput {
   readonly projects: readonly Project[];
   readonly currentProjectId: number | null;
+  /** Projects with a live shell; they go in the `running` group. */
+  readonly aliveIds: ReadonlySet<number>;
   /** Already filtered for project-dependent commands (AC12). */
   readonly commands: readonly PaletteCommand[];
   readonly files: PaletteFilesState;
@@ -142,6 +146,7 @@ export const PALETTE_COPY = {
   placeholder: 'Search projects, commands and settings…',
   inputLabel: 'Search projects, commands and settings',
   groupTitles: {
+    running: 'Running',
     projects: 'Projects',
     Go: 'Go',
     Project: 'Project',
@@ -153,6 +158,12 @@ export const PALETTE_COPY = {
     files: 'Files',
   } satisfies Record<PaletteGroupId, string>,
   current: 'Current',
+  /** A running project's Claude state, shown on the right of its row. */
+  projectStatus: { idle: 'Idle', busy: 'Working', blocked: 'Needs input' } satisfies Record<ClaudeShellState, string>,
+  /** Label of the open hint on the highlighted project row. */
+  openHint: 'Open',
+  /** The chip in the search row naming the prefix mode; the normal mode has none. */
+  modeChip: { projects: 'Projects', commands: 'Commands', files: 'Files' },
   /** Accessible-name suffix on the current project's row. */
   currentLabel: 'current project',
   settingsPrefix: 'Settings: ',
@@ -169,11 +180,11 @@ export const PALETTE_COPY = {
     filesError: 'Could not list files.',
   },
   cappedTitle: `Index capped at ${PALETTE_FILE_LIMIT} files.`,
-  keyHints: { navigate: 'navigate', open: 'open', close: 'close' },
+  keyHints: { navigate: 'Navigate', open: 'Open', close: 'Close' },
   legend: [
-    { prefix: '@', label: 'files' },
-    { prefix: '#', label: 'projects' },
-    { prefix: '>', label: 'commands' },
+    { prefix: '@', label: 'Files' },
+    { prefix: '#', label: 'Projects' },
+    { prefix: '>', label: 'Commands' },
   ],
   statusHintKey: '⌘K',
   statusHintText: 'command palette',
@@ -190,6 +201,9 @@ export const PALETTE_TESTIDS = {
   group: 'command-palette-group',
   option: 'command-palette-option',
   current: 'command-palette-current',
+  projectStatus: 'command-palette-project-status',
+  modeChip: 'command-palette-mode-chip',
+  projectRoot: 'command-palette-project-root',
   empty: 'command-palette-empty',
   legend: 'command-palette-legend',
   capped: 'command-palette-capped',
