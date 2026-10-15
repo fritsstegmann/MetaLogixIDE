@@ -29,7 +29,8 @@ import {
 } from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
 import { describeGitFailure, runGit } from '@main/git/run-git';
@@ -38,6 +39,7 @@ import { readDiffSides } from '@main/git/diff-sides';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
+const execFileAsync = promisify(execFile);
 
 /** Spawn env overlay for a non-template spawn site: `templateEnv` ⊕ the project's interpolated variables. */
 function projectSpawnEnv(
@@ -552,16 +554,15 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // One `ps` call for every alive pid — cheap on macOS/Linux (kernel-side
     // process table lookup, no fork per pid). Format: `%CPU RSS_KB`.
     const pids = live.map(l => String(l.pid)).join(',');
+    // Async so a `ps` slowed by agent load never stalls the main process; a non-zero exit rejects, giving no stats.
     let statsByPid: Record<number, { cpu: number; rssKb: number }> = {};
     try {
-      const r = spawnSync('ps', ['-o', 'pid=,%cpu=,rss=', '-p', pids], { encoding: 'utf8', timeout: 3000 });
-      if (r.status === 0) {
-        for (const line of r.stdout.trim().split('\n')) {
-          const cols = line.trim().split(/\s+/);
-          if (cols.length < 3) continue;
-          const pid = Number(cols[0]); const cpu = Number(cols[1]); const rss = Number(cols[2]);
-          if (Number.isFinite(pid)) statsByPid[pid] = { cpu: Number.isFinite(cpu) ? cpu : 0, rssKb: Number.isFinite(rss) ? rss : 0 };
-        }
+      const r = await execFileAsync('ps', ['-o', 'pid=,%cpu=,rss=', '-p', pids], { encoding: 'utf8', timeout: 3000 });
+      for (const line of r.stdout.trim().split('\n')) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length < 3) continue;
+        const pid = Number(cols[0]); const cpu = Number(cols[1]); const rss = Number(cols[2]);
+        if (Number.isFinite(pid)) statsByPid[pid] = { cpu: Number.isFinite(cpu) ? cpu : 0, rssKb: Number.isFinite(rss) ? rss : 0 };
       }
     } catch { statsByPid = {}; }
     const now = Date.now();
@@ -1052,11 +1053,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       return { isRepo: false, branch: null, ahead: 0, behind: 0, files: {}, dirty: false };
     }
     // porcelain=v1 + --branch gives a stable machine-readable format with header.
-    const r = spawnSync('git', ['-C', p.path, 'status', '--porcelain=v1', '--branch', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000 });
+    const r = await runGit(p.path, ['status', '--porcelain=v1', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
     if (r.status !== 0) {
       return { isRepo: true, branch: null, ahead: 0, behind: 0, files: {}, dirty: false };
     }
-    const parsed = parseGitStatus(r.stdout);
+    const parsed = parseGitStatus(r.stdout.toString('utf8'));
     return { isRepo: true, ...parsed, dirty: Object.keys(parsed.files).length > 0 };
   },
   'git:panel-status': async (s, { projectId }) => {
@@ -1064,7 +1065,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!p) throw new Error(`no project ${projectId}`);
     const empty = { branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
     if (!existsSync(join(p.path, '.git'))) return { isRepo: false, ...empty };
-    const r = runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
+    const r = await runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
     if (r.status !== 0 || r.tooLarge || r.timedOut) {
       const error = describeGitFailure(r, 'status');
       log.warn('[git:panel-status] git status failed', { projectId, status: r.status, error });

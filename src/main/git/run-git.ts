@@ -4,37 +4,48 @@
  * `GIT_OPTIONAL_LOCKS=0` so status takes no optional index lock and polling never contends with the
  * user's own git; spawn failures map to plain values so callers decide what an overflow or a timeout means.
  */
-import { spawnSync, type SpawnSyncOptionsWithBufferEncoding, type SpawnSyncReturns } from 'node:child_process';
+import { execFile, type ChildProcess, type ExecFileException, type ExecFileOptionsWithBufferEncoding } from 'node:child_process';
 
 export interface GitRunOptions { maxBuffer: number; timeout: number }
 
 /** `stdout` is empty whenever `tooLarge` or `timedOut` is set: partial output is never returned. */
 export interface GitRunResult { stdout: Buffer; stderr: string; status: number | null; tooLarge: boolean; timedOut: boolean }
 
-export type GitRunner = (repoPath: string, args: readonly string[], opts: GitRunOptions) => GitRunResult;
-export type SpawnSyncFn = (cmd: string, args: readonly string[], opts: SpawnSyncOptionsWithBufferEncoding) => SpawnSyncReturns<Buffer>;
+export type GitRunner = (repoPath: string, args: readonly string[], opts: GitRunOptions) => Promise<GitRunResult>;
+export type ExecFileCallback = (error: ExecFileException | null, stdout: Buffer, stderr: Buffer) => void;
+export type ExecFileFn = (cmd: string, args: readonly string[], opts: ExecFileOptionsWithBufferEncoding, cb: ExecFileCallback) => Pick<ChildProcess, 'stdin'>;
 
 const SAFETY_ARGS = ['-c', 'core.fsmonitor=false', '--literal-pathspecs'] as const;
 
-/**
- * Run `git <safety args> <args>` synchronously in `repoPath`. ENOBUFS becomes `tooLarge`, ETIMEDOUT
- * becomes `timedOut`, and any other spawn error is reported through `stderr` with a null status.
- * `spawn` is injectable for tests only.
- */
-export function runGit(repoPath: string, args: readonly string[], opts: GitRunOptions, spawn: SpawnSyncFn = spawnSync): GitRunResult {
-  const r = spawn('git', [...SAFETY_ARGS, ...args], {
-    cwd: repoPath,
-    maxBuffer: opts.maxBuffer,
-    timeout: opts.timeout,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
-  });
-  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
-  const tooLarge = code === 'ENOBUFS';
-  const timedOut = code === 'ETIMEDOUT';
+const nodeExecFile: ExecFileFn = (cmd, args, opts, cb) => execFile(cmd, args, opts, cb);
+
+function toResult(error: ExecFileException | null, stdout: Buffer, stderr: Buffer): GitRunResult {
+  const tooLarge = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+  const timedOut = !tooLarge && error?.killed === true;
   const truncated = tooLarge || timedOut;
-  const stderr = r.stderr?.toString('utf8') || (r.error && !truncated ? r.error.message : '');
-  return { stdout: truncated ? Buffer.alloc(0) : (r.stdout ?? Buffer.alloc(0)), stderr, status: r.status, tooLarge, timedOut };
+  const exitCode = typeof error?.code === 'number' ? error.code : null;
+  const status = error ? exitCode : 0;
+  const text = stderr.toString('utf8') || (error && !truncated && exitCode === null ? error.message : '');
+  return { stdout: truncated ? Buffer.alloc(0) : stdout, stderr: text, status, tooLarge, timedOut };
+}
+
+/**
+ * Run `git <safety args> <args>` in `repoPath` without blocking the event loop. Output over
+ * `maxBuffer` on either stream becomes `tooLarge` and a run past `timeout` becomes `timedOut` (git
+ * is killed in both cases); any other spawn error is reported through `stderr` with a null status.
+ * Never rejects. `exec` is injectable for tests only.
+ */
+export function runGit(repoPath: string, args: readonly string[], opts: GitRunOptions, exec: ExecFileFn = nodeExecFile): Promise<GitRunResult> {
+  return new Promise((resolve) => {
+    const child = exec('git', [...SAFETY_ARGS, ...args], {
+      cwd: repoPath,
+      encoding: 'buffer',
+      maxBuffer: opts.maxBuffer,
+      timeout: opts.timeout,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    }, (error, stdout, stderr) => { resolve(toResult(error, stdout, stderr)); });
+    child.stdin?.end();
+  });
 }
 
 /** A user-facing message for a failed run: git's stderr when it wrote one, else what went wrong with `git <command>`. */

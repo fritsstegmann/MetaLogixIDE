@@ -13,8 +13,9 @@ import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { commitAll, git, makeConflict, markerScript, stubGitEnv, tempProject } from '../git/temp-repo';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
+import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -1411,6 +1412,59 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
     expect(existsSync(marker)).toBe(true);
   });
 
+  it('git:status without .git is not a repo', async () => {
+    const { call } = gitRig();
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: false, branch: null, ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status on an empty .git folder is a repo with no branch and no files', async () => {
+    const { root, call } = gitRig();
+    mkdirSync(join(root, '.git'));
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, branch: null, ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status on a clean repo gives the branch and is not dirty', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'a.ts'), 'a\n');
+    commitAll(root);
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, branch: 'main', ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status gives exactly what plain git status gives, every untracked file and pathspec-magic names included', async () => {
+    const { root, call } = repoRig();
+    for (const name of ['*.ts', ':(exclude)x', 'a.ts']) writeFileSync(join(root, name), 'one\n');
+    commitAll(root);
+    for (const name of ['*.ts', ':(exclude)x']) writeFileSync(join(root, name), 'two\n');
+    mkdirSync(join(root, 'dir', 'sub'), { recursive: true });
+    writeFileSync(join(root, 'dir', 'sub', 'u1.txt'), 'u');
+    const plain = parseGitStatus(git(root, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '--branch', '--untracked-files=all'));
+    expect(plain.files).toEqual({ '*.ts': 'M', ':(exclude)x': 'M', 'dir/sub/u1.txt': '?' });
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, ...plain, dirty: true });
+  });
+
+  it('git:status never runs a repo-local core.fsmonitor program', async () => {
+    const { base, root, call } = repoRig();
+    writeFileSync(join(root, 'a.txt'), 'a');
+    const { script, marker } = markerScript(base, 'fsmonitor');
+    git(root, 'config', 'core.fsmonitor', script);
+    await call('git:status', { projectId: 1 });
+    expect(existsSync(marker)).toBe(false);
+    spawnSync('git', ['status'], { cwd: root });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it.each([
+    ['git:status', {}],
+    ['git:panel-status', {}],
+    ['git:file-diff', { path: 'u.txt', untracked: true }],
+    ['git:diff-sides', { kind: 'untracked', path: 'u.txt' }],
+  ])('%s lets timers run while git is still running (does not block the main process)', async (channel, req) => {
+    const { base, root, call } = repoRig();
+    writeFileSync(join(root, 'u.txt'), 'u\n');
+    vi.stubEnv('PATH', `${slowCommandDir(base, 'git', 0.6)}:${process.env.PATH ?? ''}`);
+    expect(await finishOrder(() => call(channel, { projectId: 1, ...req }))).toEqual(['timer', 'work']);
+  });
+
   it.each(['git:panel-status', 'git:file-diff', 'git:diff-sides'])('%s rejects an unknown project', async (channel) => {
     const { call } = gitRig();
     await expect(call(channel, { projectId: 99, path: 'a', kind: 'unstaged' })).rejects.toThrow(/no project 99/);
@@ -1458,6 +1512,50 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
   it('git:file-diff without .git returns an empty diff', async () => {
     const { call } = gitRig();
     await expect(call('git:file-diff', { projectId: 1, path: 'a.ts' })).resolves.toEqual({ diff: '' });
+  });
+});
+
+describe('shells:live-stats', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A rig with live shells for `pids` in project 1, and `ps` on PATH replaced by `script` (a sh body). */
+  function statsRig(pids: number[], script: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'live-stats-'));
+    writeFileSync(join(dir, 'ps'), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(dir, 'ps'), 0o755);
+    vi.stubEnv('PATH', `${dir}:${process.env.PATH ?? ''}`);
+    const ptyManager = fakePtyManager();
+    const now = Date.now();
+    ptyManager.liveShells.mockImplementation(() =>
+      pids.map((pid, shellIndex) => ({ projectId: 1, shellIndex, pid, startedAt: now, lastDataAt: now })) as never);
+    const services = {
+      ptyManager,
+      projects: { list: () => [{ id: 1, name: 'proj' }] },
+      shells: { list: () => pids.map((_, shellIndex) => ({ projectId: 1, shellIndex, launchArgv: ['/bin/zsh'] })) },
+    } as unknown as Parameters<typeof registerIpc>[1];
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    return () => ipc.handlers.get('shells:live-stats')!({}, undefined) as Promise<{ shells: Array<Record<string, unknown>> }>;
+  }
+
+  it('asks ps once for every live pid and maps its CPU and RSS onto each shell', async () => {
+    const stats = statsRig([4242, 4343], `[ "$*" = "-o pid=,%cpu=,rss= -p 4242,4343" ] || exit 3\nprintf '  4242  12.5  20480\\n 4343 0.0 1024\\n'`);
+    const { shells } = await stats();
+    expect(shells).toEqual([
+      expect.objectContaining({ projectId: 1, shellIndex: 0, projectName: 'proj', pid: 4242, cpuPercent: 12.5, memMB: 20, launchName: 'Terminal', hanging: false }),
+      expect.objectContaining({ shellIndex: 1, pid: 4343, cpuPercent: 0, memMB: 1 }),
+    ]);
+  });
+
+  it('gives zero CPU and memory when ps exits non-zero', async () => {
+    const stats = statsRig([4242], `printf '4242 50.0 20480\\n'; exit 1`);
+    const { shells } = await stats();
+    expect(shells).toEqual([expect.objectContaining({ pid: 4242, cpuPercent: 0, memMB: 0 })]);
+  });
+
+  it('lets timers run while ps is still running (does not block the main process)', async () => {
+    const stats = statsRig([4242], `sleep 0.6\nprintf '4242 1.0 1024\\n'`);
+    expect(await finishOrder(stats)).toEqual(['timer', 'work']);
   });
 });
 
