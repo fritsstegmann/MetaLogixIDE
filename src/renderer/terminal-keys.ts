@@ -1,8 +1,8 @@
 /**
  * Pure routing for keys pressed while a terminal is focused, plus the xterm custom key handler built
  * on it. On other platforms the shell owns every unshifted Ctrl+letter and Ctrl+\ except Ctrl+F
- * (terminal find); an explicit allow-list of Ctrl chords goes to the app, and Ctrl+Shift+C/V copy
- * and paste. On mac only ⌘F is taken; everything else keeps xterm's default handling. The
+ * (terminal find) and Ctrl+K (command palette); an explicit allow-list of Ctrl chords goes to the
+ * app, and Ctrl+Shift+C/V copy and paste. On mac only ⌘F is taken; everything else keeps xterm's default handling. The
  * allow-list is explicit so chords xterm still maps (Ctrl+[, Ctrl+3–8, Ctrl+Shift+- as ^_) stay
  * with the shell.
  */
@@ -20,6 +20,7 @@ import { chordKey, isPrimaryMod } from './shortcut-match';
 
 const OTHER_ROUTES: ReadonlyMap<string, TerminalKeyRoute> = new Map<string, TerminalKeyRoute>([
   ['f', 'app'],
+  ['k', 'app'],
   ['shift+c', 'copy'],
   ['shift+v', 'paste'],
   ...['shift+p', 'shift+k', 'shift+o', 'shift+n', 'shift+t', 'shift+f'].map(

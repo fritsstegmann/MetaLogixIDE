@@ -28,10 +28,17 @@ const ctrl = (k: string, mods: Mods = {}): ShortcutKeyLike => key(k, { ctrlKey: 
 const ctrlShift = (k: string): ShortcutKeyLike => ctrl(k, { shiftKey: true });
 
 describe('routeTerminalKey on other platforms', () => {
-  it.each(['r', 'k', 'p', 'b', 't', 'c', '\\', 'a', 'd', 'l', 'u', 'w', 'z'])(
+  it.each(['r', 'p', 'b', 't', 'c', '\\', 'a', 'd', 'l', 'u', 'w', 'z'])(
     'sends unshifted Ctrl+%s to the shell (AC10)',
     (k) => {
       expect(routeTerminalKey(ctrl(k), 'other')).toBe('shell');
+    },
+  );
+
+  it.each(['k', 'K'])(
+    'routes unshifted Ctrl+%s to the app so the palette opens from a terminal',
+    (k) => {
+      expect(routeTerminalKey(ctrl(k), 'other')).toBe('app');
     },
   );
 
