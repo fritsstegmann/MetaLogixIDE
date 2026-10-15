@@ -53,7 +53,11 @@ stay cheap and must never wait on a child process.
 - **Polled child processes are asynchronous.** `git:status`,
   `git:panel-status`, `git:file-diff` and `git:diff-sides` run git through
   the async `runGit` (`src/main/git/run-git.ts`). The `shells:live-stats`
-  sampler runs `ps` through async `execFile`. Git commands that the user
+  sampler runs `ps` through async `execFile`. Async replies can arrive out
+  of order, so every git poller in the renderer (`useGitStatus`,
+  `usePanelStatus` in `GitPanel.tsx`, `useGitChanges`) uses
+  `createRequestGate`: it applies only the latest request's reply and
+  skips a poll tick while a request is in flight. Git commands that the user
   starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
   use `spawnSync`; this is a known gap, recorded as a follow-up.
 
