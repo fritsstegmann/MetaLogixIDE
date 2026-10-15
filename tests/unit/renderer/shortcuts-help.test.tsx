@@ -120,7 +120,7 @@ describe('ShortcutsHelp on Linux (AC6, AC13)', () => {
 
   it('marks exactly the shortcuts the shell keeps while the terminal is focused', () => {
     const marked = linuxRows(linux()).flatMap((r) => r.keys).filter((k) => k.shell).map((k) => k.key);
-    expect(marked.sort()).toEqual(['Ctrl+B', 'Ctrl+K', 'Ctrl+P', 'Ctrl+T']);
+    expect(marked.sort()).toEqual(['Ctrl+B', 'Ctrl+P', 'Ctrl+T']);
   });
 
   it('lists Ctrl+F as "Find in terminal", unmarked', () => {
@@ -134,7 +134,8 @@ describe('ShortcutsHelp on Linux (AC6, AC13)', () => {
 
   it('names every shell-owned key, Ctrl+\\ included, and Ctrl+Shift+P as the way to the palette', () => {
     const n = note(linux());
-    for (const k of ['Ctrl+K', 'Ctrl+P', 'Ctrl+B', 'Ctrl+T', 'Ctrl+\\', 'Ctrl+Shift+P']) expect(n).toContain(k);
+    for (const k of ['Ctrl+P', 'Ctrl+B', 'Ctrl+T', 'Ctrl+\\', 'Ctrl+Shift+P']) expect(n).toContain(k);
+    expect(n).not.toMatch(/Ctrl\+K\b/);
   });
 
   it('gives each marked key a text alternative, not just a glyph', () => {

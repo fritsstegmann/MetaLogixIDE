@@ -303,16 +303,17 @@ decides who gets each key:
 
 | Key | Goes to | Why |
 |---|---|---|
-| Unshifted Ctrl+letter, Ctrl+\ | Shell | readline and TUI keys (kill-line, history, SIGINT, reverse search) |
-| Ctrl+F | App: terminal search | the one unshifted Ctrl+letter the app takes |
+| Unshifted Ctrl+letter, Ctrl+\ | Shell | readline and TUI keys (history, SIGINT, reverse search) |
+| Ctrl+F | App: terminal search | taken from the shell (readline forward-char) |
+| Ctrl+K | App: command palette | taken from the shell (readline kill-line); the terminal takes focus automatically, so the palette key must work there |
 | Ctrl+Shift+P/K/O/N/T/F, Ctrl+, Ctrl+/ Ctrl+= Ctrl+- Ctrl+0 | App | an explicit allow-list; xterm sends nothing and the event bubbles |
 | Ctrl+Shift+C | Copy | writes the sanitised selection; does nothing without a selection |
 | Ctrl+Shift+V | Paste | reads the clipboard and calls `term.paste`, which honours bracketed paste |
 | Anything else | xterm default | unchanged |
 
-So Ctrl+K, Ctrl+P, Ctrl+B and Ctrl+T do nothing in the app from a focused
-terminal; Ctrl+Shift+P opens the palette instead. The cheat sheet marks those
-rows on Linux. On macOS, ⌘F goes to the app and every other key keeps xterm's
+So Ctrl+P, Ctrl+B and Ctrl+T do nothing in the app from a focused terminal;
+the palette (Ctrl+K or Ctrl+Shift+P) reaches those commands instead. The cheat
+sheet marks those rows on Linux. On macOS, ⌘F goes to the app and every other key keeps xterm's
 default handling.
 
 The native menu is built from `buildMenuTemplate(isMac)`. The menu bar is
