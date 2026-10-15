@@ -9,6 +9,9 @@ import { langForPath } from '@renderer/diff/highlight-lang';
 import { usePersistedNumber } from '@renderer/hooks/usePersistedNumber';
 import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { toast } from '@renderer/hooks/useToasts';
+import { isSaveShortcut } from '@renderer/app-keys';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import type { GitFileStatus } from '@shared/ipc-contract';
 
 interface Entry { name: string; isDir: boolean; relPath: string; }
@@ -39,6 +42,7 @@ export function FilesTab({
   openLine?: number | null;
   onOpenRelPathConsumed?: () => void;
 }) {
+  const platform = useShortcutPlatform();
   const [pendingLine, setPendingLine] = useState<number | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [dir, setDir] = useState<string | undefined>(undefined);
@@ -151,21 +155,19 @@ export function FilesTab({
   // Reset when project switches.
   useEffect(() => { void loadDir(undefined); setOpenFiles([]); setActivePath(null); }, [loadDir]);
 
-  // ⌘S to save the active file.
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === 's' && activePath) {
+      if (activePath && isSaveShortcut(e, platform)) {
         e.preventDefault();
         void saveFile(activePath);
       }
     };
     el.addEventListener('keydown', onKey);
     return () => el.removeEventListener('keydown', onKey);
-  }, [activePath, saveFile]);
+  }, [activePath, saveFile, platform]);
 
   // React to a Cmd+P / Cmd+Shift+F / hover-preview pick — open the relative
   // path directly and, if a line was passed, note it so the preview can
@@ -213,7 +215,7 @@ export function FilesTab({
           {!error && !activeFile && (
             <div className="h-full flex items-center justify-center p-8 text-center text-sm text-[--text-muted]">
               Pick a file on the left to preview it. <br />
-              <span className="opacity-70">⌘P finds a file by name across the project.</span>
+              <span className="opacity-70">{SHORTCUT_COPY.filesFindTip(platform)}</span>
             </div>
           )}
           {!error && activeFile && (
@@ -550,6 +552,7 @@ function FilePreview({
   const isImg = IMG_EXT.has(ext);
   const editable = file.kind === 'text';
   const editing = file.editing && editable;
+  const platform = useShortcutPlatform();
 
   return (
     <div className="h-full flex flex-col min-h-0" data-testid="file-preview">
@@ -563,7 +566,7 @@ function FilePreview({
             <button
               onClick={onToggleEdit}
               className={`text-[11px] px-2 py-0.5 rounded border ${editing ? 'border-[color:var(--accent)]/50 text-[color:var(--accent)]' : 'border-[--border] hover:bg-[--panel-strong]'}`}
-              title={editing ? (isMd ? 'Switch to preview' : 'Stop editing') : 'Edit (⌘S to save)'}
+              title={editing ? (isMd ? 'Switch to preview' : 'Stop editing') : SHORTCUT_COPY.filesEditTitle(platform)}
               data-testid="file-edit-toggle"
             >
               {editing ? (isMd ? 'Preview' : 'Done') : 'Edit'}
@@ -574,7 +577,7 @@ function FilePreview({
               className={`text-[11px] px-2 py-0.5 rounded ${
                 dirty ? 'pressable bg-[color:var(--accent)] text-[--accent-text] hover:brightness-110' : 'bg-[--panel] text-[--text-muted] cursor-not-allowed'
               }`}
-              title="Save (⌘S)"
+              title={SHORTCUT_COPY.filesSaveTitle(platform)}
               data-testid="file-save"
             >
               Save

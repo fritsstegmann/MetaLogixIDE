@@ -5,6 +5,7 @@
  */
 import type { Project } from '@shared/types';
 import type { ShortcutPlatform } from './shortcut-contract';
+import { SHORTCUT_COPY } from './shortcut-copy';
 
 /** Search mode, chosen by the first character of the query. */
 export type PaletteMode = 'all' | 'projects' | 'commands' | 'files';
@@ -176,9 +177,11 @@ export const PALETTE_COPY = {
     { prefix: '#', label: 'projects' },
     { prefix: '>', label: 'commands' },
   ],
-  statusHintKey: '⌘K',
+  /** Mac value, kept for existing callers; components use `SHORTCUT_COPY.statusHintKey(platform)`. */
+  statusHintKey: SHORTCUT_COPY.statusHintKey('mac'),
   statusHintText: 'command palette',
-  statusHintLabel: 'Open command palette (⌘K)',
+  /** Mac value, kept for existing callers; components use `SHORTCUT_COPY.statusHintLabel(platform)`. */
+  statusHintLabel: SHORTCUT_COPY.statusHintLabel('mac'),
   commandFailed: 'Command failed',
 } as const;
 

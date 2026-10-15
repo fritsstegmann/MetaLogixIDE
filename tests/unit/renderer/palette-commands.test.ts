@@ -3,7 +3,7 @@ import { buildPaletteCommands, type PaletteCommandDeps } from '@renderer/palette
 import { PALETTE_COPY, type PaletteCommand } from '@renderer/command-palette-contract';
 import { SETTINGS_NAV_ITEMS } from '@renderer/components/settings/nav-icons';
 
-type DepFn = Exclude<keyof PaletteCommandDeps, 'hasProject' | 'sidebarOpen'>;
+type DepFn = Exclude<keyof PaletteCommandDeps, 'hasProject' | 'sidebarOpen' | 'platform'>;
 
 function deps(over: Partial<PaletteCommandDeps> = {}) {
   const fns = {
@@ -165,5 +165,44 @@ describe('buildPaletteCommands', () => {
     const without = buildPaletteCommands(deps({ hasProject: false }).deps).map((c) => c.id);
     for (const id of NEEDS_PROJECT) expect(without, id).not.toContain(id);
     expect(without).toHaveLength(withProject.length - NEEDS_PROJECT.length);
+  });
+});
+
+const GLYPHS = /[⌘⇧⌥⌃↩⏎]/;
+
+/** Every hinted command and its Linux label (AC6). */
+const LINUX_HINTS: ReadonlyArray<readonly [string, string]> = [
+  ['nav.find-file', 'Ctrl+P'],
+  ['nav.find-in-project', 'Ctrl+Shift+F'],
+  ['nav.scrollback-search', 'Ctrl+Shift+O'],
+  ['shell.prompts', 'Ctrl+Shift+K'],
+  ['view.sidebar', 'Ctrl+B'],
+  ['view.help', 'Ctrl+/'],
+  ['proj.new', 'Ctrl+Shift+N'],
+  ['term.new', 'Ctrl+T'],
+  ['term.new-window', 'Ctrl+Shift+T'],
+  ['shell.find', 'Ctrl+F'],
+  ['shell.zoom.in', 'Ctrl+='],
+  ['shell.zoom.out', 'Ctrl+-'],
+  ['shell.zoom.reset', 'Ctrl+0'],
+  ['app.settings', 'Ctrl+,'],
+];
+
+describe('buildPaletteCommands on Linux (AC6)', () => {
+  it.each(LINUX_HINTS)('hints %s as %s', (id, hint) => {
+    expect(byId(buildPaletteCommands({ ...deps().deps, platform: 'other' }), id).hint).toBe(hint);
+  });
+
+  it('carries no Mac glyph in any hint and hints exactly the same commands as on mac', () => {
+    const linux = buildPaletteCommands({ ...deps().deps, platform: 'other' });
+    expect(linux.filter((c) => c.hint && GLYPHS.test(c.hint)).map((c) => c.id)).toEqual([]);
+    const hinted = (list: readonly PaletteCommand[]) => list.filter((c) => c.hint).map((c) => c.id);
+    expect(hinted(linux)).toEqual(hinted(buildPaletteCommands({ ...deps().deps, platform: 'mac' })));
+    expect(hinted(linux).sort()).toEqual(LINUX_HINTS.map(([id]) => id).sort());
+  });
+
+  it('keeps today’s glyph hints when told mac explicitly (AC7)', () => {
+    const list = buildPaletteCommands({ ...deps().deps, platform: 'mac' });
+    for (const [id, , , hint] of LEGACY) expect(byId(list, id).hint, id).toBe(hint);
   });
 });

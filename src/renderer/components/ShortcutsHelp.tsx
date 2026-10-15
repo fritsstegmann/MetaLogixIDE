@@ -3,38 +3,87 @@ import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
 import { MODAL_CLASSES } from '@renderer/modal-glass';
 import { ModalFrame } from './ModalFrame';
 import { XIcon } from './shell-icons';
+import { SHORTCUTS, type ShortcutDef, type ShortcutKeyLike, type ShortcutPlatform } from '@renderer/shortcut-contract';
+import { formatShortcut } from '@renderer/shortcut-format';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
+import { routeTerminalKey } from '@renderer/terminal-keys';
 
 interface ShortcutRow {
   /** The shortcut first, then any alternatives that do the same thing. */
-  readonly keys: readonly string[];
+  readonly keys: readonly ShortcutDef[];
   readonly label: string;
 }
 
 const SHORTCUT_GROUPS: ReadonlyArray<{ readonly title: string; readonly rows: readonly ShortcutRow[] }> = [
   { title: 'Go', rows: [
-    { keys: ['⌘K', '⌘⇧P'], label: 'Command palette' },
-    { keys: ['⌘P'], label: 'Find file in project' },
-    { keys: ['⌘⇧F'], label: 'Find in project' },
+    { keys: [SHORTCUTS.palette, SHORTCUTS.paletteCommands], label: 'Command palette' },
+    { keys: [SHORTCUTS.findFile], label: 'Find file in project' },
+    { keys: [SHORTCUTS.findInProject], label: 'Find in project' },
   ] },
   { title: 'Views', rows: [
-    { keys: ['⌘B'], label: 'Toggle sidebar' },
-    { keys: ['⌘,'], label: 'Settings' },
-    { keys: ['⌘/'], label: 'This cheat sheet' },
+    { keys: [SHORTCUTS.sidebar], label: 'Toggle sidebar' },
+    { keys: [SHORTCUTS.settings], label: 'Settings' },
+    { keys: [SHORTCUTS.help], label: 'This cheat sheet' },
   ] },
   { title: 'Project', rows: [
-    { keys: ['⌘⇧N'], label: 'New project' },
-    { keys: ['⌘T'], label: 'New terminal' },
-    { keys: ['⌘⇧T'], label: 'New terminal in a new window' },
+    { keys: [SHORTCUTS.newProject], label: 'New project' },
+    { keys: [SHORTCUTS.newTerminal], label: 'New terminal' },
+    { keys: [SHORTCUTS.newTerminalWindow], label: 'New terminal in a new window' },
   ] },
   { title: 'Shell', rows: [
-    { keys: ['⌘F'], label: 'Find in terminal' },
-    { keys: ['⌘⇧O'], label: 'Search all shells' },
-    { keys: ['⌘⇧K'], label: 'Prompt library' },
-    { keys: ['⌘='], label: 'Zoom in' },
-    { keys: ['⌘-'], label: 'Zoom out' },
-    { keys: ['⌘0'], label: 'Reset zoom' },
+    { keys: [SHORTCUTS.findInTerminal], label: 'Find in terminal' },
+    { keys: [SHORTCUTS.scrollbackSearch], label: 'Search all shells' },
+    { keys: [SHORTCUTS.prompts], label: 'Prompt library' },
+    { keys: [SHORTCUTS.zoomIn], label: 'Zoom in' },
+    { keys: [SHORTCUTS.zoomOut], label: 'Zoom out' },
+    { keys: [SHORTCUTS.zoomReset], label: 'Reset zoom' },
   ] },
 ];
+
+/** The keydown a definition produces off mac, so terminal routing can say who owns it. */
+function keyEventFor(def: ShortcutDef): ShortcutKeyLike {
+  return {
+    type: 'keydown',
+    key: def.shift ? def.key.toUpperCase() : def.key.toLowerCase(),
+    ctrlKey: !!(def.mod || def.ctrl),
+    metaKey: false,
+    shiftKey: !!def.shift,
+    altKey: !!def.alt,
+  };
+}
+
+/** True when the shell, not the app, gets this shortcut while a terminal is focused off mac. */
+const goesToShell = (def: ShortcutDef): boolean => routeTerminalKey(keyEventFor(def), 'other') === 'shell';
+
+/** "A, B and C" */
+function listOf(items: readonly string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** One shortcut chip; off mac, a shell-owned key also carries a visible marker and a screen-reader note. */
+function ShortcutKey({ def, platform }: { readonly def: ShortcutDef; readonly platform: ShortcutPlatform }): React.JSX.Element {
+  const label = formatShortcut(def, platform);
+  if (platform === 'mac' || !goesToShell(def)) return <kbd>{label}</kbd>;
+  return (
+    <span data-terminal-shell="true" className="inline-flex items-start">
+      <kbd>{label}</kbd>
+      <span aria-hidden="true" className="text-[10px] leading-none">*</span>
+      <span className="sr-only">, goes to the shell while a terminal is focused</span>
+    </span>
+  );
+}
+
+/** Off-mac note naming every shell-owned shortcut (sidebar backslash included) and the terminal-safe palette key. */
+function TerminalNote(): React.JSX.Element {
+  const shellKeys = [...SHORTCUT_GROUPS.flatMap((g) => g.rows.flatMap((r) => r.keys)), SHORTCUTS.sidebarAlt]
+    .filter(goesToShell)
+    .map((def) => formatShortcut(def, 'other'));
+  return (
+    <p data-testid="shortcuts-terminal-note" className="px-5 pb-4 text-[11px] text-[--modal-text-muted]">
+      <span aria-hidden="true">* </span>In a terminal, {listOf(shellKeys)} go to the shell. Use {formatShortcut(SHORTCUTS.paletteCommands, 'other')} for the command palette.
+    </p>
+  );
+}
 
 interface ShortcutsHelpProps {
   readonly open: boolean;
@@ -42,10 +91,12 @@ interface ShortcutsHelpProps {
 }
 
 /**
- * Keyboard shortcut cheat sheet (⌘/), on the shared modal frame and glass sheet. Each row is a
- * dt/dd pair: the label, then the shortcut and its alternatives. A click on the scrim, the close
- * button or Escape (handled by App) calls `onClose`. While open the dialog holds focus (Tab wraps
- * inside it) and gives it back to the opener on close.
+ * Keyboard shortcut cheat sheet (⌘/, Ctrl+/ off mac) on the shared modal frame and glass sheet,
+ * labelled in the platform's notation. Off mac it stars the shortcuts the shell keeps while a
+ * terminal is focused and explains them in a note (AC13). Each row is a dt/dd pair: the label,
+ * then the shortcut and its alternatives. A click on the scrim, the close button or Escape
+ * (handled by App) calls `onClose`. While open the dialog holds focus (Tab wraps inside it) and
+ * gives it back to the opener on close.
  */
 export function ShortcutsHelp({ open, onClose }: ShortcutsHelpProps): React.JSX.Element | null {
   return open ? <ShortcutsSheet onClose={onClose} /> : null;
@@ -55,6 +106,7 @@ function ShortcutsSheet({ onClose }: Pick<ShortcutsHelpProps, 'onClose'>): React
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const onKeyDown = useDialogFocus(panelRef);
+  const platform = useShortcutPlatform();
   return (
     <ModalFrame testId="shortcuts-help" tier="modal" motion="none" layerClassName="flex items-center justify-center" onDismiss={onClose}>
       <div
@@ -86,13 +138,16 @@ function ShortcutsSheet({ onClose }: Pick<ShortcutsHelpProps, 'onClose'>): React
                 {g.rows.map((row) => (
                   <div key={row.label} className="flex items-center justify-between gap-4 text-sm">
                     <dt className="text-[--modal-text-muted]">{row.label}</dt>
-                    <dd className="flex items-center gap-1">{row.keys.map((k) => <kbd key={k}>{k}</kbd>)}</dd>
+                    <dd className="flex items-center gap-1">
+                      {row.keys.map((def) => <ShortcutKey key={formatShortcut(def, platform)} def={def} platform={platform} />)}
+                    </dd>
                   </div>
                 ))}
               </dl>
             </section>
           ))}
         </div>
+        {platform !== 'mac' && <TerminalNote />}
         <div className="px-4 py-2 border-t border-[--modal-hairline] text-[11px] text-[--modal-text-muted] text-right">
           <kbd>Esc</kbd> to close
         </div>

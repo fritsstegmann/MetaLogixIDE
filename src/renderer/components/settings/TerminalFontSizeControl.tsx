@@ -2,6 +2,8 @@ import { useEffect, useId, useState, type JSX, type KeyboardEvent } from 'react'
 import { TERMINAL_FONT_SIZE } from '@shared/terminal-font-size';
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
 import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { NUMBER_FIELD_CLASS, SettingRow } from '@renderer/components/settings/primitives';
 import { initialDraft, onCommit, onExternalUpdate, onInput, onStep, type DraftState } from '@renderer/components/settings/font-size-draft';
 
@@ -23,6 +25,7 @@ function StepButton({ label, glyph, onPress }: { readonly label: string; readonl
 /** Settings row for the one shared integrated-terminal font size: a 9..28 px number field, flanked by explicit "−"/"+" stepper buttons, with a "px" readout, named "Terminal font size". AC2 (amended): typed text never saves while typing, only on blur or Enter (clamped if out of range, reverted to the saved value if empty, non-numeric or non-integer); the stepper buttons and ArrowUp/ArrowDown on the field save immediately, stepping from an unsaved typed draft when one is present. The native spinner is hidden so there is exactly one way to step. Follows the shared size (keyboard zoom, other windows, or a reverted failed save) while the field holds no uncommitted typed edit. */
 export function TerminalFontSizeControl(): JSX.Element {
   const { size, setSize } = useTerminalFontSize();
+  const platform = useShortcutPlatform();
   const id = useId();
   const [state, setState] = useState<DraftState>(() => initialDraft(size));
 
@@ -49,7 +52,7 @@ export function TerminalFontSizeControl(): JSX.Element {
   }
 
   return (
-    <SettingRow label={FONT_COPY.terminalSizeLabel} hint={FONT_COPY.terminalSizeHint} htmlFor={id}>
+    <SettingRow label={FONT_COPY.terminalSizeLabel} hint={SHORTCUT_COPY.terminalSizeHint(platform)} htmlFor={id}>
       <div className="flex items-center gap-2">
         <StepButton label="Decrease terminal font size" glyph="−" onPress={() => step('out')} />
         <input

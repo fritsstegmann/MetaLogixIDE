@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FONT_COPY, FONT_TEST_IDS } from '@renderer/fonts/font-contract';
+import { ShortcutPlatformContext } from '@renderer/shortcut-platform';
 
 const hookState: { size: number; ready: boolean; setSize: (n: number) => void } = {
   size: 14,
@@ -55,5 +56,18 @@ describe('TerminalFontSizeControl markup', () => {
     const html = renderToStaticMarkup(<TerminalFontSizeControl />);
     expect(/<button[^>]*type="button"[^>]*aria-label="Decrease terminal font size"[^>]*>/.test(html)).toBe(true);
     expect(/<button[^>]*type="button"[^>]*aria-label="Increase terminal font size"[^>]*>/.test(html)).toBe(true);
+  });
+});
+
+describe('TerminalFontSizeControl hint on Linux (AC6)', () => {
+  it('names the Ctrl zoom chords and no Mac glyph', async () => {
+    const { TerminalFontSizeControl } = await import('@renderer/components/settings/TerminalFontSizeControl');
+    const html = renderToStaticMarkup(
+      <ShortcutPlatformContext.Provider value="other">
+        <TerminalFontSizeControl />
+      </ShortcutPlatformContext.Provider>,
+    );
+    expect(html).toContain('Every terminal uses this size. Ctrl+= / Ctrl+- / Ctrl+0 also change it.');
+    expect(html).not.toMatch(/[⌘⇧⌥⌃↩⏎]/);
   });
 });

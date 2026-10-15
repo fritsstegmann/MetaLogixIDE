@@ -12,12 +12,15 @@ import { PlusIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
 import type { ScopedCliProfile } from '@shared/project-default-agent';
 import type { Project } from '@shared/types';
 import { PROJECT_SETTINGS_COPY } from '@renderer/project-settings-contract';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
 const ompIconUrl = new URL('../assets/cli-icons/omp.svg', import.meta.url).href;
 
 
-function NewShellMenu({
+/** The add-shell menu: saved CLI profiles with a default-star toggle, a custom-command form and the plain terminal row. */
+export function NewShellMenu({
   projectId,
   defaultCliName,
   onLaunchProfile,
@@ -36,6 +39,7 @@ function NewShellMenu({
   onDefaultChanged: (project: Project) => void;
   onClose: () => void;
 }) {
+  const platform = useShortcutPlatform();
   const [profiles, setProfiles] = useState<ScopedCliProfile[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState('');
@@ -235,7 +239,7 @@ function NewShellMenu({
             <span className="w-5 text-center text-base leading-none">⌨️</span>
             <span>Terminal</span>
           </span>
-          <span className="opacity-60 font-mono">⌘T</span>
+          <span className="opacity-60 font-mono">{SHORTCUT_COPY.newTerminalHint(platform)}</span>
         </button>
       </div>
     </m.div>
@@ -273,6 +277,7 @@ export function ShellTabsBar({
   onToggleSplit: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const platform = useShortcutPlatform();
   return (
     <div className="flex items-center gap-1 pl-2 pr-[14px] py-1 text-xs shrink-0 overflow-visible">
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
@@ -309,7 +314,7 @@ export function ShellTabsBar({
           in its own window instead, use the popout icon in the top toolbar
           (it moves the currently-active tab out). */}
       <div className="relative shrink-0">
-        <Tooltip label="Add a shell" shortcut="⌘T">
+        <Tooltip label="Add a shell" shortcut={SHORTCUT_COPY.newTerminalHint(platform)}>
           <button
             onClick={() => setMenuOpen((v) => !v)}
             className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"

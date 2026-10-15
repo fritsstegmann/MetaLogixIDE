@@ -1,4 +1,5 @@
 import type { TerminalFontWeight } from '@shared/terminal-font-weight';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
 
 export const UI_FONT_CSS_PROPERTY = '--metaide-ui-font-family';
 
@@ -45,7 +46,8 @@ export const FONT_COPY = {
   unavailable: 'Font is not available on this computer.',
   unknown: 'Font availability is unknown.',
   terminalSizeLabel: 'Terminal font size',
-  terminalSizeHint: 'Every terminal uses this size. ⌘= / ⌘- / ⌘0 also change it.',
+  /** Mac value, kept for existing callers; components use `SHORTCUT_COPY.terminalSizeHint(platform)`. */
+  terminalSizeHint: SHORTCUT_COPY.terminalSizeHint('mac'),
   terminalSizeUnit: 'px',
   terminalSizeSaveFailed: 'Could not save the terminal font size. Your previous size remains active.',
   terminalWeightLabel: 'Terminal font weight',

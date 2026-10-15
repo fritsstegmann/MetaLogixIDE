@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
+import { isCommitShortcut } from '@renderer/app-keys';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { gitStatusTextClass } from '@renderer/git-status-style';
 import { unstagePaths } from '@renderer/git-unstage-paths';
 import { DIFF_COPY } from '@renderer/diff-tab-copy';
@@ -25,6 +28,7 @@ interface Status {
  * it covers the 80% of git you'd otherwise `git add` in the terminal for.
  */
 export function GitPanel({ projectId }: { projectId: number | null }) {
+  const platform = useShortcutPlatform();
   const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -149,8 +153,8 @@ export function GitPanel({ projectId }: { projectId: number | null }) {
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void commit(); }}
-          placeholder="Commit message — ⌘Enter to commit"
+          onKeyDown={(e) => { if (isCommitShortcut(e, platform)) void commit(); }}
+          placeholder={SHORTCUT_COPY.commitPlaceholder(platform)}
           rows={2}
           className="w-full resize-none bg-[--panel-strong] border border-[--border] rounded-md px-2.5 py-1.5 text-xs outline-none focus:ring-1 focus:ring-[--accent]/60"
           data-testid="git-message"

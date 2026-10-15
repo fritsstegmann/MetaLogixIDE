@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 
 export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks';
 
@@ -15,14 +17,16 @@ interface Props {
   taskCount?: number;
 }
 
+/** The far-left icon rail: sidebar toggle (tooltip names its platform shortcut), then the four views with their count badges. */
 export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
+  const platform = useShortcutPlatform();
   return (
     <nav
       className="w-14 shrink-0 h-full flex flex-col items-center pt-1 pb-3 gap-1.5"
       data-testid="activity-bar"
     >
       <ABButton
-        label="Toggle sidebar (⌘B)"
+        label={SHORTCUT_COPY.toggleSidebarLabel(platform)}
         onClick={onToggleSidebar}
         active={false}
         data-testid="ab-toggle-sidebar"

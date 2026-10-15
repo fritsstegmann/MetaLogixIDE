@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { classifyDialogKey, nextFocusIndex } from '@renderer/components/permission-mode-keys';
 
-const key = (k: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) => ({
+const key = (
+  k: string,
+  mods: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
+) => ({
   key: k,
   metaKey: false,
   ctrlKey: false,
@@ -29,6 +32,15 @@ describe('classifyDialogKey', () => {
     (k) => {
       expect(classifyDialogKey(key(k, { metaKey: true }))).toBe('isolate');
       expect(classifyDialogKey(key(k, { ctrlKey: true, shiftKey: true }))).toBe('isolate');
+    },
+  );
+
+  it.each(['k', 'p', 'P', 'b', 't', 'r', 'f', '\\', ',', '/', 'Enter', 'Tab', 'Escape'])(
+    'isolates %s with Cmd alone and with Ctrl alone, whatever the platform (AC4: no platform input)',
+    (k) => {
+      expect(classifyDialogKey(key(k, { metaKey: true }))).toBe('isolate');
+      expect(classifyDialogKey(key(k, { ctrlKey: true }))).toBe('isolate');
+      expect(classifyDialogKey(key(k, { metaKey: true, ctrlKey: true }))).toBe('isolate');
     },
   );
 

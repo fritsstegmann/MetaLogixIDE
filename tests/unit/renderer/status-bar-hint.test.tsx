@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { isValidElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PALETTE_COPY, PALETTE_TESTIDS } from '@renderer/command-palette-contract';
+import { ShortcutPlatformContext } from '@renderer/shortcut-platform';
 import type { Project } from '@shared/types';
 
 vi.mock('@renderer/api', () => ({ api: { invoke: vi.fn(async () => ({})), on: vi.fn(() => () => undefined) } }));
@@ -63,5 +64,22 @@ describe('StatusBar palette hint', () => {
     expect(onClick).toBeTypeOf('function');
     onClick?.();
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('StatusBar palette hint on Linux (AC6)', () => {
+  function renderLinux(): string {
+    return renderToStaticMarkup(
+      <ShortcutPlatformContext.Provider value="other">
+        <StatusBar project={project} aliveCount={2} onOpenPalette={() => undefined} />
+      </ShortcutPlatformContext.Provider>,
+    );
+  }
+
+  it('reads "Ctrl+K command palette" with the accessible name "Open command palette (Ctrl+K)"', () => {
+    const button = hintButton(renderLinux());
+    expect(text(button)).toBe('Ctrl+K command palette');
+    expect(button).toContain('aria-label="Open command palette (Ctrl+K)"');
+    expect(button).not.toMatch(/[⌘⇧⌥⌃↩⏎]/);
   });
 });
