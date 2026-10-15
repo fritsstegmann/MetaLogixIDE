@@ -174,6 +174,16 @@ describe('PtyManager output coalescing (H3)', () => {
     pty!.emitData('boot banner');
     expect(mgr.getEarlyBuffer(1, 0)).toBe('boot banner');
   });
+
+  it('clears a port announced just before Ctrl-C, even though the flush is still pending (L1)', async () => {
+    const { mgr, handles: [pty], events } = await setup();
+    pty!.emitData('Local: http://localhost:3000\r\n');
+    mgr.write(1, 0, '\x03');
+    await vi.advanceTimersByTimeAsync(50);
+    const portsEvents = events.filter((e) => e.type === 'ports').map((e) => e.ev as { ports: number[] });
+    expect(portsEvents.some((e) => e.ports.includes(3000))).toBe(true);
+    expect(portsEvents[portsEvents.length - 1]).toEqual({ projectId: 1, shellIndex: 0, ports: [] });
+  });
 });
 
 /** A line-structured block of `size` characters. */
@@ -261,5 +271,15 @@ describe('RollingScrollback (H1)', () => {
     const small = Math.max(timeAppends(4 * 1024), 0.5);
     const large = timeAppends(4 * 1024 * 1024);
     expect(large / small).toBeLessThan(10);
+  });
+
+  it('does not retain the character data of chunks trimmed off the front (M1)', () => {
+    const cap = 1024;
+    const sb = new RollingScrollback(cap);
+    const chunk = `${'x'.repeat(64)}\n`;
+    for (let i = 0; i < 2000; i++) sb.append(chunk);
+    const chunks = (sb as unknown as { chunks: string[] }).chunks;
+    const retainedChars = chunks.reduce((sum, c) => sum + c.length, 0);
+    expect(retainedChars).toBeLessThanOrEqual(cap + chunk.length);
   });
 });

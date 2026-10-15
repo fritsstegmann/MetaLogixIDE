@@ -154,7 +154,13 @@ export class PtyManager extends EventEmitter {
       e.cmdNotified = false;
     }
     e.pty.write(data);
-    if (data.includes('\x03')) this.clearPorts(e);
+    // A pending, not-yet-flushed chunk can be announcing a port right now; flush it
+    // so the port is scanned and emitted before Ctrl-C clears it, or the next flush
+    // re-adds a port the user just interrupted.
+    if (data.includes('\x03')) {
+      this.flushOutput(e);
+      this.clearPorts(e);
+    }
     this.emit('input', { projectId, shellIndex, data });
   }
 
@@ -368,6 +374,7 @@ export class RollingScrollback {
     this.length += kept.length;
     while (this.length - this.chunks[this.head]!.length >= this.cap) {
       this.length -= this.chunks[this.head]!.length;
+      this.chunks[this.head] = '';
       this.head++;
       this.dropped = true;
     }
