@@ -13,7 +13,7 @@ interface Entry {
   earlyBuffer: string;   // captured output within the first 3s
   bufferOpen: boolean;
   /** Rolling raw output (most recent ≤256 KiB), used by scrollback search. Viewports replay `getSnapshot` instead. */
-  scrollback: string;
+  scrollback: RollingScrollback;
   /** Headless terminal fed every output byte; the source of `getSnapshot`. */
   screen: ScreenMirror;
   /**
@@ -28,6 +28,9 @@ interface Entry {
   cmdNotified: boolean;
   /** Ports the shell announced via "listening on 3000" / "Local: http://…" etc. */
   ports: Set<number>;
+  /** Output received but not yet emitted; flushed as one `data` event per OUTPUT_FLUSH_MS. */
+  pending: string[];
+  flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const key = (p: number, s: number) => `${p}:${s}`;
@@ -38,6 +41,8 @@ const DONE_MIN_MS  = 8_000;   // ignore commands shorter than 8s
 const DONE_IDLE_MS = 1_200;   // no data for 1.2s ⇒ "command is done"
 const DEFAULT_COLS = 100;
 const DEFAULT_ROWS = 30;
+/** Coalescing window for PTY output: under one 60 Hz frame, and the same 5 ms VS Code's terminal data bufferer uses. */
+const OUTPUT_FLUSH_MS = 5;
 
 /** Regex bank for port-detection. Each match's group 1 is the port number. */
 const PORT_PATTERNS: RegExp[] = [
@@ -97,41 +102,18 @@ export class PtyManager extends EventEmitter {
     const entry: Entry = {
       projectId, shellIndex, pty, pid: pty.pid, cols, rows,
       startedAt: Date.now(), earlyBuffer: '', bufferOpen: true,
-      scrollback: '', screen: new ScreenMirror(cols, rows),
+      scrollback: new RollingScrollback(), screen: new ScreenMirror(cols, rows),
       cmdStartedAt: null, lastDataAt: Date.now(), cmdNotified: false,
       ports: new Set<number>(),
+      pending: [], flushTimer: null,
     };
     this.entries.set(k, entry);
-    pty.onData((data: string) => {
-      entry.lastDataAt = Date.now();
-      // Scan for freshly-announced ports (dev servers, docker binds, etc.).
-      // Reports go via the `ports` event so the renderer can update chips.
-      let portDirty = false;
-      for (const re of PORT_PATTERNS) {
-        re.lastIndex = 0;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(data)) !== null) {
-          const port = Number(m[1]);
-          if (port >= MIN_PORT && port <= MAX_PORT && !entry.ports.has(port)) {
-            entry.ports.add(port);
-            portDirty = true;
-          }
-        }
-      }
-      if (portDirty) {
-        this.emit('ports', { projectId, shellIndex, ports: Array.from(entry.ports) });
-      }
-      if (entry.bufferOpen && entry.earlyBuffer.length < EARLY_BUFFER_CAP) {
-        entry.earlyBuffer += data;
-      }
-      entry.scrollback = appendScrollback(entry.scrollback, data);
-      this.emit('data', { projectId, shellIndex, data });
-      entry.screen.write(data);
-    });
+    pty.onData((data: string) => this.receive(entry, data));
     setTimeout(() => { entry.bufferOpen = false; entry.earlyBuffer = ''; }, EARLY_BUFFER_MS);
     pty.onExit(({ exitCode }: { exitCode: number }) => {
       const captured = entry.earlyBuffer;
       const uptimeMs = Date.now() - entry.startedAt;
+      this.flushOutput(entry);
       this.releaseEntry(k, entry);
       this.emit('exit', { projectId, shellIndex, code: exitCode, uptimeMs, earlyOutput: captured });
     });
@@ -144,7 +126,7 @@ export class PtyManager extends EventEmitter {
 
   /** Rolling raw output (most recent ≤256 KiB) for text search. Empty if the shell isn't alive. Not a replay source: use `getSnapshot`. */
   getScrollback(projectId: number, shellIndex: number): string {
-    return this.entries.get(key(projectId, shellIndex))?.scrollback ?? '';
+    return this.entries.get(key(projectId, shellIndex))?.scrollback.read() ?? '';
   }
 
   /**
@@ -238,7 +220,7 @@ export class PtyManager extends EventEmitter {
     // Strip ANSI CSI/OSC sequences so styling doesn't hide the token.
     const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
     for (const e of this.entries.values()) {
-      const lines = e.scrollback.replace(ANSI, '').split('\n');
+      const lines = e.scrollback.read().replace(ANSI, '').split('\n');
       let hits = 0;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
@@ -285,8 +267,55 @@ export class PtyManager extends EventEmitter {
   async kill(projectId: number, shellIndex: number): Promise<void> {
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
+    this.flushOutput(e);
     e.pty.kill();
     this.releaseEntry(key(projectId, shellIndex), e);
+  }
+
+  /** Records one PTY chunk and schedules its flush; per-chunk work stays O(chunk). */
+  private receive(entry: Entry, data: string): void {
+    entry.lastDataAt = Date.now();
+    if (entry.bufferOpen && entry.earlyBuffer.length < EARLY_BUFFER_CAP) {
+      entry.earlyBuffer += data;
+    }
+    entry.pending.push(data);
+    entry.flushTimer ??= setTimeout(() => this.flushOutput(entry), OUTPUT_FLUSH_MS);
+  }
+
+  /**
+   * Emits the shell's pending output as one `'data'` event, after scanning it
+   * for ports and appending it to the scrollback, then feeds the headless
+   * terminal — so a snapshot never contains output a viewport has not been sent.
+   */
+  private flushOutput(entry: Entry): void {
+    if (entry.flushTimer) clearTimeout(entry.flushTimer);
+    entry.flushTimer = null;
+    if (entry.pending.length === 0) return;
+    const data = entry.pending.join('');
+    entry.pending = [];
+    this.scanPorts(entry, data);
+    entry.scrollback.append(data);
+    this.emit('data', { projectId: entry.projectId, shellIndex: entry.shellIndex, data });
+    entry.screen.write(data);
+  }
+
+  /** Records freshly announced ports (dev servers, docker binds, …) and emits `'ports'` when the set grew. */
+  private scanPorts(entry: Entry, data: string): void {
+    let portDirty = false;
+    for (const re of PORT_PATTERNS) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(data)) !== null) {
+        const port = Number(m[1]);
+        if (port >= MIN_PORT && port <= MAX_PORT && !entry.ports.has(port)) {
+          entry.ports.add(port);
+          portDirty = true;
+        }
+      }
+    }
+    if (portDirty) {
+      this.emit('ports', { projectId: entry.projectId, shellIndex: entry.shellIndex, ports: Array.from(entry.ports) });
+    }
   }
 
   /** Remove port announcements for a process that ended or was interrupted. */
@@ -316,21 +345,59 @@ export class PtyManager extends EventEmitter {
 }
 
 /**
- * Append PTY output to the raw rolling scrollback, keeping the most recent
- * ~256 KiB. The cut snaps to a line boundary and skips a dangling escape
- * fragment, because replaying a sequence cut mid-way (e.g. inside
- * `\x1b[38;5;208m`) renders garbage.
+ * Raw rolling PTY output, keeping the most recent ≤`cap` characters. Output
+ * is held as a chunk list with a running length, so `append` costs O(chunk)
+ * however full the buffer is; whole chunks drop off the front once the rest
+ * still covers `cap`. `read` joins once and snaps the cut to a line boundary,
+ * skipping a dangling escape fragment, because replaying a sequence cut
+ * mid-way (e.g. inside `\x1b[38;5;208m`) renders garbage.
  */
-function appendScrollback(scrollback: string, data: string): string {
-  const next = scrollback + data;
-  if (next.length <= SCROLLBACK_CAP) return next;
-  let cut = next.length - SCROLLBACK_CAP;
-  const nextNl = next.indexOf('\n', cut);
+export class RollingScrollback {
+  private chunks: string[] = [];
+  private head = 0;
+  private length = 0;
+  private dropped = false;
+
+  constructor(private readonly cap: number = SCROLLBACK_CAP) {}
+
+  /** Appends one piece of output. */
+  append(data: string): void {
+    const kept = data.length > this.cap ? data.slice(-this.cap) : data;
+    this.dropped ||= kept !== data;
+    this.chunks.push(kept);
+    this.length += kept.length;
+    while (this.length - this.chunks[this.head]!.length >= this.cap) {
+      this.length -= this.chunks[this.head]!.length;
+      this.head++;
+      this.dropped = true;
+    }
+    if (this.head > 1024 && this.head * 2 > this.chunks.length) {
+      this.chunks.splice(0, this.head);
+      this.head = 0;
+    }
+  }
+
+  /** The retained output, trimmed to `cap`; compacts the buffer to that string. */
+  read(): string {
+    const joined = this.chunks.slice(this.head).join('');
+    const excess = joined.length - this.cap;
+    const text = excess > 0 || this.dropped ? joined.slice(snapCut(joined, Math.max(0, excess))) : joined;
+    this.chunks = [text];
+    this.head = 0;
+    this.length = text.length;
+    this.dropped = false;
+    return text;
+  }
+}
+
+/** Moves a scrollback cut forward to the next line start, past any dangling escape fragment. */
+function snapCut(text: string, cut: number): number {
+  const nextNl = text.indexOf('\n', cut);
   if (nextNl > -1 && nextNl - cut < 8192) cut = nextNl + 1;
-  const window = next.slice(cut, cut + 32);
+  const window = text.slice(cut, cut + 32);
   if (window.includes('\x1b') && !/[A-Za-z]/.test(window)) {
-    const skipTo = next.indexOf('\n', cut);
+    const skipTo = text.indexOf('\n', cut);
     if (skipTo > -1 && skipTo - cut < 16384) cut = skipTo + 1;
   }
-  return next.slice(cut);
+  return cut;
 }
