@@ -181,6 +181,7 @@ describe('createTerminalKeyHandler', () => {
     const handler = createTerminalKeyHandler(h.deps);
     for (const e of [
       event(ctrl('f')),
+      event(ctrl('k')),
       event(ctrlShift('F')),
       event(ctrlShift('P')),
       event(ctrl('=')),
