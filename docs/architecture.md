@@ -34,6 +34,29 @@ runtime, not resumable terminals. Cleanup removes pinned and unpinned records
 but preserves projects and settings. Previous-run records cannot consume the
 keep-alive cap or block the first terminal after restart.
 
+### Main-process responsiveness
+
+The Electron main thread also pumps the window event loop. If it stays busy
+for about 2 s (macOS) or 5 s (GNOME), the OS reports the app as not
+responding. Work that runs on a timer or once per PTY chunk must therefore
+stay cheap and must never wait on a child process.
+
+- **PTY output is coalesced.** `PtyManager` buffers each shell's output and
+  emits one `data` event per shell every `OUTPUT_FLUSH_MS` (5 ms)
+  (`src/main/pty/manager.ts`). Each event becomes one `pty:data` send per
+  window. Pending output is flushed before the shell's `exit` event and on
+  kill, so no byte is lost or reordered.
+- **Scrollback append is O(chunk).** `RollingScrollback` keeps the raw
+  scrollback as a list of chunks with a running length and trims whole
+  chunks from the front. It joins the chunks and snaps the cut to a line
+  boundary only when `getScrollback` or `searchScrollback` reads it.
+- **Polled child processes are asynchronous.** `git:status`,
+  `git:panel-status`, `git:file-diff` and `git:diff-sides` run git through
+  the async `runGit` (`src/main/git/run-git.ts`). The `shells:live-stats`
+  sampler runs `ps` through async `execFile`. Git commands that the user
+  starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
+  use `spawnSync`; this is a known gap, recorded as a follow-up.
+
 ## Components
 
 ### Coding-agent CLI profiles
@@ -742,7 +765,7 @@ Staging and committing stay in the sidebar Git panel.
 |---|---|---|
 | Contract | `src/shared/ipc-contract.ts` | `GitChangeEntry`, `GitDiffKind`, `GitSideContent`, and the `git:panel-status`, `git:file-diff` and `git:diff-sides` channels. |
 | Logic | `src/shared/parse-git-panel-status.ts` | Parses `git status --porcelain=v1 -z` into staged, unstaged and untracked lists. Renames and copies carry `origPath`. A conflicted file goes into both lists. |
-| IO | `src/main/git/run-git.ts` | `runGit`: the only place that starts git for these channels. It adds the safety arguments and turns an output overflow or a timeout into a flag. It never returns partial output. |
+| IO | `src/main/git/run-git.ts` | `runGit`: the only place that starts git for these channels and for `git:status`. It runs git asynchronously through `execFile`, so a slow git never blocks the main thread. It adds the safety arguments and turns an output overflow or a timeout into a flag. It never returns partial output. |
 | Logic | `src/main/git/repo-path.ts` | `toRepoRelativePath` (lexical containment) and `assertWorktreeContained` (containment by real path of the parent folder). |
 | IO | `src/main/git/file-diff.ts` | `readFileDiff`: the unified diff of one entry, capped at 1 MiB (`GIT_DIFF_MAX_BYTES`). Used by the Git panel and by `readDiffSides`. |
 | IO | `src/main/git/diff-sides.ts` | `readDiffSides`: the diff plus the full old and new content of the file, each capped at 256 KiB (`HIGHLIGHT_MAX_BYTES`), for highlighting. |
@@ -942,8 +965,10 @@ clone. Two rules apply to `git:panel-status`, `git:file-diff` and
   content is read with `git cat-file blob`, which runs no textconv or
   filter.
 
-Known gaps, recorded as follow-ups: the app-wide `git:status` poll still
-runs a repository's `core.fsmonitor`. A repository's `filter.<name>.clean`
+The app-wide `git:status` poll also runs through `runGit`, so the same
+rules apply to it.
+
+Known gaps, recorded as follow-ups: a repository's `filter.<name>.clean`
 programs can still run during status, because git cannot turn them off
 for one command. `files:read` checks containment with a plain
 `startsWith` on the project path.
