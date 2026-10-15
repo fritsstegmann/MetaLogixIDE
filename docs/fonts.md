@@ -6,7 +6,7 @@ MetaLogix IDE has separate font preferences for application text and terminal te
 
 The UI font applies to navigation, labels, controls, chat prose, and rendered Markdown prose. Source editors, source previews, paths, keyboard shortcuts, and code spans keep the built-in monospace stack (`src/renderer/styles.css:413-415`, `src/renderer/components/FilesTab.tsx:698-720`).
 
-Keyboard hints take the mac modifier glyphs (`⌘ ⇧ ⌥ ⌃ ↩ ⏎ ⌫ ⎋`) from Lucida Grande, because Menlo draws them well below letter height. A `unicode-range` face restricts this to those glyphs, so letters in a hint stay monospace. On other platforms the face finds no local font and the monospace stack applies unchanged (`src/renderer/styles.css:850-862`).
+Keyboard hints take the mac modifier and arrow glyphs (`⌘ ⇧ ⌥ ⌃ ↩ ↑ ↓`) from Lucida Grande, because Menlo draws them well below letter height. A `unicode-range` face restricts this to those glyphs, so letters in a hint stay monospace. On other platforms the face finds no local font and the monospace stack applies unchanged (`src/renderer/styles.css:850-862`).
 
 ## Terminal font
 

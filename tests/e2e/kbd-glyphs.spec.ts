@@ -5,17 +5,17 @@ import { join } from 'node:path';
 import { PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 
 /**
- * Modifier glyphs in keyboard hints keep the proportions macOS draws them at. The status bar's
- * `⌘K` hint is the reference `kbd`: each glyph is drawn at 100px in a probe, once in the kbd's
- * computed font stack and once in `system-ui`, and its ink height relative to `K` in the kbd stack
- * must reach MIN_SHARE of the same ratio in the native UI font. Menlo, which the monospace stack
- * resolves to, draws ⌘ at 74% of `K` where the native font draws it at 103%.
+ * Modifier and arrow glyphs in keyboard hints keep the proportions macOS draws them at. The
+ * status bar's `⌘K` hint is the reference `kbd`: each glyph is drawn at 100px in a probe, once in
+ * the kbd's computed font stack and once in `system-ui`, and its ink height relative to `K` in the
+ * kbd stack must reach MIN_SHARE of the same ratio in the native UI font. Menlo, which the
+ * monospace stack resolves to, draws ⌘ at 74% of `K` where the native font draws it at 103%.
  */
 
 const PROBE_PX = 100;
-/** Share of the native glyph-to-`K` ratio a modifier must reach in the kbd stack. */
+/** Share of the native glyph-to-`K` ratio a hint glyph must reach in the kbd stack. */
 const MIN_SHARE = 0.9;
-const MODIFIERS = ['⌘', '⇧', '⌥', '↩'] as const;
+const GLYPHS = ['⌘', '⇧', '⌥', '↩', '↑', '↓'] as const;
 
 let app: ElectronApplication;
 let win: Page;
@@ -75,19 +75,19 @@ async function inkHeight(glyph: string, family?: string): Promise<number> {
   }, rect);
 }
 
-test('modifier glyphs in the kbd stack keep their native size relative to a capital letter', async () => {
+test('modifier and arrow glyphs in the kbd stack keep their native size relative to a capital letter', async () => {
   await expect(win.getByTestId(PALETTE_TESTIDS.statusHint).locator('kbd')).toBeVisible({ timeout: 10_000 });
   const kbdCapital = await inkHeight('K');
   const nativeCapital = await inkHeight('K', 'system-ui');
   expect(kbdCapital, 'positive control: K renders ink in the kbd stack').toBeGreaterThan(PROBE_PX * 0.5);
   expect(nativeCapital, 'positive control: K renders ink in system-ui').toBeGreaterThan(PROBE_PX * 0.5);
   const shares: Record<string, number> = {};
-  for (const glyph of MODIFIERS) {
+  for (const glyph of GLYPHS) {
     const kbdRatio = (await inkHeight(glyph)) / kbdCapital;
     const nativeRatio = (await inkHeight(glyph, 'system-ui')) / nativeCapital;
     shares[glyph] = Number((kbdRatio / nativeRatio).toFixed(2));
   }
-  for (const glyph of MODIFIERS) {
+  for (const glyph of GLYPHS) {
     expect(shares[glyph], `${glyph} kbd/native ratio share (${JSON.stringify(shares)})`).toBeGreaterThanOrEqual(MIN_SHARE);
   }
 });

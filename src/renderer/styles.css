@@ -847,13 +847,13 @@ input::placeholder, textarea::placeholder {
 .markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
 .markdown .math-error { color: color-mix(in oklab, var(--danger) 80%, var(--text)); }
 
-/* Keyboard hint chip. The monospace stack resolves to Menlo, which draws the mac modifier glyphs
- * well below letter height; this face takes only those glyphs from Lucida Grande, so letters stay
- * monospace. Off mac `local()` finds nothing and the stack is unchanged. */
+/* Keyboard hint chip. The monospace stack resolves to Menlo, which draws the mac modifier and
+ * arrow glyphs well below letter height; this face takes only those glyphs from Lucida Grande, so
+ * letters stay monospace. Off mac `local()` finds nothing and the stack is unchanged. */
 @font-face {
   font-family: "Kbd Modifier Glyphs";
   src: local("Lucida Grande"), local("LucidaGrande");
-  unicode-range: U+21A9, U+21E7, U+2303, U+2318, U+2325, U+232B, U+238B, U+23CE;
+  unicode-range: U+2191, U+2193, U+21A9, U+21E7, U+2303, U+2318, U+2325;
 }
 kbd {
   display: inline-block;
