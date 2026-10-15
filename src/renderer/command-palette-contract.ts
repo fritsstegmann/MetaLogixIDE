@@ -4,6 +4,7 @@
  * every consumer follows; never restate a string or test id in a consumer.
  */
 import type { Project } from '@shared/types';
+import type { ShortcutPlatform } from './shortcut-contract';
 
 /** Search mode, chosen by the first character of the query. */
 export type PaletteMode = 'all' | 'projects' | 'commands' | 'files';
@@ -124,7 +125,7 @@ export interface PaletteKeyEvent {
   readonly altKey: boolean;
 }
 
-export type PaletteKeyActionFn = (e: PaletteKeyEvent, isOpen: boolean) => PaletteKeyAction;
+export type PaletteKeyActionFn = (e: PaletteKeyEvent, isOpen: boolean, platform?: ShortcutPlatform) => PaletteKeyAction;
 
 export interface CommandPaletteProps {
   /** `null` = closed. */

@@ -6,6 +6,8 @@ import 'electron-log/preload';
 import type { IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '../shared/ipc-contract';
 
 const api = {
+  /** Host OS (`process.platform`), read synchronously by the renderer for shortcut routing and labels. */
+  platform: process.platform,
   invoke<C extends IpcChannelName>(channel: C, req: IpcRequest<C>): Promise<IpcResponse<C>> {
     return ipcRenderer.invoke(channel, req) as Promise<IpcResponse<C>>;
   },
