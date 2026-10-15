@@ -21,6 +21,10 @@ import { ShortcutsHelp } from './components/ShortcutsHelp';
 import type { PaletteRequest, PaletteSeed } from './command-palette-contract';
 import { buildPaletteCommands } from './palette-commands';
 import { paletteKeyAction } from './palette-keys';
+import { appShortcutAction } from './app-keys';
+import type { AppShortcutAction } from './shortcut-contract';
+import { SHORTCUT_COPY } from './shortcut-copy';
+import { useShortcutPlatform } from './shortcut-platform';
 import { ProjectSearch } from './components/ProjectSearch';
 import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
@@ -118,6 +122,7 @@ export function App() {
 }
 
 function MainApp() {
+  const platform = useShortcutPlatform();
   // App-boot auto-login: if the user opted into "Remember me" in a previous
   // session, the OS keychain has their password. Try the silent auto-login
   // once at startup so the chat unread badge, event stream, and rail state
@@ -365,7 +370,7 @@ function MainApp() {
     popOutShell: async () => {
       if (selected) await api.invoke('windows:popout-shell', { projectId: selected.id, shellIndex: 0 });
     },
-    findInTerminal: () => toast('Focus the shell first, then ⌘F', { kind: 'info' }),
+    findInTerminal: () => toast(SHORTCUT_COPY.findInTerminalToast(platform), { kind: 'info' }),
     openNewTerminal,
     setThemeMode,
     setThemePalette,
@@ -373,7 +378,8 @@ function MainApp() {
       if (section) setSettingsSection(section);
       setSettingsOpen(true);
     },
-  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette]);
+    platform,
+  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, platform]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -493,9 +499,20 @@ function MainApp() {
   }, [setActiveShellIndexFor, setMainTab]);
 
   useEffect(() => {
+    const runAppShortcut: Readonly<Record<AppShortcutAction, () => void>> = {
+      'toggle-sidebar': () => toggleSidebar(false),
+      'open-settings': () => setSettingsOpen(true),
+      'new-project': () => setNewProjectOpen(true),
+      'project-search': () => setSearchOpen(true),
+      prompts: () => setPromptsOpen(true),
+      'scrollback-search': () => setScrollbackOpen(true),
+      'toggle-help': () => setHelpOpen((v) => !v),
+      'new-terminal': () => openNewTerminalRef.current(false),
+      'new-terminal-window': () => openNewTerminalRef.current(true),
+    };
     function onKey(e: KeyboardEvent) {
       if (shortcutsBlockedRef.current) return;
-      const palette = paletteKeyAction(e, paletteOpenRef.current);
+      const palette = paletteKeyAction(e, paletteOpenRef.current, platform);
       if (palette.kind === 'swallow') return;
       if (palette.kind === 'toggle' || palette.kind === 'open') {
         e.preventDefault();
@@ -504,23 +521,13 @@ function MainApp() {
         else openPalette('');
         return;
       }
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === '\\')                         { e.preventDefault(); toggleSidebar(false); }
-      if (mod && e.key === 'b' && !e.shiftKey && !e.altKey) { e.preventDefault(); toggleSidebar(false); }
-      if (mod && e.key === ',')                          { e.preventDefault(); setSettingsOpen(true); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); setNewProjectOpen(true); }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); setSearchOpen(true); }
-      // ⌘⇧K → prompt library (paste snippets into the active shell)
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setPromptsOpen(true); }
-      // ⌘⇧O → search across every alive shell's scrollback
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); setScrollbackOpen(true); }
-      if (mod && e.key === '/')                          { e.preventDefault(); setHelpOpen((v) => !v); }
-      if (mod && e.key.toLowerCase() === 't')            { e.preventDefault(); openNewTerminalRef.current(e.shiftKey); }
+      const action = appShortcutAction(e, platform);
+      if (action) { e.preventDefault(); runAppShortcut[action](); }
       if (e.key === 'Escape')                            { setSettingsOpen(false); setPaletteRequest(null); setNewProjectOpen(false); setHelpOpen(false); setSearchOpen(false); setPromptsOpen(false); setScrollbackOpen(false); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openPalette, toggleSidebar]);
+  }, [openPalette, toggleSidebar, platform]);
 
   // Keep the OS window title in sync with the current project so it reads
   // "lawreader — MetaLogix IDE" in Mission Control, Dock previews, and every
@@ -800,7 +807,7 @@ function MainApp() {
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-[--text-muted] hover:text-[--text] w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[--panel-strong]"
-            title="Settings (⌘,)"
+            title={SHORTCUT_COPY.settingsTitle(platform)}
             data-testid="settings-open"
           >
             <GearIcon />
@@ -966,7 +973,7 @@ function MainApp() {
                     </button>
                   </span>
                   <MetaprojectBoardButton project={selected} onRequestLink={() => setActiveView('chat')} />
-                  <Tooltip label="Prompt library" shortcut="⌘⇧K">
+                  <Tooltip label="Prompt library" shortcut={SHORTCUT_COPY.promptsShortcut(platform)}>
                     <button
                       onClick={() => setPromptsOpen(true)}
                       className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
@@ -976,7 +983,7 @@ function MainApp() {
                       <PromptsIcon />
                     </button>
                   </Tooltip>
-                  <Tooltip label="Search all shells" shortcut="⌘⇧O">
+                  <Tooltip label="Search all shells" shortcut={SHORTCUT_COPY.scrollbackShortcut(platform)}>
                     <button
                       onClick={() => setScrollbackOpen(true)}
                       className="text-[--text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel-strong]"
@@ -1221,6 +1228,7 @@ function TabButton({ active, onClick, testId, ariaLabel, children }: TabButtonPr
 
 function EmptyState() {
   const { roots } = useRoots();
+  const platform = useShortcutPlatform();
   // Onboarding: fresh install has no roots yet, so the sidebar shows no
   // projects and the main pane is blank — new users have nothing to click.
   // Surface a welcome card that walks them through the very first action.
@@ -1230,7 +1238,7 @@ function EmptyState() {
       <div className="max-w-sm space-y-2">
         <div className="text-sm text-[--text-muted]">No project selected</div>
         <div className="text-xs text-[--text-muted] opacity-70">
-          Pick one from the sidebar, or press <kbd className="px-1 py-0.5 rounded bg-[--panel] border border-[--border] text-[10px]">⌘K</kbd> to search.
+          Pick one from the sidebar, or press <kbd className="px-1 py-0.5 rounded bg-[--panel] border border-[--border] text-[10px]">{SHORTCUT_COPY.emptyPaletteKey(platform)}</kbd> to search.
         </div>
       </div>
     </div>
@@ -1239,6 +1247,7 @@ function EmptyState() {
 
 function WelcomeOnboarding() {
   const { refresh } = useRoots();
+  const platform = useShortcutPlatform();
   async function addRoot() {
     const picked = await api.invoke('dialogs:pick-directory', undefined as never);
     if (picked.path) {
@@ -1266,7 +1275,7 @@ function WelcomeOnboarding() {
           </button>
         </div>
         <div className="text-[11px] text-[--text-muted] opacity-70 pt-4">
-          Tip: press <kbd className="px-1 py-0.5 rounded bg-[--panel] border border-[--border] text-[10px]">⌘,</kbd> to open settings and change the default CLI or theme.
+          Tip: press <kbd className="px-1 py-0.5 rounded bg-[--panel] border border-[--border] text-[10px]">{SHORTCUT_COPY.emptySettingsKey(platform)}</kbd> to open settings and change the default CLI or theme.
         </div>
       </div>
     </div>

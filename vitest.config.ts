@@ -11,6 +11,10 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Cap the worker pool: the default uses every core, in every session sharing this machine.
+    // minWorkers must be set too, or its core-count default conflicts with the cap.
+    maxWorkers: 4,
+    minWorkers: 1,
     // .claude/ holds mutation-test copies of the tree; dist/ and out/ hold
     // packaged builds whose bundled node_modules ship their own tests.
     exclude: ['tests/e2e/**', 'node_modules/**', '.claude/**', 'dist/**', 'out/**'],
@@ -36,6 +40,16 @@ export default defineConfig({
         'src/renderer/components/PromptLibrary.tsx',
         'src/renderer/components/ScrollbackSearch.tsx',
         'src/renderer/components/ToastStack.tsx',
+        'src/renderer/shortcut-*.ts',
+        'src/renderer/app-keys.ts',
+        'src/renderer/terminal-keys.ts',
+        'src/renderer/components/permission-mode-keys.ts',
+        'src/renderer/sidebar-add-menu.ts',
+        'src/renderer/fonts/font-contract.ts',
+        'src/main/menu-template.ts',
+        'src/renderer/components/ShellTabsBar.tsx',
+        'src/renderer/components/ActivityBar.tsx',
+        'src/renderer/components/settings/TerminalFontSizeControl.tsx',
         'src/renderer/App.tsx',
       ],
     },

@@ -254,8 +254,9 @@ The first character of the query selects the mode:
 | `>` | commands | commands and Settings entries |
 | `@` | files | files of the selected project |
 
-Shortcuts: ⌘K / Ctrl-K toggles the palette with an empty query, ⌘⇧P opens it
-with `>`, and ⌘P opens it with `@`. Pressing ⌘⇧P or ⌘P while it is open
+Shortcuts: ⌘K (Ctrl+K on Linux and Windows) toggles the palette with an empty
+query, ⌘⇧P opens it with `>`, and ⌘P opens it with `@`. See Keyboard shortcuts
+for the platform modifier and what changes while a terminal has focus. Pressing ⌘⇧P or ⌘P while it is open
 switches its mode. The status bar keeps one hint, a button that opens the
 palette. The palette opens above any other open modal; Esc closes only the
 palette.
@@ -273,12 +274,59 @@ already placed it (`restoresOpenerOnClose` in `palette-run.ts`).
 | Layer | File | Responsibility |
 |---|---|---|
 | Contract | `src/renderer/command-palette-contract.ts` | Types, copy, test ids, group order and row caps shared by the component, App, the unit tests and the E2E suite. |
-| Logic | `src/renderer/palette-keys.ts` | Maps a keydown to toggle, open with a seed, swallow (other mod-chords while open) or pass. |
+| Logic | `src/renderer/palette-keys.ts` | Maps a keydown and the platform to toggle, open with a seed, swallow (other mod-chords while open) or pass. |
 | Logic | `src/renderer/palette-commands.ts` | Builds the command list from App's actions, including the Settings entries and the two new-terminal commands. |
 | Logic | `src/renderer/palette-query.ts`, `palette-search.ts`, `palette-run.ts` | Prefix parsing, fuzzy search (fuse.js) into groups, rows and empty states, and safe command execution. Pure. |
 | Adapter | `src/renderer/hooks/usePaletteFiles.ts` | Loads the file list (`files:list-all`, 5000-file cap) on entering file mode and reuses it until the palette closes. |
 | Presentation | `src/renderer/components/CommandPalette.tsx`, `components/palette/*` | Input (combobox with `aria-activedescendant`), listbox, rows, footer with key hints and the prefix legend. |
 | Composition | `src/renderer/App.tsx` | Holds the open request (`{ seq, seed }`; a new `seq` re-seeds an open palette) and routes keys, project picks and file picks. |
+
+### Keyboard shortcuts
+
+The app uses one platform modifier. On macOS it is ⌘ and Ctrl does not count.
+On Linux and Windows it is Ctrl and Super does not count. Every app shortcut
+matches on that modifier only, and Alt chords never match.
+
+The renderer learns the platform from the preload, which exposes
+`process.platform` as `window.api.platform`. `shortcut-platform.ts` reads it
+once, at module load, so the first render already has the right labels. With
+no bridge (unit tests in node) it falls back to macOS.
+
+Labels come from one platform-neutral definition in `SHORTCUTS`. macOS shows
+glyphs in the order ⌃⌥⌘⇧ (`⌘⇧O`). Linux and Windows show text in the order
+Ctrl, Alt, Shift (`Ctrl+Shift+O`), with Enter shown as `Enter`. Sentences that
+contain a shortcut (placeholders, titles, tips, a toast) live in
+`shortcut-copy.ts`. The commit box keeps "⌘Enter to commit" on macOS.
+
+While a terminal has focus on Linux and Windows, xterm's custom key handler
+decides who gets each key:
+
+| Key | Goes to | Why |
+|---|---|---|
+| Unshifted Ctrl+letter, Ctrl+\ | Shell | readline and TUI keys (kill-line, history, SIGINT, reverse search) |
+| Ctrl+F | App: terminal search | the one unshifted Ctrl+letter the app takes |
+| Ctrl+Shift+P/K/O/N/T/F, Ctrl+, Ctrl+/ Ctrl+= Ctrl+- Ctrl+0 | App | an explicit allow-list; xterm sends nothing and the event bubbles |
+| Ctrl+Shift+C | Copy | writes the sanitised selection; does nothing without a selection |
+| Ctrl+Shift+V | Paste | reads the clipboard and calls `term.paste`, which honours bracketed paste |
+| Anything else | xterm default | unchanged |
+
+So Ctrl+K, Ctrl+P, Ctrl+B and Ctrl+T do nothing in the app from a focused
+terminal; Ctrl+Shift+P opens the palette instead. The cheat sheet marks those
+rows on Linux. On macOS, ⌘F goes to the app and every other key keeps xterm's
+default handling.
+
+The native menu is built from `buildMenuTemplate(isMac)`. The menu bar is
+hidden on Linux, but its accelerators stay live, so on Linux and Windows the
+Reload and Minimize items have no accelerator (Ctrl+R and Ctrl+M are shell
+keys). Undo, Redo and Select All keep theirs.
+
+| Layer | File | Role |
+|---|---|---|
+| Contract | `src/renderer/shortcut-contract.ts` | Platform type, key-event shape, decision-function signatures and the `SHORTCUTS` registry. |
+| Adapter | `src/preload/index.ts`, `src/renderer/shortcut-platform.ts` | Expose and resolve the platform; context and `useShortcutPlatform()`. |
+| Logic | `src/renderer/shortcut-match.ts`, `app-keys.ts`, `terminal-keys.ts` | Modifier matching, app-wide shortcuts, terminal routing and the xterm handler. Pure. |
+| Logic | `src/renderer/shortcut-format.ts`, `shortcut-copy.ts` | Label formatting and sentence copy per platform. Pure. |
+| Logic | `src/main/menu-template.ts` | Per-platform native menu template. Pure. |
 
 ### Modal material
 
@@ -375,7 +423,7 @@ first window to load then migrates the legacy `metaide.shellFontSize` value
 with `onlyIfUnset`, so concurrent windows cannot overwrite each other. Each
 `ShellTab` reads the shared size through a ref, so a change sets
 `term.options.fontSize` and forces a geometry sync instead of recreating the
-terminal (`src/renderer/components/ShellTab.tsx:374-379`). A terminal waits
+terminal (`src/renderer/components/ShellTab.tsx:398-403`). A terminal waits
 for the loaded size before it opens, within the existing 2 s layout cap.
 
 The terminal font and bold weights use the same store-and-broadcast path
@@ -383,7 +431,7 @@ with two channels, one per user action. Main is the only place that derives
 bold from the font weight, so the stored pair is never half-written; both
 main and the renderer resolve a missing or invalid stored value with the same
 shared function. A weight change sets `fontWeight` and `fontWeightBold` in
-one `term.options` assignment (`src/renderer/components/ShellTab.tsx:384`).
+one `term.options` assignment (`src/renderer/components/ShellTab.tsx:408`).
 xterm repaints in place and the WebGL renderer rebuilds its glyph atlas.
 Weight does not change cell size, so there is no geometry sync or PTY
 resize. A terminal also waits for the loaded weights before it opens.
@@ -422,7 +470,7 @@ Rules:
   shared 1000ms watchdog covers all holds and restarts on every hold or
   mid-fold toggle. The left terminal is never remounted by a split open
   or close.
-- Keyboard toggles (⌘B, ⌘\, palette commands) stay instant.
+- Keyboard toggles (⌘B or Ctrl+B, ⌘\ or Ctrl+\, palette commands) stay instant.
 - With reduced motion, panes and menus fade (at least 150ms) and the
   layout changes in one step. The panes read the setting live because
   motion's `useReducedMotion` reads it once per mount.
@@ -764,7 +812,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
    (`src/renderer/fonts/font-settings-context.tsx:39-68`).
 4. The UI adapter updates the root CSS property, or each terminal updater
    changes its existing xterm instance (`src/renderer/fonts/use-apply-ui-font.ts:12-28`,
-   `src/renderer/components/ShellTab.tsx:387-392`).
+   `src/renderer/components/ShellTab.tsx:411-416`).
 5. A terminal font change completes with fit, repaint, and PTY resize. It
    does not recreate the PTY or replay scrollback
    (`src/renderer/terminal-font-update.ts:68-105`).

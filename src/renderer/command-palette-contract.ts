@@ -5,6 +5,8 @@
  */
 import type { ClaudeShellState } from '@shared/claude-state';
 import type { Project } from '@shared/types';
+import type { ShortcutPlatform } from './shortcut-contract';
+import { SHORTCUT_COPY } from './shortcut-copy';
 
 /** Search mode, chosen by the first character of the query. */
 export type PaletteMode = 'all' | 'projects' | 'commands' | 'files';
@@ -128,7 +130,7 @@ export interface PaletteKeyEvent {
   readonly altKey: boolean;
 }
 
-export type PaletteKeyActionFn = (e: PaletteKeyEvent, isOpen: boolean) => PaletteKeyAction;
+export type PaletteKeyActionFn = (e: PaletteKeyEvent, isOpen: boolean, platform?: ShortcutPlatform) => PaletteKeyAction;
 
 export interface CommandPaletteProps {
   /** `null` = closed. */
@@ -186,9 +188,11 @@ export const PALETTE_COPY = {
     { prefix: '#', label: 'Projects' },
     { prefix: '>', label: 'Commands' },
   ],
-  statusHintKey: '⌘K',
+  /** Mac value, kept for existing callers; components use `SHORTCUT_COPY.statusHintKey(platform)`. */
+  statusHintKey: SHORTCUT_COPY.statusHintKey('mac'),
   statusHintText: 'command palette',
-  statusHintLabel: 'Open command palette (⌘K)',
+  /** Mac value, kept for existing callers; components use `SHORTCUT_COPY.statusHintLabel(platform)`. */
+  statusHintLabel: SHORTCUT_COPY.statusHintLabel('mac'),
   commandFailed: 'Command failed',
 } as const;
 

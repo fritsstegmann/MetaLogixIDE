@@ -16,6 +16,10 @@ import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
+import { createTerminalKeyHandler, terminalTabAction } from '@renderer/terminal-keys';
+import type { TerminalTabAction } from '@renderer/shortcut-contract';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
 import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
 import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-context';
@@ -62,6 +66,12 @@ function buildTheme(): ITheme {
   };
 }
 
+const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out' | 'reset'>> = {
+  'zoom-in': 'in',
+  'zoom-out': 'out',
+  'zoom-reset': 'reset',
+};
+
 export function ShellTab({
   projectId, shellIndex, onOpenFile, primary = false,
 }: {
@@ -71,6 +81,9 @@ export function ShellTab({
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
 }) {
+  const platform = useShortcutPlatform();
+  const platformRef = useRef(platform);
+  platformRef.current = platform;
   const containerRef = useRef<HTMLDivElement>(null);
   const termHostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -151,6 +164,17 @@ export function ShellTab({
     const search = new SearchAddon();
     term.loadAddon(search);
     searchRef.current = search;
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler({
+      platform: platformRef.current,
+      hasSelection: () => term.hasSelection(),
+      getSelection: () => term.getSelection(),
+      writeClipboard: (text) => navigator.clipboard.writeText(text),
+      readClipboard: () => navigator.clipboard.readText(),
+      paste: (text) => term.paste(text),
+      onClipboardError: (op, err) => {
+        toast(SHORTCUT_COPY.clipboardErrorTitle(op), { kind: 'error', detail: String(err).replace(/^Error:\s*/, '') });
+      },
+    }));
 
     // File-path link provider: matches things like src/main/index.ts:42
     // in terminal output, shows a hover preview, click opens in Files.
@@ -391,31 +415,23 @@ export function ShellTab({
     void updater.apply(terminalFontFamily);
   }, [terminalFontFamily]);
 
-  // ⌘F opens the terminal search overlay when this tab has focus.
-  // ⌘= / ⌘- / ⌘0 zoom the terminal font.
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === 'f' && !e.shiftKey) {
-        e.preventDefault();
+      const action = terminalTabAction(e, platform);
+      if (!action) return;
+      e.preventDefault();
+      if (action === 'find') {
         setSearchOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
-      } else if (mod && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        setFontSize(stepTerminalFontSize(fontSize, 'in'));
-      } else if (mod && e.key === '-') {
-        e.preventDefault();
-        setFontSize(stepTerminalFontSize(fontSize, 'out'));
-      } else if (mod && e.key === '0') {
-        e.preventDefault();
-        setFontSize(stepTerminalFontSize(fontSize, 'reset'));
+      } else {
+        setFontSize(stepTerminalFontSize(fontSize, ZOOM_STEP[action]));
       }
     };
     el.addEventListener('keydown', onKey);
     return () => el.removeEventListener('keydown', onKey);
-  }, [fontSize, setFontSize]);
+  }, [fontSize, setFontSize, platform]);
 
   useShellStream(
     projectId,
@@ -541,8 +557,8 @@ export function ShellTab({
             placeholder="Find…"
             className="bg-transparent text-sm px-2 py-0.5 outline-none placeholder:text-[--text-muted] w-40"
           />
-          <button onClick={() => findPrev(searchQuery)} title="Previous (⇧↩)" className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↑</button>
-          <button onClick={() => findNext(searchQuery)} title="Next (↩)"      className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↓</button>
+          <button onClick={() => findPrev(searchQuery)} title={SHORTCUT_COPY.searchPrevTitle(platform)} className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↑</button>
+          <button onClick={() => findNext(searchQuery)} title={SHORTCUT_COPY.searchNextTitle(platform)} className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↓</button>
           <button
             onClick={() => { setSearchOpen(false); setSearchQuery(''); searchRef.current?.clearDecorations(); termRef.current?.focus(); }}
             title="Close (Esc)"

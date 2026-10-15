@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ShortcutsHelp } from '@renderer/components/ShortcutsHelp';
 import { MODAL_CLASSES, MODAL_TIER_Z, scrimTestId } from '@renderer/modal-glass';
+import { ShortcutPlatformContext } from '@renderer/shortcut-platform';
 
 const TEST_ID = 'shortcuts-help';
 
@@ -87,5 +88,64 @@ describe('ShortcutsHelp', () => {
     const id = /aria-labelledby="([^"]+)"/.exec(openingTag(html, 'role="dialog"'))?.[1];
     expect(id).toBeTruthy();
     expect(new RegExp(`<h2 id="${id}"[^>]*>([^<]*)</h2>`).exec(html)?.[1]).toBe('Keyboard shortcuts');
+  });
+});
+
+describe('ShortcutsHelp on Linux (AC6, AC13)', () => {
+  const linux = () => renderToStaticMarkup(
+    <ShortcutPlatformContext.Provider value="other">
+      <ShortcutsHelp open onClose={() => undefined} />
+    </ShortcutPlatformContext.Provider>,
+  );
+
+  /** Every row's label and its keys, each flagged when it carries the terminal marker. */
+  function linuxRows(html: string): Array<{ label: string; keys: Array<{ key: string; shell: boolean }> }> {
+    return [...html.matchAll(/<dt[^>]*>(.*?)<\/dt><dd[^>]*>(.*?)<\/dd>/g)].map((m) => ({
+      label: text(m[1] ?? ''),
+      keys: [...(m[2] ?? '').matchAll(/(<span data-terminal-shell="true"[^>]*>)?<kbd>([^<]*)<\/kbd>/g)]
+        .map((k) => ({ key: k[2] ?? '', shell: k[1] !== undefined })),
+    }));
+  }
+
+  const note = (html: string) => text(/<p[^>]*data-testid="shortcuts-terminal-note"[^>]*>(.*?)<\/p>/.exec(html)?.[1] ?? '');
+
+  it('labels every row in the Ctrl+ form, keeping the palette alternative on one row', () => {
+    const all = linuxRows(linux());
+    expect(all.find((r) => r.label === 'Command palette')?.keys.map((k) => k.key)).toEqual(['Ctrl+K', 'Ctrl+Shift+P']);
+    expect(all.flatMap((r) => r.keys.map((k) => k.key))).toEqual([
+      'Ctrl+K', 'Ctrl+Shift+P', 'Ctrl+P', 'Ctrl+Shift+F', 'Ctrl+B', 'Ctrl+,', 'Ctrl+/',
+      'Ctrl+Shift+N', 'Ctrl+T', 'Ctrl+Shift+T', 'Ctrl+F', 'Ctrl+Shift+O', 'Ctrl+Shift+K', 'Ctrl+=', 'Ctrl+-', 'Ctrl+0',
+    ]);
+  });
+
+  it('marks exactly the shortcuts the shell keeps while the terminal is focused', () => {
+    const marked = linuxRows(linux()).flatMap((r) => r.keys).filter((k) => k.shell).map((k) => k.key);
+    expect(marked.sort()).toEqual(['Ctrl+B', 'Ctrl+K', 'Ctrl+P', 'Ctrl+T']);
+  });
+
+  it('lists Ctrl+F as "Find in terminal", unmarked', () => {
+    const row = linuxRows(linux()).find((r) => r.label === 'Find in terminal');
+    expect(row?.keys).toEqual([{ key: 'Ctrl+F', shell: false }]);
+  });
+
+  it('gives the sidebar row no Ctrl+\\ alternative', () => {
+    expect(linuxRows(linux()).find((r) => r.label === 'Toggle sidebar')?.keys.map((k) => k.key)).toEqual(['Ctrl+B']);
+  });
+
+  it('names every shell-owned key, Ctrl+\\ included, and Ctrl+Shift+P as the way to the palette', () => {
+    const n = note(linux());
+    for (const k of ['Ctrl+K', 'Ctrl+P', 'Ctrl+B', 'Ctrl+T', 'Ctrl+\\', 'Ctrl+Shift+P']) expect(n).toContain(k);
+  });
+
+  it('gives each marked key a text alternative, not just a glyph', () => {
+    const marker = /<span data-terminal-shell="true"[^>]*>.*?<\/span><\/span>/.exec(linux())?.[0] ?? '';
+    expect(marker).toMatch(/<span class="sr-only">[^<]+<\/span>/);
+    expect(marker).toContain('aria-hidden="true"');
+  });
+
+  it('adds neither marker nor terminal note on mac (AC7)', () => {
+    const html = render();
+    expect(html).not.toContain('data-terminal-shell');
+    expect(html).not.toContain('shortcuts-terminal-note');
   });
 });

@@ -6,20 +6,25 @@
 import type { ContextMenuItem } from '@renderer/components/ContextMenu';
 import type { Toast } from '@renderer/hooks/useToasts';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS } from '@renderer/sidebar-copy';
+import type { ShortcutPlatform } from '@renderer/shortcut-contract';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { RUNTIME_SHORTCUT_PLATFORM } from '@renderer/shortcut-platform';
 
 export interface AddMenuOptions {
   rescanning: boolean;
   onNewProject: () => void;
   onAddRoot: () => void;
   onRescan: () => void;
+  /** Label notation for the New project hint; defaults to the runtime platform. */
+  platform?: ShortcutPlatform;
 }
 
 /** Items for the "+" menu, in order: New project…, Add root folder…, Rescan roots (disabled and relabelled while `rescanning`). */
-export function buildAddMenuItems({ rescanning, onNewProject, onAddRoot, onRescan }: AddMenuOptions): ContextMenuItem[] {
+export function buildAddMenuItems({ rescanning, onNewProject, onAddRoot, onRescan, platform = RUNTIME_SHORTCUT_PLATFORM }: AddMenuOptions): ContextMenuItem[] {
   return [
     {
       label: SIDEBAR_COPY.menuNewProject,
-      hint: SIDEBAR_COPY.menuNewProjectHint,
+      hint: SHORTCUT_COPY.newProjectHint(platform),
       testId: SIDEBAR_TESTIDS.menuNewProject,
       onClick: onNewProject,
     },
