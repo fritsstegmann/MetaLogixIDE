@@ -25,6 +25,13 @@
   --hue-cyan-base: var(--hue-cyan);
   --hue-pink-base: var(--hue-pink);
   --hue-orange-soft-base: var(--hue-orange-soft);
+  --hue-yellow-base: var(--hue-yellow);
+  --hue-purple-base: var(--hue-purple);
+  --danger-base: var(--danger);
+  --claude-idle-base: var(--claude-idle);
+  --claude-busy-base: var(--claude-busy);
+  --claude-blocked-base: var(--claude-blocked);
+  --surface-field-base: var(--surface-field);
   --terminal-live-alpha: 1;
   --surface-chrome: rgb(from var(--chrome-solid) r g b / var(--chrome-glass-alpha));
   --surface-sheet: var(--sheet-solid);
@@ -36,11 +43,20 @@
   --terminal-live-alpha: var(--terminal-glass-alpha);
 }
 
-/* Chrome labels are lifted (D2, D16) and selection and badge fills become opaque chips (D11, D15), so none depends on the material. */
+/* Chrome labels and indicators are lifted (D2, D16, D17) and selection, badge and field fills become opaque chips (D11, D15), so none depends on the material. */
 :root[data-platform="mac"] [data-chrome-root] {
   --text-muted: var(--chrome-text-muted);
   --accent-soft-text: var(--chrome-chip-text);
+  --accent-label: var(--chrome-accent-label);
   --hue-pink: var(--chrome-hue-pink);
+  --hue-cyan: var(--chrome-hue-cyan);
+  --hue-yellow: var(--chrome-hue-yellow);
+  --hue-purple: var(--chrome-hue-purple);
+  --danger: var(--chrome-danger);
+  --claude-idle: var(--chrome-claude-idle);
+  --claude-busy: var(--chrome-claude-busy);
+  --claude-blocked: var(--chrome-claude-blocked);
+  --focus-outline: var(--chrome-focus-ring);
   --git-modified: var(--chrome-git-modified);
   --git-added: var(--chrome-git-added);
   --git-deleted: var(--chrome-git-deleted);
@@ -49,10 +65,16 @@
   --accent-soft: color-mix(in oklab, var(--accent) 22%, var(--chrome-solid));
   --surface-hover: color-mix(in oklab, var(--text) 7%, var(--chrome-solid));
   --surface-active: color-mix(in oklab, var(--text) 10%, var(--chrome-solid));
+  --surface-field: color-mix(in oklab, var(--text) 6%, var(--chrome-solid));
+  --git-ahead-chip: color-mix(in oklab, #34d399 10%, var(--chrome-solid));
+  --git-behind-chip: color-mix(in oklab, #fb7185 10%, var(--chrome-solid));
 }
 
+/* The working area, modals and overlays (popovers, menus, toasts) keep their pre-lift palette values (AC10, AC24, AC30, AC31). */
 :root[data-platform="mac"] [data-chrome-root] [data-sheet-content],
-:root[data-platform="mac"] [data-chrome-root] [data-view="chat"] {
+:root[data-platform="mac"] [data-chrome-root] [data-view="chat"],
+:root[data-platform="mac"] [data-chrome-root] .modal-layer,
+:root[data-platform="mac"] [data-chrome-root] [data-overlay] {
   --text-muted: var(--text-muted-base);
   --accent-soft-text: var(--accent-soft-text-base);
   --accent-soft: var(--accent-soft-base);
@@ -61,21 +83,33 @@
   --hue-cyan: var(--hue-cyan-base);
   --hue-pink: var(--hue-pink-base);
   --hue-orange-soft: var(--hue-orange-soft-base);
+  --hue-yellow: var(--hue-yellow-base);
+  --hue-purple: var(--hue-purple-base);
+  --danger: var(--danger-base);
+  --claude-idle: var(--claude-idle-base);
+  --claude-busy: var(--claude-busy-base);
+  --claude-blocked: var(--claude-blocked-base);
+  --surface-field: var(--surface-field-base);
+  --accent-label: initial;
+  --focus-outline: initial;
+  --git-ahead-chip: initial;
+  --git-behind-chip: initial;
   --git-modified: initial;
   --git-added: initial;
   --git-deleted: initial;
   --git-untracked: initial;
 }
 
-/* Catppuccin light cyan cannot reach 3:1 on frosted chrome, so chrome glyphs get a darker cyan; --term-cyan is untouched. */
-:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"] [data-chrome-root] {
-  --hue-cyan: #127c82;
-}
-
-@media (prefers-color-scheme: light) {
-  :root[data-platform="mac"][data-palette="catppuccin"]:not([data-theme]) [data-chrome-root] {
-    --hue-cyan: #127c82;
-  }
+/* Where frosting lowers the styles.css focus outline below its 26eed37 contrast, the chrome draws it in solid accent. */
+:root[data-platform="mac"]
+  [data-chrome-root]
+  :is(
+    button:focus-visible,
+    a:focus-visible,
+    [role="button"]:focus-visible,
+    [tabindex]:not([tabindex="-1"]):focus-visible
+  ) {
+  outline-color: var(--focus-outline, color-mix(in oklab, var(--accent) 70%, transparent));
 }
 
 :root[data-platform="mac"] [data-sheet-content="shell"] {
@@ -109,6 +143,15 @@
   --chrome-git-added: #34d399;
   --chrome-git-deleted: #fc798b;
   --chrome-git-untracked: #38bdf8;
+  --chrome-accent-label: #6ea3fb;
+  --chrome-hue-cyan: #7dcfff;
+  --chrome-hue-yellow: #e0af68;
+  --chrome-hue-purple: #bb9af7;
+  --chrome-danger: #fa7c7b;
+  --chrome-claude-idle: #22c55e;
+  --chrome-claude-busy: #fbbf24;
+  --chrome-claude-blocked: #ef4444;
+  --chrome-focus-ring: color-mix(in oklab, var(--accent) 70%, transparent);
   --panel: rgb(28 32 40);
   --panel-strong: rgb(34 38 46);
   --chat-surface: rgb(22 26 33);
@@ -128,6 +171,15 @@
   --chrome-git-added: #136145;
   --chrome-git-deleted: #8d3c48;
   --chrome-git-untracked: #175d7c;
+  --chrome-accent-label: #1c4ebd;
+  --chrome-hue-cyan: #095e75;
+  --chrome-hue-yellow: #8e4005;
+  --chrome-hue-purple: #7c3aed;
+  --chrome-danger: #ab1b1b;
+  --chrome-claude-idle: #12803b;
+  --chrome-claude-busy: #b45309;
+  --chrome-claude-blocked: #d92525;
+  --chrome-focus-ring: color-mix(in oklab, var(--accent) 70%, transparent);
   --panel: rgb(232 234 240);
   --panel-strong: rgb(238 240 245);
   --chat-surface: rgb(240 242 246);
@@ -148,6 +200,15 @@
     --chrome-git-added: #136145;
     --chrome-git-deleted: #8d3c48;
     --chrome-git-untracked: #175d7c;
+    --chrome-accent-label: #1c4ebd;
+    --chrome-hue-cyan: #095e75;
+    --chrome-hue-yellow: #8e4005;
+    --chrome-hue-purple: #7c3aed;
+    --chrome-danger: #ab1b1b;
+    --chrome-claude-idle: #12803b;
+    --chrome-claude-busy: #b45309;
+    --chrome-claude-blocked: #d92525;
+    --chrome-focus-ring: color-mix(in oklab, var(--accent) 70%, transparent);
     --panel: rgb(232 234 240);
     --panel-strong: rgb(238 240 245);
     --chat-surface: rgb(240 242 246);
@@ -168,6 +229,15 @@
   --chrome-git-added: #34d399;
   --chrome-git-deleted: #ff99a4;
   --chrome-git-untracked: #48c1f9;
+  --chrome-accent-label: #8eb7fa;
+  --chrome-hue-cyan: #94e2d5;
+  --chrome-hue-yellow: #f9e2af;
+  --chrome-hue-purple: #f5c2e7;
+  --chrome-danger: #f69bb3;
+  --chrome-claude-idle: #a6e3a1;
+  --chrome-claude-busy: #f9e2af;
+  --chrome-claude-blocked: #f38ba8;
+  --chrome-focus-ring: #89b4fa;
   --panel: #181825;
   --panel-strong: #313244;
   --chat-surface: #1e1e2e;
@@ -187,6 +257,15 @@
   --chrome-git-added: #136145;
   --chrome-git-deleted: #8d3c48;
   --chrome-git-untracked: #165b79;
+  --chrome-accent-label: #154ebf;
+  --chrome-hue-cyan: #0b5e63;
+  --chrome-hue-yellow: #7a4b0b;
+  --chrome-hue-purple: #a5518f;
+  --chrome-danger: #ac0a2d;
+  --chrome-claude-idle: #328021;
+  --chrome-claude-busy: #9d6311;
+  --chrome-claude-blocked: #d20f39;
+  --chrome-focus-ring: color-mix(in oklab, var(--accent) 70%, transparent);
   --panel: #e6e9ef;
   --panel-strong: #dce0e8;
   --chat-surface: #eff1f5;
@@ -206,6 +285,15 @@
   --chrome-git-added: #34d399;
   --chrome-git-deleted: #ffa0aa;
   --chrome-git-untracked: #5bc5f9;
+  --chrome-accent-label: #cab0ea;
+  --chrome-hue-cyan: #ebbcba;
+  --chrome-hue-yellow: #f6c177;
+  --chrome-hue-purple: #c4a7e7;
+  --chrome-danger: #f7a2b6;
+  --chrome-claude-idle: #9ccfd8;
+  --chrome-claude-busy: #f6c177;
+  --chrome-claude-blocked: #eb7193;
+  --chrome-focus-ring: #c4a7e7;
   --panel: #1f1d2e;
   --panel-strong: #26233a;
   --chat-surface: #191724;
@@ -225,6 +313,15 @@
   --chrome-git-added: #166b4c;
   --chrome-git-deleted: #99424e;
   --chrome-git-untracked: #196485;
+  --chrome-accent-label: #26657e;
+  --chrome-hue-cyan: #87504d;
+  --chrome-hue-yellow: #805418;
+  --chrome-hue-purple: #84709b;
+  --chrome-danger: #894a5c;
+  --chrome-claude-idle: #286983;
+  --chrome-claude-busy: #a26b21;
+  --chrome-claude-blocked: #ad5f75;
+  --chrome-focus-ring: #286983;
   --panel: #fffaf3;
   --panel-strong: #f2e9e1;
   --chat-surface: #faf4ed;
@@ -245,6 +342,15 @@
     --chrome-git-added: #136145;
     --chrome-git-deleted: #8d3c48;
     --chrome-git-untracked: #165b79;
+    --chrome-accent-label: #154ebf;
+    --chrome-hue-cyan: #0b5e63;
+    --chrome-hue-yellow: #7a4b0b;
+    --chrome-hue-purple: #a5518f;
+    --chrome-danger: #ac0a2d;
+    --chrome-claude-idle: #328021;
+    --chrome-claude-busy: #9d6311;
+    --chrome-claude-blocked: #d20f39;
+    --chrome-focus-ring: color-mix(in oklab, var(--accent) 70%, transparent);
     --panel: #e6e9ef;
     --panel-strong: #dce0e8;
     --chat-surface: #eff1f5;
@@ -264,6 +370,15 @@
     --chrome-git-added: #166b4c;
     --chrome-git-deleted: #99424e;
     --chrome-git-untracked: #196485;
+    --chrome-accent-label: #26657e;
+    --chrome-hue-cyan: #87504d;
+    --chrome-hue-yellow: #805418;
+    --chrome-hue-purple: #84709b;
+    --chrome-danger: #894a5c;
+    --chrome-claude-idle: #286983;
+    --chrome-claude-busy: #a26b21;
+    --chrome-claude-blocked: #ad5f75;
+    --chrome-focus-ring: #286983;
     --panel: #fffaf3;
     --panel-strong: #f2e9e1;
     --chat-surface: #faf4ed;

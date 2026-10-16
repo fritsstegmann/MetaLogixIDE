@@ -4,6 +4,7 @@ export const FROST_ATTR = {
   frostTerminal: 'data-frost-terminal',
   chromeRoot: 'data-chrome-root',
   sheetContent: 'data-sheet-content',
+  overlay: 'data-overlay',
 } as const;
 export const MAC_PLATFORM = 'mac' as const;
 export type SheetContent = 'shell' | 'other';

@@ -414,11 +414,6 @@ export async function tokenColour(win: Page, name: `--${string}`): Promise<Rgba>
  * which is the opaque `--sheet-solid` (frosted-chrome plan §2.1) rather than
  * `--bg` composited over the vibrancy material. The envelope collapses to a
  * single literal colour there, so both bounds come back equal.
- *
- * ASSUMPTION (flag for Phase 5 reconcile): the token name `--sheet-solid` is
- * taken from the plan's layer-model table (§2.1); Agent 3's actual
- * `frosted-chrome.css` may land under a different name. This is the token to
- * update once the real one is known.
  */
 const MAC_SHEET_SOLID_TOKEN = '--sheet-solid' as const;
 

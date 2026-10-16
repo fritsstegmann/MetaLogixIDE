@@ -22,6 +22,22 @@ interface Rule {
   readonly media: readonly string[];
 }
 
+/** Splits a selector list on the commas outside parentheses, so `:is(a, b)` stays one selector. */
+function topLevelSplit(prelude: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  [...prelude].forEach((ch, i) => {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ',' && depth === 0) {
+      parts.push(prelude.slice(start, i).trim());
+      start = i + 1;
+    }
+  });
+  return [...parts, prelude.slice(start).trim()];
+}
+
 function rules(src: string, media: readonly string[] = []): Rule[] {
   const out: Rule[] = [];
   let i = 0;
@@ -37,7 +53,7 @@ function rules(src: string, media: readonly string[] = []): Rule[] {
     const prelude = src.slice(i, open).trim();
     const body = src.slice(open + 1, close);
     if (prelude.startsWith('@media')) out.push(...rules(body, [...media, prelude.slice(6).trim()]));
-    else out.push({ selectors: prelude.split(',').map((s) => s.trim()), body, media });
+    else out.push({ selectors: topLevelSplit(prelude), body, media });
     i = close + 1;
   }
   return out;
@@ -86,6 +102,15 @@ const PALETTE_TOKENS = [
   '--chrome-git-added',
   '--chrome-git-deleted',
   '--chrome-git-untracked',
+  '--chrome-accent-label',
+  '--chrome-hue-cyan',
+  '--chrome-hue-yellow',
+  '--chrome-hue-purple',
+  '--chrome-danger',
+  '--chrome-claude-idle',
+  '--chrome-claude-busy',
+  '--chrome-claude-blocked',
+  '--chrome-focus-ring',
   '--panel',
   '--panel-strong',
   '--chat-surface',
@@ -120,6 +145,7 @@ describe('frosted-chrome.css', () => {
         FROST_ATTR.frostTerminal,
         FROST_ATTR.chromeRoot,
         FROST_ATTR.sheetContent,
+        FROST_ATTR.overlay,
         'data-theme',
         'data-palette',
         'data-view',
@@ -129,6 +155,7 @@ describe('frosted-chrome.css', () => {
     expect(CSS).toContain(`[${FROST_ATTR.frostTerminal}]`);
     expect(CSS).toContain(`[${FROST_ATTR.chromeRoot}]`);
     expect(CSS).toContain('[data-view="chat"]');
+    expect(CSS).toContain(`[${FROST_ATTR.overlay}]`);
   });
 
   it('adds no backdrop-filter or filter (plan §4)', () => {
