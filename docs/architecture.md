@@ -288,10 +288,16 @@ this layer. On macOS:
 | Split-shell cards | `--surface-pane`: `--pane-solid`, at the terminal alpha when the setting is ON. |
 | Raw `--panel`, `--panel-strong`, `--chat-surface` | Same colour, alpha 1, so menus, popovers and inputs are never more translucent than before. |
 
-Hover, selected and active fills (`--surface-hover`, `--surface-active`,
-`--accent-soft`) on the chrome are opaque chips mixed into `--chrome-solid`, so
-text on a selected row keeps its contrast. The sheet and the chat column
-restore the palette values from `*-base` tokens captured on `:root`.
+Hover, selected, active and field fills (`--surface-hover`, `--surface-active`,
+`--accent-soft`, `--surface-field`) and the Tasks badge fill
+(`--hue-orange-soft`) on the chrome are opaque chips mixed into
+`--chrome-solid`, so text on them keeps its contrast. The Git panel ahead and
+behind counts read `--git-ahead-chip` and `--git-behind-chip`, which are opaque
+chips on the chrome. The sheet, the chat column, the modal and command-palette
+layer (`.modal-layer`) and the overlays marked `data-overlay` (the shells
+popover, context menus, toasts) restore every chrome lift. Palette tokens come
+back from `*-base` tokens captured on `:root`. Chrome-only tokens are reset to
+`initial`, so the classes that read them use their fallback.
 
 **Glass invariant.** Palette blocks set only the solid colours, the alphas and
 the label lifts. `--surface-chrome`, `--surface-terminal` and `--surface-pane`
@@ -312,11 +318,41 @@ least 32, which caps the total alpha at 0.8745. The terminal alpha multiplies
 the chrome alpha, so `--terminal-glass-alpha` is small (0 to 0.18). Muted and
 label text on the chrome and on the frosted terminal may be lifted
 (`--chrome-text-muted`, `--terminal-text-muted`, `--chrome-chip-text`) to keep
-the floor. In catppuccin light, the chrome uses a darker `--hue-cyan` for the
-ahead count; `--term-cyan` is unchanged. Colours that were already below their
-floor at `main@26eed37` are pinned in the test as known debt; the test fails
-if the list grows or if a pinned pair starts to pass. ANSI colours are not
-tested.
+the floor.
+
+Every coloured text and indicator on the chrome is listed in the test's
+`CHROME_PAINT` inventory (D17). Each entry is held to 4.5:1 (text) or 3:1
+(indicator) in every palette and theme, with the setting OFF and ON and with
+Reduce transparency on and off. A source scan fails if a chrome component
+gains a colour class that is neither in the inventory nor listed with a
+reason. To reach the floor, each palette block sets lifted hues that only the
+chrome root reads. In dark themes they are lighter, in light themes darker:
+
+- `--chrome-hue-pink`, `--chrome-hue-cyan`, `--chrome-hue-yellow` and
+  `--chrome-hue-purple`.
+- `--chrome-danger`.
+- `--chrome-claude-idle`, `--chrome-claude-busy` and `--chrome-claude-blocked`.
+- `--chrome-accent-label`, read as `--accent-label` by the Git panel's
+  Stage all.
+- `--chrome-git-*`, read as `--git-*` by the Git panel letters, the ahead and
+  behind counts, and the inline diff.
+
+Classes that need a lift Tailwind cannot reach read a token with the exact old
+colour as fallback, such as `var(--git-added,#34d399)` or
+`var(--accent-label,var(--accent))`. Off macOS, and in the Diff tab, that
+fallback renders, so nothing changes there. The keyboard focus outline reads
+`--focus-outline`. It becomes solid accent only where frosting had lowered it
+below its 26eed37 contrast: catppuccin dark, and rose-pine dark and light.
+
+Two groups are pinned in the test as known debt:
+
+- Indicator colours that were already below their floor at `main@26eed37`
+  (D13).
+- Chrome labels drawn through element opacity (`opacity-60`, `opacity-70`).
+  No token lift can reach the floor for those without collapsing
+  `--text-muted` into `--text`.
+
+The test fails if a pin starts to pass. ANSI colours are not tested.
 
 **Root flags.** `src/renderer/root-flags.ts` sets `data-platform="mac"` (darwin
 only) and `data-frost-terminal` on `<html>`. `main.tsx` calls it before React
