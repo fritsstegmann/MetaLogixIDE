@@ -40,6 +40,29 @@ async function paletteDot(win: Page, project: string) {
     .getByTestId(AGENT_DOT.testId);
 }
 
+/** Replays a PTY snapshot at its recorded geometry for failure-only screen evidence. */
+async function replayBottomRows(output: string, cols: number, rows: number): Promise<string[]> {
+  const terminal = new headless.Terminal({
+    cols,
+    rows,
+    scrollback: 5000,
+    allowProposedApi: true,
+  });
+  try {
+    await new Promise<void>((resolve) => terminal.write(output, resolve));
+    const buffer = terminal.buffer.active;
+    const visible = Math.min(8, terminal.rows);
+    return Array.from(
+      { length: visible },
+      (_, index) =>
+        buffer.getLine(buffer.baseY + terminal.rows - visible + index)?.translateToString(true) ??
+        '',
+    );
+  } finally {
+    terminal.dispose();
+  }
+}
+
 test('AC1/AC4/AC12/AC13: undecorated app-launched Claude follows its screen through five states, not contradictory hooks', async () => {
   const h = await launchStatus(['demo'], { unavailableHooks: true });
   try {
@@ -494,51 +517,51 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     try {
       await expectShellState(h.win, alpha, 0, 'busy');
     } catch (error) {
-      const screen = await h.win.evaluate(
-        async ({ projectId }) =>
-          (
-            window as unknown as {
-              api: {
-                invoke: (
-                  channel: string,
-                  request: { projectId: number; shellIndex: number },
-                ) => Promise<{ output: string }>;
-              };
-            }
-          ).api.invoke('shells:snapshot', { projectId, shellIndex: 0 }),
-        { projectId: alpha },
-      );
-      const log = join(h.home, 'status-geometry.log');
-      const events = existsSync(log) ? readFileSync(log, 'utf8') : '';
-      const workPid = events.match(/pid=(\d+) draw work /)?.[1];
-      const ownEvents = events.split('\n').filter((line) => line.startsWith(`pid=${workPid} `));
-      const sizes = [...ownEvents.join('\n').matchAll(/cols=(\d+) rows=(\d+)/g)];
-      const lastSize = sizes.at(-1);
-      const terminal = new headless.Terminal({
-        cols: Number(lastSize?.[1] ?? 80),
-        rows: Number(lastSize?.[2] ?? 24),
-        scrollback: 5000,
-      });
-      await new Promise<void>((resolve) => terminal.write(screen.output, resolve));
-      const buffer = terminal.buffer.active;
-      const bottom = Array.from({ length: Math.min(8, terminal.rows) }, (_, index) =>
-        buffer
-          .getLine(buffer.baseY + terminal.rows - Math.min(8, terminal.rows) + index)
-          ?.translateToString(true),
-      );
-      terminal.dispose();
-      console.log(
-        'Claude screen failure',
-        JSON.stringify({
-          state: (await statusSnapshot(h.win)).find(
-            (shell) => shell.projectId === alpha && shell.shellIndex === 0,
-          ),
-          bottom,
-          geometry: lastSize?.[0],
-          events: ownEvents,
-          snapshotEnd: screen.output.slice(-1200),
-        }),
-      );
+      try {
+        const screen = await h.win.evaluate(
+          async ({ projectId }) =>
+            (
+              window as unknown as {
+                api: {
+                  invoke: (
+                    channel: string,
+                    request: { projectId: number; shellIndex: number },
+                  ) => Promise<{ output: string }>;
+                };
+              }
+            ).api.invoke('shells:snapshot', { projectId, shellIndex: 0 }),
+          { projectId: alpha },
+        );
+        const log = join(h.home, 'status-geometry.log');
+        const events = existsSync(log) ? readFileSync(log, 'utf8') : '';
+        const workPid = events.match(/pid=(\d+) draw work /)?.[1];
+        const ownEvents = events.split('\n').filter((line) => line.startsWith(`pid=${workPid} `));
+        const sizes = [...ownEvents.join('\n').matchAll(/cols=(\d+) rows=(\d+)/g)];
+        const lastSize = sizes.at(-1);
+        const bottom = await replayBottomRows(
+          screen.output,
+          Number(lastSize?.[1] ?? 80),
+          Number(lastSize?.[2] ?? 24),
+        );
+        console.log(
+          'Claude screen failure',
+          JSON.stringify({
+            state:
+              (await statusSnapshot(h.win)).find(
+                (shell) => shell.projectId === alpha && shell.shellIndex === 0,
+              ) ?? 'missing',
+            bottom,
+            geometry: lastSize?.[0] ?? 'unrecorded (fallback 80x24)',
+            events: ownEvents,
+            snapshotEnd: screen.output.slice(-1200),
+          }),
+        );
+      } catch (diagnosticError) {
+        console.error(
+          'Claude screen diagnostic failed; original assertion follows',
+          diagnosticError,
+        );
+      }
       throw error;
     }
     await sendLine(h.win, alpha, omp, '/end');
