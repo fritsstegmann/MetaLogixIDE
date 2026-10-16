@@ -268,10 +268,11 @@ path.
 
 ### macOS frosted chrome
 
-On macOS the window sits on the native `sidebar` vibrancy material, and the
-chrome lets that material show through. The working area stays solid unless
-the user turns on the Frosted terminal setting. Windows and Linux are
-unchanged.
+On macOS the window sits on a native vibrancy material (`sidebar` by default),
+and the chrome lets that material show through. The working area stays solid
+unless the user sets a Terminal frost level. The user controls all of this in
+the Frosted glass settings (see "Frosted glass settings" below). Windows and
+Linux are unchanged.
 
 **Layers.** All mac styling lives in `src/renderer/frosted-chrome.css`,
 imported after `styles.css`. Every selector starts with
@@ -282,10 +283,10 @@ this layer. On macOS:
 | Layer | Paint |
 |---|---|
 | `html`, `body` | Transparent. `--bg` is not redeclared, so tokens derived from it (the modal scrim) keep their values. |
-| Chrome root (`[data-chrome-root]`) | `--surface-chrome`: the opaque `--chrome-solid` at `--chrome-glass-alpha` (0.805 to 0.87 per palette and theme). |
+| Chrome root (`[data-chrome-root]`) | `--surface-chrome`: the opaque `--chrome-solid` at `--chrome-glass-alpha`. At Chrome frost Subtle that is 0.805 to 0.87 per palette and theme; Medium and Strong are lower (see "Frosted glass settings"). |
 | Main and popout sheet, chat column (`[data-view="chat"]`) | `--sheet-solid`, alpha 1. |
-| Sheet while a shell shows (`[data-sheet-content="shell"]`), setting ON | `--surface-terminal`: `--sheet-solid` at `--terminal-live-alpha`. |
-| Split-shell cards | `--surface-pane`: `--pane-solid`, at the terminal alpha when the setting is ON. |
+| Sheet while a shell shows (`[data-sheet-content="shell"]`), Terminal frost not Off | `--surface-terminal`: `--sheet-solid` at `--terminal-live-alpha`. |
+| Split-shell cards | `--surface-pane`: `--pane-solid`. With Terminal frost on, cards follow the sheet; only at Chrome Subtle with Terminal Subtle do they add their own glass, as before. |
 | Raw `--panel`, `--panel-strong`, `--chat-surface` | Same colour, alpha 1, so menus, popovers and inputs are never more translucent than before. |
 
 Hover, selected, active and field fills (`--surface-hover`, `--surface-active`,
@@ -315,7 +316,8 @@ over the black-to-white range (`REFERENCE_MATERIALS`):
 flattens each surface over 18 greys. Text needs 4.5:1, icons and indicators
 3:1. The visible effect, `(1 − total alpha) × 255` per channel, must be at
 least 32, which caps the total alpha at 0.8745. The terminal alpha multiplies
-the chrome alpha, so `--terminal-glass-alpha` is small (0 to 0.18). Muted and
+the chrome alpha, so the terminal can never be more translucent than the
+chrome around it, and `--terminal-glass-alpha` is small (0 to 0.18 at Subtle). Muted and
 label text on the chrome and on the frosted terminal may be lifted
 (`--chrome-text-muted`, `--terminal-text-muted`, `--chrome-chip-text`) to keep
 the floor.
@@ -356,23 +358,76 @@ Two groups are pinned in the test as known debt:
 
 The test fails if a pin starts to pass. ANSI colours are not tested.
 
-**Root flags.** `src/renderer/root-flags.ts` sets `data-platform="mac"` (darwin
-only) and `data-frost-terminal` on `<html>`. `main.tsx` calls it before React
-renders, because the CSP forbids an inline script. Attribute names live in
+**Root flags.** `src/renderer/root-flags.ts` sets three attributes on `<html>`:
+`data-platform="mac"` (darwin with Frosted chrome on), `data-chrome-frost`
+(`medium` or `strong`; absent at Subtle) and `data-terminal-frost` (`subtle`,
+`medium` or `strong`; absent at Off). In every other case it removes all three.
+Only the mac stylesheets read `data-platform`, so Frosted chrome off renders
+the pre-frost stack by construction. `main.tsx` calls it before React renders,
+because the CSP forbids an inline script. Attribute names live in
 `src/renderer/frosted-chrome-contract.ts`.
 
-**Frosted terminal setting.** `frost_terminal` (default `false`) is written only
-through `settings:set-frost-terminal`, which rejects a non-boolean value; the
-generic `settings:set` refuses the key. The handler emits `settings:changed`,
-and `useFrostTerminalAttribute` re-reads the value in every window. For the
-first paint, main adds `frostTerminal=1|0` to the renderer URL
-(`rendererQuery` in `src/main/window-chrome.ts`, key in
-`src/shared/frost-terminal.ts`); off darwin it always sends `0`. The switch sits
-in Settings > General below Window opacity and is rendered only on macOS.
-`win.setOpacity` (window opacity) multiplies on top of all of this.
+**Frosted glass settings.** Settings > General > Appearance shows a Frosted
+glass group after Window opacity, on macOS only
+(`src/renderer/components/settings/FrostedGlassGroup.tsx`). It holds four
+settings, declared in `src/shared/frosted-glass.ts`:
+
+| Key | Values | Default |
+|---|---|---|
+| `frost_chrome` | on, off | on |
+| `chrome_frost_level` | Subtle, Medium, Strong | Subtle (the original tuned look) |
+| `terminal_frost_level` | Off, Subtle, Medium, Strong | Off |
+| `vibrancy_material` | Sidebar, Under window, HUD, Menu, Popover | Sidebar |
+
+- Each key is written only through its own channel (`settings:set-frost-chrome`,
+  `settings:set-chrome-frost-level`, `settings:set-terminal-frost-level`,
+  `settings:set-vibrancy-material`). The channel rejects any value outside its
+  list without writing, and emits `settings:changed` on success. The generic
+  `settings:set` refuses all four keys and the legacy `frost_terminal`.
+- `useFrostedGlassAttributes` re-reads the values in every window on
+  `settings:changed`. For the first paint, main adds `frostChrome`,
+  `chromeFrost` and `terminalFrost` to the renderer URL (`rendererQuery` in
+  `src/main/window-chrome.ts`). Off darwin it always sends the no-effect
+  defaults.
+- The material reaches new windows through `platformChrome(platform, material)`
+  and open ones through `applyVibrancy`, which calls `setVibrancy` on every
+  window that is not destroyed. Any value outside the list falls back to
+  `sidebar`. Off darwin nothing is applied.
+- With Frosted chrome off, the two level controls are disabled but keep their
+  values, and the material still applies.
+- `seedDefaults` migrates the legacy `frost_terminal` boolean once: `true`
+  becomes Terminal frost Subtle, anything else Off. The legacy row is kept for
+  downgrade and is never written again.
+- `win.setOpacity` (window opacity) multiplies on top of all of this.
+
+Level values live in `src/renderer/frosted-glass-levels.css`, keyed on the two
+level attributes. Chrome alphas (Subtle / Medium / Strong) are 0.85 / 0.805 /
+0.77 in default dark, 0.855 / 0.81 / 0.775 in default light and catppuccin light,
+0.805 / 0.77 / 0.735 in catppuccin dark, 0.81 / 0.775 / 0.74 in rose-pine dark
+and 0.87 / 0.81 / 0.775 in rose-pine light. Each step adds at least 8/255 of
+visible effect. Terminal levels are set per chrome level, as total alphas that
+never go below the chrome alpha. At Chrome Subtle some terminal levels are
+equal, because the chrome leaves no room; the contrast test lists those
+combinations explicitly. Medium and Strong add per-palette label, text and
+`--accent-mark` lifts to keep every floor:
+- Sidebar, Tasks, status bar, root folder, split grip and drop-target accents
+  read `--accent-mark`, so `--accent` and white-on-accent fills never change.
+- In catppuccin light and rose-pine light at Strong, `--term-fg` on `:root` and
+  `--text` on the frosted Shell sheet are slightly darker. ANSI colours are
+  unchanged.
+- At Strong, muted text on the chrome comes close to `--text` in the dark
+  palettes, and equals it in catppuccin light and rose-pine light at Medium and
+  Strong. This is an accepted trade-off of the opt-in levels.
 
 **Focus.** Main and popout windows use `visualEffectState: 'followWindow'`, so
-the material goes flat when the window is not focused, as in Finder.
+the material goes flat when the window is not focused, as in Finder. Electron
+sets this only at window creation, so it does not change with the settings.
+
+**Why the envelope covers every material.** Every material paints some sRGB
+colour, and the luminance of a composite rises with each backdrop channel. So
+the black and white composites the test already samples bound every material,
+and no per-material contrast test is needed. Whether a material visibly frosts
+is a manual check.
 
 ### Command palette
 
