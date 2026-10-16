@@ -613,7 +613,7 @@ Claude hooks nor a renderer's scroll position control status dots.
 | Layer | File | Responsibility |
 |---|---|---|
 | Contract | `src/shared/agent-state.ts`, `src/shared/omp-report.ts` | Define agent identity, three states, accessible labels and a versioned OMP report. |
-| Adapter | `src/main/pty/{manager,screen-mirror}.ts` | Preserve original launch identity and PTY generation. Sample only the active terminal's bottom eight rows. |
+| Adapter | `src/main/pty/{manager,screen-mirror}.ts` | Preserve original launch identity and PTY generation. Sample the active terminal's bottom eight physical rows and join xterm-wrapped fragments. |
 | Adapter | `src/main/agent-status/foreground-posix.ts` | Check process ancestry and the foreground process group for a manually started Claude on macOS or Linux. |
 | Adapter | `src/main/agent-status/omp-receiver.ts` | Receive bounded reports on loopback. Authenticate the current OMP spawn and reject stale reports. |
 | Adapter | `src/main/agent-status/omp-launch.ts`, `resources/omp-status-extension.js` | Add an explicit app-owned extension to direct OMP launches. Report root-session lifecycle without prompt or tool arguments. |
