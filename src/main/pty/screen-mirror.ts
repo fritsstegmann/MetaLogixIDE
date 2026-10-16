@@ -59,17 +59,24 @@ export class ScreenMirror {
       });
     });
   }
-  /** Reads at most eight physical bottom viewport rows after queued parser writes drain. */
+  /** Reads at most eight physical bottom viewport rows, joining only xterm-wrapped lines. */
   liveBottomRows(): Promise<string[]> {
     if (this.disposed) return Promise.resolve([]);
     return new Promise<string[]>((resolve) => {
       const done = (): void => {
-        if (this.disposed) { resolve([]); return; }
+        if (this.disposed) {
+          resolve([]);
+          return;
+        }
         const buffer = this.term.buffer.active;
         const start = buffer.baseY + Math.max(0, this.term.rows - 8);
         const rows: string[] = [];
         for (let i = start; i < buffer.baseY + this.term.rows; i++) {
-          rows.push(buffer.getLine(i)?.translateToString(true) ?? '');
+          const line = buffer.getLine(i);
+          const text = line?.translateToString(!buffer.getLine(i + 1)?.isWrapped) ?? '';
+          if (line?.isWrapped && rows.length > 0)
+            rows[rows.length - 1] = (rows.at(-1) ?? '') + text;
+          else rows.push(text);
         }
         resolve(rows);
       };

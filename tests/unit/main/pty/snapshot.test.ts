@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Terminal } from '@xterm/headless';
 import { PtyManager } from '@main/pty/manager';
 import { ScreenMirror } from '@main/pty/screen-mirror';
+import { classifyClaudeScreen } from '@main/agent-status/claude-screen';
 
 const COLS = 80;
 describe('bounded live-screen observation', () => {
@@ -24,6 +25,15 @@ describe('bounded live-screen observation', () => {
     mirror.write('\x1b[?1049h\x1b[H> Ready for another task');
     expect((await mirror.liveBottomRows()).join('\n')).toContain('Ready for another task');
     expect((await mirror.liveBottomRows()).join('\n')).not.toContain('Allow Bash command?');
+    mirror.dispose();
+  });
+  it('keeps a working Claude screen recognizable when narrow PTY lines wrap', async () => {
+    const mirror = new ScreenMirror(9, 11);
+    mirror.write('\x1b[2J\x1b[H\x1b[9;1HClaude Code\r\n✻ Thinking…\r\nEsc to interrupt');
+    const rows = await mirror.liveBottomRows();
+    expect(rows).toContain('✻ Thinking…');
+    expect(rows).toContain('Esc to interrupt');
+    expect(classifyClaudeScreen(rows)).toBe('busy');
     mirror.dispose();
   });
   it('settles pending row reads on disposal and never resurrects an obsolete screen', async () => {
