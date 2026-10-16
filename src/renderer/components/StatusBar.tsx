@@ -159,7 +159,7 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
         )}
       </button>
       {open && (
-        <div className="absolute bottom-full right-0 mb-2 w-[380px] max-h-[400px] overflow-y-auto rounded-md border border-[--border] bg-[--panel-strong] shadow-xl z-50 text-[11px]">
+        <div className="absolute bottom-full right-0 mb-2 w-[380px] max-h-[400px] overflow-y-auto rounded-md border border-[--border] bg-[--panel-strong] shadow-xl z-50 text-[11px]" data-overlay>
           <div className="px-3 py-2 border-b border-[--border] flex items-center gap-2">
             <span className="font-semibold text-[--text]">Alive shells</span>
             <span className="text-[--text-muted]">·  refresh every 2s</span>

@@ -1,0 +1,24 @@
+import { FROST_ATTR, FROST_TERMINAL_QUERY_KEY, MAC_PLATFORM } from './frosted-chrome-contract';
+
+export interface RootFlagTarget {
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
+}
+
+export interface RootFlags {
+  platform: string | undefined;
+  frostTerminal: boolean;
+}
+
+/** Sets the root attributes the macOS frosted-chrome CSS keys on. Off darwin, sets nothing mac-specific and clears the frosted-terminal attribute whatever the stored value. */
+export function applyRootFlags(el: RootFlagTarget, flags: RootFlags): void {
+  const mac = flags.platform === 'darwin';
+  if (mac) el.setAttribute(FROST_ATTR.platform, MAC_PLATFORM);
+  if (mac && flags.frostTerminal) el.setAttribute(FROST_ATTR.frostTerminal, '');
+  else el.removeAttribute(FROST_ATTR.frostTerminal);
+}
+
+/** Reads the first-paint frosted-terminal value from a `location.search` string. Only `frostTerminal=1` is ON. */
+export function parseFrostTerminalQuery(search: string): boolean {
+  return new URLSearchParams(search).get(FROST_TERMINAL_QUERY_KEY) === '1';
+}
