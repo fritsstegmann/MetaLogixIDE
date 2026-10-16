@@ -73,6 +73,13 @@ describe('registerIpc', () => {
     expect(list).toHaveBeenCalledTimes(1);
   });
 
+  it('agent-state:list fails explicitly before status installation instead of hiding the missing service', async () => {
+    const ipc = fakeIpcMain();
+    const services = { agentStatus: null } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc, services, () => {});
+    await expect(ipc.handlers.get('agent-state:list')!({}, undefined)).rejects.toThrow('agent status not installed');
+  });
+
   it('settings:set rejects key claude_permission_mode without writing', async () => {
     const ipc = fakeIpcMain();
     const settings = realSettings();

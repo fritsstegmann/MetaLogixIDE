@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { AgentState } from '@shared/agent-state';
 import type { Project } from '@shared/types';
 import {
   PALETTE_COPY,
@@ -21,12 +22,13 @@ const state = vi.hoisted(() => ({
   projects: [] as Project[],
   alive: new Set<number>(),
   files: { status: 'idle' } as PaletteFilesState,
+  agentState: 'busy' as AgentState,
 }));
 
 vi.mock('@renderer/api', () => ({ api: { invoke: vi.fn(), on: vi.fn(() => () => undefined) } }));
 vi.mock('@renderer/hooks/useProjects', () => ({ useProjects: () => ({ projects: state.projects, refresh: vi.fn() }) }));
 vi.mock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: state.alive, refresh: vi.fn() }) }));
-vi.mock('@renderer/hooks/useAgentStates', () => ({ useProjectAgentState: () => 'busy' }));
+vi.mock('@renderer/hooks/useAgentStates', () => ({ useProjectAgentState: () => state.agentState }));
 vi.mock('@renderer/hooks/usePaletteFiles', () => ({ usePaletteFiles: () => state.files }));
 
 const { CommandPalette } = await import('@renderer/components/CommandPalette');
@@ -125,6 +127,7 @@ beforeEach(() => {
   state.projects = [project(1, 'alpha'), project(2, 'beta')];
   state.alive = new Set([1]);
   state.files = { status: 'idle' };
+  state.agentState = 'busy';
 });
 
 describe('CommandPalette — closed', () => {
@@ -305,6 +308,18 @@ describe('CommandPalette — project rows (AC7)', () => {
     expect(dot?.attrs['aria-label']).toBe('Working');
     expect(dot?.attrs.title).toBe('Working');
     expect(live).not.toMatch(/Claude is working|OMP is working/);
+  });
+
+  it('keeps a live idle project generic even when an agent shell is recognized', () => {
+    state.agentState = 'idle';
+    const html = render();
+    const live = outer(html, options(html)[0] as El);
+    const dot = elements(live).find((e) => e.attrs['data-testid'] === 'claude-dot');
+    expect(dot?.attrs['aria-label']).toBe('Idle');
+    expect(dot?.attrs.title).toBe('Idle');
+    expect(dot?.attrs['data-claude-state']).toBe('idle');
+    expect(text(outer(live, one(live, PALETTE_TESTIDS.projectStatus)))).toBe(PALETTE_COPY.projectStatus.idle);
+    expect(live).not.toMatch(/Claude is idle|OMP is idle/);
   });
 
 

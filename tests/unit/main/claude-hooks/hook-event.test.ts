@@ -140,4 +140,3 @@ describe('classifyHookEvent', () => {
     expect([...NEEDS_INPUT_TYPES].sort()).toEqual(['agent_needs_input', 'elicitation_dialog', 'elicitation_url_dialog', 'permission_prompt']);
   });
 });
-

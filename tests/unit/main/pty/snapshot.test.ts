@@ -26,6 +26,17 @@ describe('bounded live-screen observation', () => {
     expect((await mirror.liveBottomRows()).join('\n')).not.toContain('Allow Bash command?');
     mirror.dispose();
   });
+  it('settles pending row reads on disposal and never resurrects an obsolete screen', async () => {
+    const mirror = new ScreenMirror(40, 9);
+    mirror.write('secret prompt\r\nAllow Bash command?\r\n');
+    const pending = mirror.liveBottomRows();
+    mirror.dispose();
+    expect(await pending).toEqual([]);
+    mirror.write('new state');
+    mirror.resize(100, 40);
+    expect(await mirror.liveBottomRows()).toEqual([]);
+    expect(await mirror.snapshot()).toBe('');
+  });
 });
 const ROWS = 24;
 

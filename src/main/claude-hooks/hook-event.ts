@@ -55,4 +55,3 @@ export function classifyHookEvent(event: HookEvent): HookEventKind {
   if (event.hookEventName !== 'Notification' || event.notificationType === null) return 'ignored';
   return NEEDS_INPUT_TYPES.has(event.notificationType) ? 'needs-input' : 'ignored';
 }
-

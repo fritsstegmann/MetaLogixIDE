@@ -53,4 +53,23 @@ describe('Agent status transitions', () => {
     expect(tracker.list()).toEqual([]);
     expect(observe).toHaveBeenCalledWith(10);
   });
+  it('expires an unrefreshed OMP report while a live generation remains, then recovers from a fresh report', async () => {
+    vi.useFakeTimers();
+    try {
+      const liveShell = () => ({ pid: 10, generation: 'g1', agent: 'omp' as const });
+      const tracker = new AgentStatusTracker({ liveShell, liveBottomRows: async () => [] }, async () => false);
+      tracker.spawn({ ...identity, agent: 'omp' });
+      tracker.ompReport(shell, 'g1', 'blocked');
+      await vi.advanceTimersByTimeAsync(1600);
+      await tracker.refresh();
+      expect(tracker.list()).toEqual([{ ...shell, agent: 'omp', state: 'idle' }]);
+      tracker.ompReport(shell, 'g1', 'busy');
+      expect(tracker.list()[0]?.state).toBe('busy');
+      tracker.exit({ ...identity, agent: 'omp' });
+      tracker.ompReport(shell, 'g1', 'blocked');
+      expect(tracker.list()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

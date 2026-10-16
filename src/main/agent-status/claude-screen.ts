@@ -14,6 +14,7 @@ export function classifyClaudeScreen(rows: readonly string[]): AgentState {
   const live = visible.slice(lastReady + 1);
   if (lastReady >= 0 && live.length === 0) return 'idle';
   const bottom = live.slice(-6);
-  if (bottom.some((row) => APPROVAL.test(row)) && ANSWER.test(bottom.at(-1) ?? '')) return 'blocked';
+  if (bottom.some((row) => APPROVAL.test(row)) && ANSWER.test(bottom.at(-1) ?? ''))
+    return 'blocked';
   return bottom.some((row) => WORKING.test(row)) ? 'busy' : 'idle';
 }

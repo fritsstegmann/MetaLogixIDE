@@ -639,13 +639,15 @@ Rules:
   is unavailable, or `--trusted-extension` conflicts, OMP still starts
   and its status remains idle.
 - The OMP receiver accepts only bounded versioned reports for the current
-  spawn credential, PTY generation, session and increasing sequence. A
-  shell exit or replacement revokes that credential. OMP sends no OS
-  notification.
+  spawn credential, PTY generation, session and increasing sequence. During
+  a root session, the extension sends current turn and blocker counts every
+  250 ms. A later heartbeat repairs a lost transition. After 1,500 ms
+  without an accepted report, the tracker returns a live OMP shell to idle.
+  A shell exit or replacement revokes its credential. OMP sends no OS notification.
 - The IPC payload carries only `projectId`, `shellIndex`, `agent` and
-  `state`. An exit clears the renderer entry. Shell labels identify Claude
-  or OMP when working or blocked; mixed project and global labels use
-  generic text. Severity is blocked, then busy, then idle.
+  `state`. An exit clears the renderer entry. Every recognized individual
+  shell label names Claude or OMP, including idle. Project and global
+  labels use generic text. Severity is blocked, then busy, then idle.
 
 ### Project and app-wide environment variables
 
@@ -1130,23 +1132,22 @@ the whole side falls back to escaped plain text.
   and with emulation off, `blur()` does not resign key while no other window
   or app can take focus. Real macOS app activation delivers the event; this
   was verified by hand, not by the suite.
-- **Claude events come from hooks, not terminal output.** By default,
-  Claude Code sends no bell and no notification escape sequence to an
-  xterm.js terminal. A bell also does not tell which event happened. The
-  hook payload gives the event type and message. Tools that read the
-  terminal title spinner or the screen text break when Claude Code changes
-  its interface. The status dots use the PTY only for two things: answering
-  keystrokes, because no hook fires when the user answers a prompt, and
-  output silence, because no hook fires when the user interrupts a turn.
+- **Status authority differs from notification authority.** Claude
+  notifications use authenticated `Notification`, `Stop` and
+  `UserPromptSubmit` hooks. Status dots use only the current live bottom
+  screen of a recognized Claude PTY. A plain terminal's text cannot
+  establish Claude identity. OMP dots use authenticated lifecycle reports
+  from the app-owned extension. A reporter heartbeat repairs a missed
+  transition; its lease returns stale busy or blocked status to idle.
 - **A `Stop` with background tasks is not the end of the work.** Claude
   Code fires `Stop` when the main agent stops responding, also while
   background shells, subagents or teammates still run. The `background_tasks`
   list in the payload tells the two cases apart. Only its length is kept.
-- **One state drives the dots and the notifications.** The notifier reads
-  the tracker's applied hooks, not the receiver. A stream of state changes
-  alone is not enough: `PermissionRequest` sets blocked, and the
-  `permission_prompt` notification about 6 s later does not change the
-  state but must still notify.
+- **Notifications keep their own hook history.** The notification
+  history confirms Claude's current hook session and tracks eligibility
+  after a prompt answer, background `Stop`, or quiet turn. It does not
+  set status dots. A received needs-input or finished hook can notify
+  while the independent live-screen dot remains idle.
 - **Hooks are `http`, not `command`.** An `http` hook needs no shell,
   `curl` or `node` on the PATH, so the same file works on Windows. HTTP
   errors and timeouts do not block Claude Code.

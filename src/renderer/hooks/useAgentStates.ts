@@ -2,8 +2,13 @@
 import { useSyncExternalStore } from 'react';
 import { api } from '@renderer/api';
 import {
-  applyDelta, applySnapshot, overallSnapshotGetter, projectSnapshotGetter, shellSnapshotGetter,
-  type AgentStateMap, type ShellAgentState,
+  applyDelta,
+  applySnapshot,
+  overallSnapshotGetter,
+  projectSnapshotGetter,
+  shellSnapshotGetter,
+  type AgentStateMap,
+  type ShellAgentState,
 } from '@renderer/agent-state';
 import type { AgentShellStateEntry, AgentState } from '@shared/agent-state';
 
@@ -41,8 +46,13 @@ function start(): void {
     pending?.push(entry);
     publish(applyDelta(map, entry));
   });
-  const offAlive = api.on('alive-shells:changed', () => { void fetchSnapshot(); });
-  unsubscribeIpc = () => { offChanged(); offAlive(); };
+  const offAlive = api.on('alive-shells:changed', () => {
+    void fetchSnapshot();
+  });
+  unsubscribeIpc = () => {
+    offChanged();
+    offAlive();
+  };
   void fetchSnapshot();
 }
 

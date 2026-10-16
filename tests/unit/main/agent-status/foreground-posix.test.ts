@@ -17,4 +17,19 @@ describe('POSIX foreground ownership', () => {
     expect([a, b]).toEqual([true, true]);
     expect(sample).toHaveBeenCalledTimes(1);
   });
+  it('ignores unrelated foreground tasks, orphaned claude and background descendants', () => {
+    expect(findForegroundClaude('100 1 100 300 zsh /bin/zsh\n300 100 300 300 node /usr/bin/node\n301 300 301 300 claude /usr/bin/claude', 100)).toBe(false);
+    expect(findForegroundClaude('100 1 100 300 zsh /bin/zsh\n300 999 300 300 claude /usr/bin/claude', 100)).toBe(false);
+    expect(findForegroundClaude('100 1 100 300 zsh /bin/zsh\n300 100 300 300 node /usr/bin/node', 100)).toBe(false);
+    expect(findForegroundClaude(ps, 9999)).toBe(false);
+    expect(findForegroundClaude('malformed process output\n', 100)).toBe(false);
+  });
+
+  it('returns false when process sampling fails and retries a subsequent sample', async () => {
+    const sample = vi.fn().mockRejectedValueOnce(new Error('ps unavailable')).mockResolvedValueOnce(ps);
+    const observer = new PosixForegroundObserver(sample);
+    expect(await observer.hasClaude(100)).toBe(false);
+    expect(await observer.hasClaude(100)).toBe(true);
+    expect(sample).toHaveBeenCalledTimes(2);
+  });
 });

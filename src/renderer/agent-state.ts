@@ -17,7 +17,11 @@ export function keyFor(projectId: number, shellIndex: number): string {
 }
 
 /** Returns a shared fallback for a non-agent or absent shell, preserving selector identity. */
-export function shellStateOf(map: AgentStateMap, projectId: number, shellIndex: number): ShellAgentState {
+export function shellStateOf(
+  map: AgentStateMap,
+  projectId: number,
+  shellIndex: number,
+): ShellAgentState {
   return map.get(keyFor(projectId, shellIndex)) ?? IDLE_SHELL;
 }
 
@@ -41,12 +45,19 @@ export function overallStateOf(map: AgentStateMap): AgentState {
 }
 
 /** Derives one shell's stable snapshot from an injected current-map getter. */
-export function shellSnapshotGetter(getMap: () => AgentStateMap, projectId: number, shellIndex: number): () => ShellAgentState {
+export function shellSnapshotGetter(
+  getMap: () => AgentStateMap,
+  projectId: number,
+  shellIndex: number,
+): () => ShellAgentState {
   return () => shellStateOf(getMap(), projectId, shellIndex);
 }
 
 /** Derives a primitive project severity so unrelated shell updates cannot rerender it. */
-export function projectSnapshotGetter(getMap: () => AgentStateMap, projectId: number): () => AgentState {
+export function projectSnapshotGetter(
+  getMap: () => AgentStateMap,
+  projectId: number,
+): () => AgentState {
   return () => projectStateOf(getMap(), projectId);
 }
 
@@ -56,14 +67,21 @@ export function overallSnapshotGetter(getMap: () => AgentStateMap): () => AgentS
 }
 
 /** Replaces stale shell data on refresh, reusing unchanged values from the previous snapshot. */
-export function applySnapshot(entries: readonly AgentShellStateEntry[], previous: AgentStateMap = new Map()): AgentStateMap {
+export function applySnapshot(
+  entries: readonly AgentShellStateEntry[],
+  previous: AgentStateMap = new Map(),
+): AgentStateMap {
   const next = new Map<string, ShellAgentState>();
   for (const entry of entries) {
     if (entry.agent === null) continue;
     const key = keyFor(entry.projectId, entry.shellIndex);
     const current = previous.get(key);
-    next.set(key, current?.agent === entry.agent && current.state === entry.state
-      ? current : { agent: entry.agent, state: entry.state });
+    next.set(
+      key,
+      current?.agent === entry.agent && current.state === entry.state
+        ? current
+        : { agent: entry.agent, state: entry.state },
+    );
   }
   return next;
 }

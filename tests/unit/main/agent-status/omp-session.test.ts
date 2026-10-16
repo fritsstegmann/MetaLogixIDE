@@ -27,4 +27,20 @@ describe('OMP current-session lifecycle', () => {
     expect(state.apply(report('b', 4, 'session_switch', { active: true }))).toBe('busy');
     expect(state.apply(report('a', 5, 'agent_start'))).toBeNull();
   });
+  it('rejects an incomplete heartbeat without advancing the authenticated sequence', () => {
+    const state = new OmpSession();
+    expect(state.apply(report('a', 1, 'session_start', { active: true }))).toBe('busy');
+    expect(state.apply(report('a', 2, 'heartbeat', { active: false, approvals: 0 }))).toBeNull();
+    expect(state.apply(report('a', 2, 'heartbeat', { active: false, approvals: 0, questions: 0 }))).toBe('idle');
+  });
+  it('repairs missed completion and blocker resolution from an authoritative heartbeat', () => {
+    const state = new OmpSession();
+    expect(state.apply(report('a', 1, 'session_start', { active: true }))).toBe('busy');
+    expect(state.apply(report('a', 2, 'approval_requested'))).toBe('blocked');
+    expect(state.apply(report('a', 4, 'heartbeat', { active: false, approvals: 0, questions: 0 }))).toBe('idle');
+    expect(state.apply(report('a', 3, 'approval_resolved'))).toBeNull();
+    expect(state.apply(report('a', 5, 'heartbeat', { active: true, approvals: 0, questions: 1 }))).toBe('blocked');
+    expect(state.apply(report('a', 6, 'heartbeat', { active: true, approvals: 0, questions: 0 }))).toBe('busy');
+    expect(state.apply(report('other', 7, 'heartbeat', { active: false, approvals: 0, questions: 0 }))).toBeNull();
+  });
 });
