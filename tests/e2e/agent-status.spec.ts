@@ -531,7 +531,7 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
         },
         { message: 'Claude PTY redraws its working screen at nine columns' },
       )
-      .toContain('✻ Thinking…\r\nEsc to interrupt');
+      .toMatch(/✻ Thinking…\s+Esc to interrupt/);
     await expectShellState(h.win, alpha, 0, 'busy');
     await sendLine(h.win, alpha, omp, '/end');
     await expectAgentDot(popout.getByTestId(AGENT_DOT.testId).first(), 'omp', 'idle', 500);
