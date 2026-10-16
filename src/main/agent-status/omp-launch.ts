@@ -34,12 +34,13 @@ export function createOmpLaunchDecorator(deps: OmpLaunchDeps): SpawnDecorator {
     if (!isOmpArgv(launch.argv) || !deps.extensionPath || !(deps.fileExists ?? existsSync)(deps.extensionPath) || !port || launch.argv.includes('--trusted-extension')) return launch;
     const cmdShim = (deps.goesThroughCmd ?? ((argv: string[]) => toSpawnableArgv(argv)[1] === '/c'))(launch.argv);
     const extension = (deps.platform ?? process.platform) === 'win32' && cmdShim ? pathToFileURL(deps.extensionPath).href : deps.extensionPath;
+    // The app owns this root PTY. Do not inherit a parent OMP's nested-session flag.
     const { spawn, token } = deps.receiver.issue(shell);
     const [executable, ...args] = launch.argv;
     return {
       ...launch,
       argv: [executable ?? 'omp', '-e', extension, ...args],
-      env: { ...launch.env, [OMP_PORT_ENV]: String(port), [OMP_SPAWN_ENV]: spawn, [OMP_TOKEN_ENV]: token },
+      env: { ...launch.env, OMPCODE: '', [OMP_PORT_ENV]: String(port), [OMP_SPAWN_ENV]: spawn, [OMP_TOKEN_ENV]: token },
     };
   };
 }

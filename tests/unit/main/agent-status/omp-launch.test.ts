@@ -15,11 +15,29 @@ describe('OMP explicit extension injection', () => {
     const issue = vi.fn(() => ({ spawn: 'spawn', token: 'secret' }));
     const decorate = createOmpLaunchDecorator({ receiver: { issue, release: vi.fn() }, extensionPath: '/app/omp-status-extension.js', fileExists: () => true, port: () => 2000 });
     const original = launch(['omp', '-e', '/user/herdr.js', '--profile', 'work']);
-    expect(decorate(1, 0, original)).toEqual({ ...original, argv: ['omp', '-e', '/app/omp-status-extension.js', '-e', '/user/herdr.js', '--profile', 'work'], env: { ...original.env, METAIDE_OMP_STATUS_PORT: '2000', METAIDE_OMP_STATUS_SPAWN: 'spawn', METAIDE_OMP_STATUS_TOKEN: 'secret' } });
+    expect(decorate(1, 0, original)).toEqual({ ...original, argv: ['omp', '-e', '/app/omp-status-extension.js', '-e', '/user/herdr.js', '--profile', 'work'], env: { ...original.env, OMPCODE: '', METAIDE_OMP_STATUS_PORT: '2000', METAIDE_OMP_STATUS_SPAWN: 'spawn', METAIDE_OMP_STATUS_TOKEN: 'secret' } });
     expect(decorate(1, 0, launch(['omp', '--trusted-extension', '/only.js']))).toEqual(launch(['omp', '--trusted-extension', '/only.js']));
     expect(issue).toHaveBeenCalledTimes(1);
     const missing = createOmpLaunchDecorator({ receiver: { issue, release: vi.fn() }, extensionPath: '/missing/file.js', fileExists: () => false, port: () => 2000 });
     expect(missing(1, 0, original)).toBe(original);
+  });
+  it('treats an app-launched OMP as root even when the app inherited OMPCODE=1', () => {
+    const previous = process.env.OMPCODE;
+    process.env.OMPCODE = '1';
+    try {
+      const decorate = createOmpLaunchDecorator({
+        receiver: { issue: () => ({ spawn: 'root-spawn', token: 'secret' }), release: () => {} },
+        extensionPath: '/app/omp-status-extension.js',
+        fileExists: () => true,
+        port: () => 2000,
+      });
+      const child = decorate(1, 0, launch(['omp']));
+      expect(child.env.OMPCODE).toBe('');
+      expect(child.argv).toContain('/app/omp-status-extension.js');
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, 'OMPCODE');
+      else process.env.OMPCODE = previous;
+    }
   });
   it('encodes Windows cmd-shim extension paths without whitespace to preserve runnable argv', () => {
     const decorate = createOmpLaunchDecorator({
