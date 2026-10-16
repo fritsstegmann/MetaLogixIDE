@@ -9,7 +9,8 @@ export type OmpReportEvent =
   | 'approval_requested'
   | 'approval_resolved'
   | 'ask_start'
-  | 'ask_end';
+  | 'ask_end'
+  | 'heartbeat';
 
 /** Session and monotonic sequence are scoped to one authenticated PTY spawn. */
 export interface OmpReport {
@@ -19,4 +20,7 @@ export interface OmpReport {
   readonly event: OmpReportEvent;
   readonly active?: boolean;
   readonly willContinue?: boolean;
+  /** Full current counts let a later heartbeat repair a dropped transition. */
+  readonly approvals?: number;
+  readonly questions?: number;
 }
