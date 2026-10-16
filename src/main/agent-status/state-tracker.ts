@@ -16,7 +16,7 @@ export interface StatusPtyPort {
     projectId: number,
     shellIndex: number,
   ): { pid: number; generation: string; agent: AgentKind | null } | null;
-  liveBottomRows(projectId: number, shellIndex: number): Promise<string[]>;
+  liveStatus(projectId: number, shellIndex: number): Promise<{ rows: string[]; title: string }>;
 }
 
 interface Entry {
@@ -133,16 +133,20 @@ export class AgentStatusTracker {
       recognized = false;
     }
     if (!this.current(entry)) return;
-    let rows: string[] = [];
+    let state: AgentState = 'idle';
     if (recognized) {
       try {
-        rows = await this.pty.liveBottomRows(entry.identity.projectId, entry.identity.shellIndex);
+        const { rows, title } = await this.pty.liveStatus(
+          entry.identity.projectId,
+          entry.identity.shellIndex,
+        );
+        state = classifyClaudeScreen(rows, title);
       } catch {
         console.warn('[agent-status] screen sample unavailable');
       }
     }
     if (!this.current(entry)) return;
-    this.set(entry, recognized ? 'claude' : null, recognized ? classifyClaudeScreen(rows) : 'idle');
+    this.set(entry, recognized ? 'claude' : null, state);
   }
 
   private current(entry: Entry): boolean {

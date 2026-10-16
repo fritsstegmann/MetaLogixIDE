@@ -76,9 +76,9 @@ export class PtyManager extends EventEmitter {
     return entry ? { pid: entry.pid, generation: entry.generation, agent: entry.agent } : null;
   }
 
-  /** Samples live terminal rows after the parser drains; never includes scrollback. */
-  liveBottomRows(projectId: number, shellIndex: number): Promise<string[]> {
-    return this.entries.get(key(projectId, shellIndex))?.screen.liveBottomRows() ?? Promise.resolve([]);
+  /** Samples a live viewport and terminal title after the parser drains. */
+  liveStatus(projectId: number, shellIndex: number): Promise<{ rows: string[]; title: string }> {
+    return this.entries.get(key(projectId, shellIndex))?.screen.liveStatus() ?? Promise.resolve({ rows: [], title: '' });
   }
 
   private entries = new Map<string, Entry>();

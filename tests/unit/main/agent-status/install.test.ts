@@ -6,7 +6,7 @@ class FakePty extends EventEmitter {
   agent: 'omp' | null = 'omp';
   rows: string[] = [];
   liveShell(): { pid: number; generation: string; agent: 'omp' | null } { return { pid: 12, generation: 'g1', agent: this.agent }; }
-  async liveBottomRows(): Promise<string[]> { return this.rows; }
+  async liveStatus(): Promise<{ rows: string[]; title: string }> { return { rows: this.rows, title: '' }; }
 }
 
 describe('status installer', () => {

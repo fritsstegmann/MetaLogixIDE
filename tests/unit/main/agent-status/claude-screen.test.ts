@@ -15,4 +15,22 @@ describe('Claude live-screen authority', () => {
     expect(classifyClaudeScreen(['some log', 'spinner', 'what should I do?'])).toBe('idle');
     expect(classifyClaudeScreen([])).toBe('idle');
   });
+  it('uses Claude title activity when live content has no working line', () => {
+    expect(classifyClaudeScreen(['❯ '], '◐ Claude Code')).toBe('busy');
+    expect(classifyClaudeScreen(['❯ '], '⠋ Claude Code')).toBe('busy');
+    expect(classifyClaudeScreen(['❯ '], '✳ Claude Code')).toBe('idle');
+  });
+
+  it('recognizes current Claude activity before its persistent input box', () => {
+    expect(classifyClaudeScreen(['✢ Reading files… (3s · ↓ 120 tokens)', '────────', '❯ '])).toBe('busy');
+    expect(classifyClaudeScreen(['✢ Waiting for 2 background agents to finish', '────────', '❯ '])).toBe('busy');
+    expect(classifyClaudeScreen(['❯ ', 'previous ✢ Reading files… (3s · ↓ 120 tokens)'])).toBe('idle');
+  });
+
+  it('prioritizes a live confirmation form over a working terminal title', () => {
+    expect(classifyClaudeScreen(
+      ['────────', 'Select permission mode', '❯ 1. Default', 'Enter to select · ↑↓ to navigate · Esc to cancel'],
+      '◐ Claude Code',
+    )).toBe('blocked');
+  });
 });
