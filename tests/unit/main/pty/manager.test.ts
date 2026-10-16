@@ -176,10 +176,10 @@ describe('PtyManager', () => {
 });
 
 describe('PtyManager live status port', () => {
-  it('returns generation-scoped spawn identity and bottom rows only while shell lives', async () => {
+  it('returns generation-scoped spawn identity and a live status sample only while shell lives', async () => {
     const mgr = new PtyManager();
     expect(mgr.liveShell(72, 0)).toBeNull();
-    expect(await mgr.liveBottomRows(72, 0)).toEqual([]);
+    expect(await mgr.liveStatus(72, 0)).toEqual({ rows: [], title: '' });
     const arrived = untilData(mgr, 72, 'SIZE=');
     const spawned = await mgr.spawn(72, 0, sizeLaunch(), 80, 6);
     await arrived;
@@ -187,11 +187,11 @@ describe('PtyManager live status port', () => {
     expect(live).toMatchObject({ pid: spawned.pid, agent: null });
     expect(live?.generation).toEqual(expect.any(String));
     await vi.waitFor(async () => {
-      expect((await mgr.liveBottomRows(72, 0)).join('\n')).toContain('SIZE=');
+      expect((await mgr.liveStatus(72, 0)).rows.join('\n')).toContain('SIZE=');
     }, { timeout: 400, interval: 10 });
     await mgr.kill(72, 0);
     expect(mgr.liveShell(72, 0)).toBeNull();
-    expect(await mgr.liveBottomRows(72, 0)).toEqual([]);
+    expect(await mgr.liveStatus(72, 0)).toEqual({ rows: [], title: '' });
   });
 });
 

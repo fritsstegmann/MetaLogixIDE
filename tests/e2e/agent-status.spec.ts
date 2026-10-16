@@ -65,6 +65,26 @@ test('AC1/AC4/AC12/AC13: undecorated app-launched Claude follows its screen thro
   }
 });
 
+test('Claude terminal title, current spinner, and confirmation form drive live status dots', async () => {
+  const h = await launchStatus(['demo']);
+  try {
+    await openProject(h.win, 'demo');
+    const id = await projectId(h.win, 'demo');
+    await waitForShell(h.win, id, 0, 'mock-claude ready');
+    await expectAgentDot(tabDot(h.win, 0), 'claude', 'idle');
+    await sendLine(h.win, id, 0, '/status-title-work');
+    await expectAgentDot(tabDot(h.win, 0), 'claude', 'busy');
+    await sendLine(h.win, id, 0, '/status-modern-approval');
+    await expectAgentDot(tabDot(h.win, 0), 'claude', 'blocked');
+    await sendLine(h.win, id, 0, '/status-modern-work');
+    await expectAgentDot(tabDot(h.win, 0), 'claude', 'busy');
+    await sendLine(h.win, id, 0, '/status-ready');
+    await expectAgentDot(tabDot(h.win, 0), 'claude', 'idle');
+  } finally {
+    await h.close();
+  }
+});
+
 test('AC3/AC7/AC10: exiting and relaunching Claude clears the old blocked spawn without a hook', async () => {
   const h = await launchStatus(['demo']);
   try {
