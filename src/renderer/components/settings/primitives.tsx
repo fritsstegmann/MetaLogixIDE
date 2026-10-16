@@ -117,7 +117,6 @@ interface SwitchProps {
   readonly ariaLabel: string;
   readonly testId: string;
   readonly checked: boolean;
-  readonly disabled?: boolean;
   readonly onChange: (checked: boolean) => void;
 }
 
@@ -125,23 +124,20 @@ interface SwitchProps {
  * Settings switch row: visible `label` left, a 38x22 track right. The control is a native
  * checkbox with `role="switch"` stretched transparently over the track so it stays a real click
  * target; `ariaLabel` must contain `label`. State shows by thumb position as well as track colour.
- * `disabled` keeps the row readable but un-interactive and out of the tab order.
  */
-export function Switch({ label, ariaLabel, testId, checked, disabled = false, onChange }: SwitchProps) {
+export function Switch({ label, ariaLabel, testId, checked, onChange }: SwitchProps) {
   return (
-    <label className={`flex items-center justify-between gap-4 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+    <label className="flex cursor-pointer items-center justify-between gap-4">
       <span className={ROW_LABEL}>{label}</span>
       <span className="relative h-[22px] w-[38px] shrink-0">
         <input
           type="checkbox"
           role="switch"
           aria-label={ariaLabel}
-          aria-disabled={disabled || undefined}
-          disabled={disabled}
           data-testid={testId}
           checked={checked}
           onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.checked)}
-          className={`peer absolute inset-0 z-10 m-0 opacity-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+          className="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0"
         />
         <span
           aria-hidden="true"

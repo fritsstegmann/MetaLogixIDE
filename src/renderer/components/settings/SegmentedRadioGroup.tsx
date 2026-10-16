@@ -8,6 +8,7 @@ export interface SegmentedRadioGroupProps<T extends string> {
   value: T;
   disabled?: boolean;
   testId?: string;
+  describedBy?: string;
   onChange: (value: T) => void;
 }
 
@@ -16,10 +17,25 @@ const CHECKED = 'bg-[--accent-soft] font-medium text-[--accent-soft-text]';
 const UNCHECKED = 'text-[--text] hover:bg-[--surface-hover]';
 const DISABLED = 'text-[--text-muted]';
 
+function moveSelection<T extends string>(
+  event: KeyboardEvent<HTMLButtonElement>,
+  options: readonly T[],
+  value: T,
+  onChange: (value: T) => void,
+): void {
+  const nextIndex = nextOptionIndex(options.indexOf(value), options.length, event.key);
+  if (nextIndex === null) return;
+  event.preventDefault();
+  const next = options[nextIndex]!;
+  onChange(next);
+  event.currentTarget.parentElement?.querySelector<HTMLElement>(`[data-option="${next}"]`)?.focus();
+}
+
 /**
  * Generic keyboard-operable radiogroup with roving focus and arrow keys, extracted from the
  * `ModeControl` pattern for any `T extends string` option set. `disabled` keeps every option
- * readable but un-interactive and out of the tab order.
+ * readable but un-interactive and out of the tab order; `describedBy` is the id of the text
+ * (such as the reason it is disabled) announced with the group.
  */
 export function SegmentedRadioGroup<T extends string>({
   label,
@@ -28,23 +44,14 @@ export function SegmentedRadioGroup<T extends string>({
   value,
   disabled = false,
   testId,
+  describedBy,
   onChange,
 }: SegmentedRadioGroupProps<T>) {
-  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
-    if (disabled) return;
-    const currentIndex = options.indexOf(value);
-    const nextIndex = nextOptionIndex(currentIndex, options.length, event.key);
-    if (nextIndex === null) return;
-    event.preventDefault();
-    const next = options[nextIndex]!;
-    onChange(next);
-    event.currentTarget.parentElement?.querySelector<HTMLElement>(`[data-option="${next}"]`)?.focus();
-  }
-
   return (
     <div
       role="radiogroup"
       aria-label={label}
+      aria-describedby={describedBy}
       data-testid={testId}
       className="inline-flex gap-0.5 rounded-[11px] bg-[--surface-field] p-[3px]"
     >
@@ -61,7 +68,7 @@ export function SegmentedRadioGroup<T extends string>({
             tabIndex={!disabled && checked ? 0 : -1}
             data-option={option}
             onClick={() => { if (!disabled) onChange(option); }}
-            onKeyDown={onKeyDown}
+            onKeyDown={(event) => { if (!disabled) moveSelection(event, options, value, onChange); }}
             className={`${SEGMENT} ${disabled ? DISABLED : checked ? CHECKED : UNCHECKED}`}
           >
             {labels[option]}

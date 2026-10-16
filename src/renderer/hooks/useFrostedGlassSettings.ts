@@ -57,8 +57,9 @@ interface SaveResult {
 
 /**
  * Loads the four frosted-glass settings once on mount and saves each through its dedicated
- * validated channel. A save optimistically applies the new value, then reverts to the prior
- * value and logs the error when the main process refuses it or the IPC call rejects (AC28).
+ * validated channel. A save optimistically applies the new value, then logs the error and reverts
+ * to the prior value when the main process refuses it or the IPC call rejects (AC28) — unless a
+ * later save has already replaced that value, so a slow failure never undoes a newer choice.
  */
 export function useFrostedGlassSettings(): FrostedGlassSettingsApi {
   const [values, setValues] = useState<FrostedGlassSettings>(INITIAL);
@@ -79,7 +80,7 @@ export function useFrostedGlassSettings(): FrostedGlassSettingsApi {
     } catch (e) {
       console.error('frosted glass setting save failed', key, e);
     }
-    setValues((v) => ({ ...v, [key]: prev }));
+    setValues((v) => (v[key] === next ? { ...v, [key]: prev } : v));
   }
 
   return {

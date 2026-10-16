@@ -113,6 +113,18 @@ describe('GeneralPanel — FrostedGlassGroup rendered inside Appearance, mac onl
     expect(html.match(/<section/g)).toHaveLength(4);
   });
 
+  it('places the group inside the Appearance <section>, directly after the Window opacity row (AC26)', () => {
+    const html = panel('mac');
+    const sections = html.match(/<section\b.*?<\/section>/g) ?? [];
+    const appearance = sections.find((s) => />Appearance<\/h2>/.test(s)) ?? '';
+    const groupTag = `<div data-testid="${FROSTED_GLASS_TESTIDS.group}"`;
+    expect(appearance).toContain('data-testid="window-opacity-slider"');
+    expect(appearance).toContain(groupTag);
+    const afterSlider = appearance.slice(appearance.indexOf('data-testid="window-opacity-slider"'));
+    const betweenRowAndGroup = afterSlider.slice(afterSlider.indexOf('%</span>') + '%</span>'.length, afterSlider.indexOf(groupTag));
+    expect(betweenRowAndGroup).toMatch(/^(<\/div>)+$/);
+  });
+
   it('omits the group entirely under any other platform', () => {
     const html = panel('other');
     expect(html).toContain('data-testid="window-opacity-slider"');

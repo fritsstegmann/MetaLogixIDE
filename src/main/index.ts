@@ -12,8 +12,14 @@ import { installAgentStatus } from './agent-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
-import { applyVibrancy, platformChrome, rendererQuery } from './window-chrome';
-import { FROSTED_GLASS_DEFAULTS, type FrostFlags, type VibrancyMaterial } from '@shared/frosted-glass';
+import {
+  FROSTED_GLASS_FALLBACK,
+  applyVibrancy,
+  platformChrome,
+  readStoredFrostedGlass,
+  rendererQuery,
+  type StoredFrostedGlass,
+} from './window-chrome';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -330,23 +336,12 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-interface FrostedGlassSettings extends FrostFlags {
-  vibrancyMaterial: VibrancyMaterial;
-}
-
-const FROSTED_GLASS_FALLBACK: FrostedGlassSettings = {
-  frostChrome: FROSTED_GLASS_DEFAULTS.frostChrome,
-  chromeFrost: FROSTED_GLASS_DEFAULTS.chromeFrostLevel,
-  terminalFrost: FROSTED_GLASS_DEFAULTS.terminalFrostLevel,
-  vibrancyMaterial: FROSTED_GLASS_DEFAULTS.vibrancyMaterial,
-};
-
 /**
  * Reads the four frosted-glass settings for `BrowserWindow` creation and the renderer query
- * string (AC1, AC5). Late-bound: set once services exist; a window created before then, or a
- * failed read, falls back to the shared defaults (AC1).
+ * string (AC1, AC5), each validated by `readStoredFrostedGlass`. Late-bound: set once services
+ * exist; a window created before then, or a failed read, falls back to the shared defaults (AC1).
  */
-let readFrostedGlass: () => FrostedGlassSettings = () => FROSTED_GLASS_FALLBACK;
+let readFrostedGlass: () => StoredFrostedGlass = () => FROSTED_GLASS_FALLBACK;
 
 // Reads the stored `window_opacity`. Set once services exist. The value is
 // clamped to 30..100 here; a window created before then, a failed read or a
@@ -442,18 +437,7 @@ const startupReady = app.whenReady().then(async () => {
   }
   // New windows read the current opacity setting when they are created.
   readWindowOpacity = () => services.settings.get('window_opacity');
-  readFrostedGlass = () => {
-    try {
-      return {
-        frostChrome: services.settings.get('frost_chrome'),
-        chromeFrost: services.settings.get('chrome_frost_level'),
-        terminalFrost: services.settings.get('terminal_frost_level'),
-        vibrancyMaterial: services.settings.get('vibrancy_material'),
-      };
-    } catch {
-      return FROSTED_GLASS_FALLBACK;
-    }
-  };
+  readFrostedGlass = () => readStoredFrostedGlass((key) => services.settings.get(key));
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),

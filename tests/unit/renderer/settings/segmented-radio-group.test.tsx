@@ -109,4 +109,27 @@ describe('SegmentedRadioGroup markup', () => {
     );
     expect(html).toContain('data-testid="chrome-frost-group"');
   });
+
+  it('points the radiogroup aria-describedby at describedBy, so a reason is announced with it', () => {
+    const html = renderToStaticMarkup(
+      <SegmentedRadioGroup label="Chrome frost" options={OPTIONS} labels={LABELS} value="a" describedBy="why" onChange={() => undefined} />,
+    );
+    expect(/<div[^>]*role="radiogroup"[^>]*>/.exec(html)?.[0]).toContain('aria-describedby="why"');
+  });
+
+  it('carries no aria-describedby without describedBy', () => {
+    const html = renderToStaticMarkup(
+      <SegmentedRadioGroup label="Chrome frost" options={OPTIONS} labels={LABELS} value="a" onChange={() => undefined} />,
+    );
+    expect(html).not.toContain('aria-describedby');
+  });
+
+  it('disabled ignores arrow keys', () => {
+    const onChange = vi.fn();
+    const radios = elements(
+      SegmentedRadioGroup({ label: 'Chrome frost', options: OPTIONS, labels: LABELS, value: 'a', disabled: true, onChange }),
+    ).filter((e) => e.props && (e.props as { role?: string }).role === 'radio');
+    (radios[0]!.props as { onKeyDown: (e: unknown) => void }).onKeyDown({ key: 'ArrowRight', preventDefault: vi.fn() });
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

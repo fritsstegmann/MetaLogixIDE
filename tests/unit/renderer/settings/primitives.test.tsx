@@ -185,19 +185,4 @@ describe('Switch', () => {
     (input?.props.onChange as (e: unknown) => void)({ target: { checked: next } });
     expect(onChange).toHaveBeenCalledWith(next);
   });
-
-  it('is enabled and not aria-disabled by default', () => {
-    const html = renderToStaticMarkup(<Switch {...props} checked onChange={() => {}} />);
-    expect(attr(html, 'input', 'disabled')).toBeUndefined();
-    expect(attr(html, 'input', 'aria-disabled')).toBeUndefined();
-  });
-
-  it('disabled renders a disabled, aria-disabled checkbox that stays readable and ignores onChange', () => {
-    const onChange = vi.fn();
-    const html = renderToStaticMarkup(<Switch {...props} checked disabled onChange={onChange} />);
-    expect(attr(html, 'input', 'disabled')).toBe('');
-    expect(attr(html, 'input', 'aria-disabled')).toBe('true');
-    expect(attr(html, 'input', 'checked')).toBe('');
-    expect(html).toContain(`>${props.label}<`);
-  });
 });

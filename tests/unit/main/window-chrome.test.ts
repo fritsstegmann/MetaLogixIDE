@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { platformChrome, rendererQuery, resolveMaterial, applyVibrancy } from '@main/window-chrome';
+import {
+  FROSTED_GLASS_FALLBACK,
+  applyVibrancy,
+  platformChrome,
+  readStoredFrostedGlass,
+  rendererQuery,
+  resolveMaterial,
+} from '@main/window-chrome';
 
 describe('resolveMaterial (AC18)', () => {
   it.each(['sidebar', 'under-window', 'hud', 'menu', 'popover'] as const)('passes through the approved material %s', (material) => {
@@ -88,5 +95,40 @@ describe('rendererQuery (AC5, AC6)', () => {
 
   it('never sends the legacy frostTerminal key (AC34, D19)', () => {
     expect(rendererQuery({ platform: 'darwin', frostChrome: true, chromeFrost: 'subtle', terminalFrost: 'subtle' })).not.toContain('frostTerminal');
+  });
+});
+
+describe('readStoredFrostedGlass (gate L5: stored values validated before the query string)', () => {
+  const store = (values: Record<string, unknown>) => (key: string) => values[key];
+  const VALID = { frost_chrome: false, chrome_frost_level: 'strong', terminal_frost_level: 'medium', vibrancy_material: 'hud' };
+
+  it('passes approved stored values through, keyed by the settings keys', () => {
+    expect(readStoredFrostedGlass(store(VALID))).toEqual({
+      frostChrome: false,
+      chromeFrost: 'strong',
+      terminalFrost: 'medium',
+      vibrancyMaterial: 'hud',
+    });
+  });
+
+  it.each([
+    ['frost_chrome', 'false', 'frostChrome'],
+    ['chrome_frost_level', 'off', 'chromeFrost'],
+    ['chrome_frost_level', 'x&popout=1', 'chromeFrost'],
+    ['terminal_frost_level', 'extreme', 'terminalFrost'],
+    ['terminal_frost_level', 3, 'terminalFrost'],
+    ['vibrancy_material', 'window', 'vibrancyMaterial'],
+  ] as const)('a tampered %s of %j falls back to its own default only', (key, bad, field) => {
+    const got = readStoredFrostedGlass(store({ ...VALID, [key]: bad }));
+    expect(got).toEqual({ ...readStoredFrostedGlass(store(VALID)), [field]: FROSTED_GLASS_FALLBACK[field] });
+  });
+
+  it('a tampered level never reaches the renderer query string', () => {
+    const read = readStoredFrostedGlass(store({ ...VALID, chrome_frost_level: 'x&popout=1' }));
+    expect(rendererQuery({ ...read, platform: 'darwin' })).not.toContain('popout');
+  });
+
+  it('a read that throws falls back to every default', () => {
+    expect(readStoredFrostedGlass(() => { throw new Error('db closed'); })).toEqual(FROSTED_GLASS_FALLBACK);
   });
 });

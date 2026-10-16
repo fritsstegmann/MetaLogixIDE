@@ -410,7 +410,7 @@ const RULES = [
   ...parseRules(LEVELS, 200_000),
 ];
 
-type Region = 'chrome' | 'sheet' | 'card' | 'chat' | 'modal' | 'overlay';
+type Region = 'chrome' | 'sheet' | 'card' | 'chat' | 'modal' | 'overlay' | 'sheet-popover';
 
 /** The hook the mac stylesheet resets chrome lifts on for popovers, menus and toasts under the chrome root. */
 const OVERLAY_ATTR = FROST_ATTR.overlay;
@@ -429,7 +429,7 @@ function htmlEl(combo: Combo, state: State): El {
   return { tag: 'html', root: true, attrs };
 }
 
-/** The element path from html down to `region`, with the utility class each element paints in App.tsx and ShellSplit.tsx. */
+/** The element path from html down to `region`, with the utility class each element paints in App.tsx, ShellSplit.tsx and ShellTabsBar.tsx (`sheet-popover` is its "Add a shell" popover inside the Shell sheet). */
 function regionPath(combo: Combo, state: State, region: Region, content: SheetContent): El[] {
   const path: El[] = [
     htmlEl(combo, state),
@@ -443,7 +443,7 @@ function regionPath(combo: Combo, state: State, region: Region, content: SheetCo
   if (region === 'chat') path.push({ tag: 'div', attrs: { 'data-view': 'chat' } });
   if (region === 'modal') path.push({ tag: 'div', attrs: {}, classes: [MODAL_CLASSES.layer] });
   if (region === 'overlay') path.push({ tag: 'div', attrs: { [OVERLAY_ATTR]: '' } });
-  if (region === 'sheet' || region === 'card')
+  if (region === 'sheet' || region === 'card' || region === 'sheet-popover')
     path.push({
       tag: 'main',
       attrs: { [FROST_ATTR.sheetContent]: content },
@@ -451,6 +451,7 @@ function regionPath(combo: Combo, state: State, region: Region, content: SheetCo
     });
   if (region === 'card')
     path.push({ tag: 'div', attrs: {}, utility: [['background-color', 'var(--surface-pane)']] });
+  if (region === 'sheet-popover') path.push({ tag: 'div', attrs: { [OVERLAY_ATTR]: '' } });
   return path;
 }
 
@@ -1306,7 +1307,7 @@ function chromeChecks(c: Combo, state: State): Check[] {
   return checks;
 }
 
-/** Every #38 terminal floor (AC9, AC11) on the sheet and split card in `state`, terminal frosted. */
+/** Every #38 terminal floor (AC9, AC11) on the sheet and split card in `state`: terminal frosted, or terminal Off under Reduce transparency (no visible-effect rows there). */
 function terminalChecks(c: Combo, state: State): Check[] {
   const sheet = tree(c, state, 'sheet', 'shell');
   const card = tree(c, state, 'card', 'shell');
@@ -1479,6 +1480,17 @@ describe.each(COMBOS)('$label terminal frost levels (glass-settings AC14 to AC16
         expect(failing(terminalChecks(c, at(cl, tl, rt)))).toEqual([]);
       },
     );
+
+    it('terminal Off under Reduce transparency meets every #38 terminal floor on the solid sheet and card that the off-mac palette meets, and never measures below it (#38 AC10)', () => {
+      const rows = terminalChecks(c, at(cl, 'off', true));
+      const offMac = terminalChecks(c, { ...BASE, reduceTransparency: true });
+      const label = (f: string): string => f.slice(0, f.indexOf(':'));
+      expect(failing(rows).map(label)).toEqual(failing(offMac).map(label));
+      for (const [name, value, floor] of rows) {
+        const before = offMac.find(([n]) => n === name)?.[1] as number;
+        expect(value, name).toBeGreaterThanOrEqual(Math.min(before, floor) - EPS);
+      }
+    });
   });
 });
 
@@ -1571,6 +1583,7 @@ describe.each(COMBOS)('$label working-area tokens stay the palette values at eve
       ['chat', 'shell'],
       ['modal', 'shell'],
       ['overlay', 'shell'],
+      ['sheet-popover', 'shell'],
     ];
     if (state.terminalLevel === 'off') regions.push(['sheet', 'shell']);
     const rootScope: Tree = { scope: lookupRoot(tree(c, state, 'chrome').scope), layers: [] };
@@ -1583,6 +1596,37 @@ describe.each(COMBOS)('$label working-area tokens stay the palette values at eve
       for (const [read, fallback] of FALLBACK_TOKENS)
         expect(evalColour(read, t.scope), `${where} ${read}`).toEqual(evalColour(fallback, rootScope.scope));
     }
+  });
+});
+
+/** Recorded expressions a popover's own opaque `--panel-strong` hides: the backdrop composites and the sheet surface it covers. */
+const POPOVER_HIDDEN = new Set(['@alpha', '@black', '@white', 'var(--surface-sheet)']);
+
+describe.each(COMBOS)('$label the "Add a shell" popover inside the Shell sheet is an overlay (glass-settings AC31)', (c) => {
+  const drift = (state: State): string[] => {
+    const overlay = snapshot(tree(c, state, 'overlay'));
+    return [...snapshot(tree(c, state, 'sheet-popover'))]
+      .filter(([e, v]) => !POPOVER_HIDDEN.has(e) && v !== overlay.get(e))
+      .map(([e]) => e);
+  };
+
+  it.each(MAC_STATES)('%s: every recorded token resolves exactly as a top-level overlay', (_, state) => {
+    expect(drift(state)).toEqual([]);
+  });
+
+  it.each([
+    ['off', OFF],
+    ['on', ON],
+    ['off-rt', at('subtle', 'off', true)],
+    ['on-rt', at('subtle', 'subtle', true)],
+  ] as const)('at Subtle (%s) every recorded token equals the main@6929753 overlay', (recorded, state) => {
+    const then = FIXTURE.entries[`${c.label}|${recorded}|overlay|shell`] as readonly number[];
+    const now = snapshot(tree(c, state, 'sheet-popover'));
+    const mismatched = FIXTURE.exprs.filter((e, i) => {
+      const was = (then[i] ?? -1) < 0 ? null : (FIXTURE.values[then[i] as number] ?? null);
+      return !POPOVER_HIDDEN.has(e) && now.get(e) !== was;
+    });
+    expect(mismatched).toEqual([]);
   });
 });
 
@@ -1904,6 +1948,12 @@ describe('chrome colour inventory (D17)', () => {
     },
   );
 
+  it('ShellTabsBar spreads the overlay hook onto both "Add a shell" popover panels, so the reset keeps Shell sheet lifts out of them (the sheet-popover region, AC31)', () => {
+    const text = readFileSync(resolve(COMPONENTS, 'ShellTabsBar.tsx'), 'utf8');
+    expect(between(text, 'const panelProps = {', '};')).toMatch(new RegExp(`'${FROST_ATTR.overlay}':\\s*''`));
+    expect(text.match(/<m\.div\s+\{\.\.\.panelProps\}/g)).toHaveLength(2);
+  });
+
   it('GitPanel reads each --git-* token with the same Tailwind -400 fallback as the status letters', () => {
     const letters = new Map(
       GIT_LETTERS.map((l) => GIT_TOKEN.exec(gitStatusTextClass(l)) as RegExpExecArray).map((m) => [
@@ -1918,3 +1968,5 @@ describe('chrome colour inventory (D17)', () => {
     for (const [, name, fallback] of reads) expect(fallback, name).toBe(letters.get(name));
   });
 });
+
+

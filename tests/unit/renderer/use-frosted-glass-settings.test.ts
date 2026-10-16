@@ -199,3 +199,38 @@ describe('useFrostedGlassSettings — setVibrancyMaterial', () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('useFrostedGlassSettings — overlapping saves', () => {
+  async function loaded() {
+    mockLoad(true, 'subtle', 'off', 'sidebar');
+    rt.render(() => useFrostedGlassSettings());
+    await flush();
+    invoke.mockReset();
+    return rt.render(() => useFrostedGlassSettings());
+  }
+
+  it('a slow refusal after a later successful save keeps the later value', async () => {
+    let refuseA!: (r: unknown) => void;
+    const api = await loaded();
+    invoke.mockImplementationOnce(() => new Promise((r) => { refuseA = r; }));
+    const slow = api.setChromeFrostLevel('medium');
+    const next = rt.render(() => useFrostedGlassSettings());
+    invoke.mockResolvedValueOnce({ ok: true });
+    await next.setChromeFrostLevel('strong');
+    refuseA({ ok: false, error: 'invalid' });
+    await slow;
+    expect(rt.render(() => useFrostedGlassSettings()).values.chromeFrostLevel).toBe('strong');
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('a slow rejection still reverts when no later save replaced its value', async () => {
+    let rejectA!: (e: unknown) => void;
+    const api = await loaded();
+    invoke.mockImplementationOnce(() => new Promise((_, j) => { rejectA = j; }));
+    const slow = api.setVibrancyMaterial('hud');
+    rt.render(() => useFrostedGlassSettings());
+    rejectA(new Error('ipc down'));
+    await slow;
+    expect(rt.render(() => useFrostedGlassSettings()).values.vibrancyMaterial).toBe('sidebar');
+  });
+});

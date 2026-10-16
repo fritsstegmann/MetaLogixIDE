@@ -39,10 +39,12 @@ vi.mock('@renderer/hooks/usePrefersReducedTransparency', () => ({
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 
+/** Every element in the tree, rendering hook-free function components (the row components) in place. */
 function elements(node: ReactNode): ReactElement<Props>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement<Props>(node)) return [];
-  return [node, ...elements(node.props.children)];
+  const inner = typeof node.type === 'function' ? (node.type as (p: Props) => ReactNode)(node.props) : node.props.children;
+  return [node, ...elements(inner)];
 }
 
 function attr(html: string, tag: string, name: string): string | undefined {
@@ -105,6 +107,15 @@ describe('FrostedGlassGroup — disabled levels (AC9)', () => {
     expect((html.match(new RegExp(FROSTED_GLASS_COPY.disabledReason, 'g')) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(html).toContain('>medium<'.replace('medium', FROSTED_GLASS_COPY.levels.medium));
     expect(html).toContain(FROSTED_GLASS_COPY.levels.strong);
+  });
+
+  it('links each "Needs Frosted chrome" reason to its own radiogroup with aria-describedby (gate L8)', () => {
+    hookValues = fakeApi({ frostChrome: false });
+    const html = renderToStaticMarkup(<FrostedGlassGroup />);
+    const ids = [...html.matchAll(/<div[^>]*role="radiogroup"[^>]*>/g)].map((m) => /aria-describedby="([^"]+)"/.exec(m[0])?.[1]);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) expect(html).toMatch(new RegExp(`id="${id}"[^>]*>${FROSTED_GLASS_COPY.disabledReason}<`));
   });
 
   it('keeps both level radiogroups enabled when Frosted chrome is ON', () => {

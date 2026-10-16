@@ -296,7 +296,7 @@ Hover, selected, active and field fills (`--surface-hover`, `--surface-active`,
 behind counts read `--git-ahead-chip` and `--git-behind-chip`, which are opaque
 chips on the chrome. The sheet, the chat column, the modal and command-palette
 layer (`.modal-layer`) and the overlays marked `data-overlay` (the shells
-popover, context menus, toasts) restore every chrome lift. Palette tokens come
+popover, the Add a shell popover, context menus, toasts) restore every chrome lift. Palette tokens come
 back from `*-base` tokens captured on `:root`. Chrome-only tokens are reset to
 `initial`, so the classes that read them use their fallback.
 
@@ -369,7 +369,8 @@ because the CSP forbids an inline script. Attribute names live in
 
 **Frosted glass settings.** Settings > General > Appearance shows a Frosted
 glass group after Window opacity, on macOS only
-(`src/renderer/components/settings/FrostedGlassGroup.tsx`). It holds four
+(`src/renderer/components/settings/FrostedGlassGroup.tsx`, with
+`FrostLevelRow.tsx` and `MaterialRow.tsx`). It holds four
 settings, declared in `src/shared/frosted-glass.ts`:
 
 | Key | Values | Default |
@@ -388,7 +389,8 @@ settings, declared in `src/shared/frosted-glass.ts`:
   `settings:changed`. For the first paint, main adds `frostChrome`,
   `chromeFrost` and `terminalFrost` to the renderer URL (`rendererQuery` in
   `src/main/window-chrome.ts`). Off darwin it always sends the no-effect
-  defaults.
+  defaults. Main reads the stored values through `readStoredFrostedGlass`,
+  which falls back to the default for any value outside its list.
 - The material reaches new windows through `platformChrome(platform, material)`
   and open ones through `applyVibrancy`, which calls `setVibrancy` on every
   window that is not destroyed. Any value outside the list falls back to

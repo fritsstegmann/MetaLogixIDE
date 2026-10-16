@@ -1,9 +1,13 @@
 import type { BrowserWindowConstructorOptions } from 'electron';
 import {
   FROSTED_GLASS_DEFAULTS,
+  FROSTED_GLASS_KEYS,
   FROSTED_GLASS_QUERY_KEYS,
+  isChromeFrostLevel,
+  isTerminalFrostLevel,
   isVibrancyMaterial,
   type ChromeFrostLevel,
+  type FrostFlags,
   type TerminalFrostLevel,
   type VibrancyMaterial,
 } from '@shared/frosted-glass';
@@ -79,4 +83,41 @@ export function rendererQuery(input: RendererQueryInput): string {
   parts.push(`${FROSTED_GLASS_QUERY_KEYS.chromeFrost}=${chromeFrost}`);
   parts.push(`${FROSTED_GLASS_QUERY_KEYS.terminalFrost}=${terminalFrost}`);
   return parts.join('&');
+}
+
+/** The four frosted-glass settings main reads for window creation and the renderer query string. */
+export interface StoredFrostedGlass extends FrostFlags {
+  vibrancyMaterial: VibrancyMaterial;
+}
+
+export const FROSTED_GLASS_FALLBACK: StoredFrostedGlass = {
+  frostChrome: FROSTED_GLASS_DEFAULTS.frostChrome,
+  chromeFrost: FROSTED_GLASS_DEFAULTS.chromeFrostLevel,
+  terminalFrost: FROSTED_GLASS_DEFAULTS.terminalFrostLevel,
+  vibrancyMaterial: FROSTED_GLASS_DEFAULTS.vibrancyMaterial,
+};
+
+type FrostedGlassKey = (typeof FROSTED_GLASS_KEYS)[keyof typeof FROSTED_GLASS_KEYS];
+
+/**
+ * Reads the four stored frosted-glass settings through `get` (the settings repository) and
+ * validates each with the shared guards, so only an approved flag, level or material reaches
+ * `rendererQuery` and `platformChrome`. A value outside its allow-list falls back to its own
+ * default; a read that throws falls back to every default (AC1, AC5).
+ */
+export function readStoredFrostedGlass(get: (key: FrostedGlassKey) => unknown): StoredFrostedGlass {
+  try {
+    const frostChrome = get(FROSTED_GLASS_KEYS.frostChrome);
+    const chromeFrost = get(FROSTED_GLASS_KEYS.chromeFrostLevel);
+    const terminalFrost = get(FROSTED_GLASS_KEYS.terminalFrostLevel);
+    const material = get(FROSTED_GLASS_KEYS.vibrancyMaterial);
+    return {
+      frostChrome: typeof frostChrome === 'boolean' ? frostChrome : FROSTED_GLASS_FALLBACK.frostChrome,
+      chromeFrost: isChromeFrostLevel(chromeFrost) ? chromeFrost : FROSTED_GLASS_FALLBACK.chromeFrost,
+      terminalFrost: isTerminalFrostLevel(terminalFrost) ? terminalFrost : FROSTED_GLASS_FALLBACK.terminalFrost,
+      vibrancyMaterial: isVibrancyMaterial(material) ? material : FROSTED_GLASS_FALLBACK.vibrancyMaterial,
+    };
+  } catch {
+    return FROSTED_GLASS_FALLBACK;
+  }
 }
