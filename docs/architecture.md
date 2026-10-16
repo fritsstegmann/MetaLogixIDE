@@ -552,25 +552,25 @@ Rules:
 
 ### Claude notifications
 
-The app shows an OS notification when Claude Code, running in an app
-shell, needs the user's input or finishes its turn. Claude Code reports
-these events through its own hooks. The app does not read terminal output
-or escape sequences for this.
+The app uses authenticated Claude Code hooks for OS notifications when an
+app-launched shell needs input or finishes. It does not use those hooks to
+set status dots. The notification path does not read terminal output.
 
 | Layer | File | Responsibility |
 |---|---|---|
 | IO | `src/main/claude-hooks/receiver.ts` | Loopback HTTP server. Checks the request, authenticates it, answers `204`, then passes a typed event on. |
 | IO | `src/main/claude-hooks/settings-file.ts` | Builds, writes and removes the app-owned Claude Code settings file. |
-| Logic | `src/main/claude-hooks/hook-event.ts` | Parses a hook payload into a `HookEvent`. Keeps only the event name, notification type, message and the number of background tasks. Classifies an event as `needs-input`, `finished` or `ignored`, and maps it to a state transition (`stateTransitionFor`). |
-| Logic | `src/main/claude-hooks/hook-fanout.ts` | Registers the receiver's one listener and delivers each hook to several listeners. A failure in one listener is logged and does not stop the others. |
+| Logic | `src/main/claude-hooks/hook-event.ts` | Parses and classifies the event name, notification type, message and background-task count for notifications. |
+| Logic | `src/main/claude-hooks/hook-fanout.ts` | Delivers authenticated hooks to the notification history. |
 | Logic | `src/main/claude-hooks/session-registry.ts` | Issues, verifies and releases the per-spawn id and secret. Records which shells are hook-confirmed. |
 | Logic | `src/main/claude-hooks/launch-decorator.ts` | Adds `--settings <file>` and the id and secret to the environment of a Claude launch, just before spawn. |
 | Logic | `src/main/claude-hooks/runtime.ts` | Starts the receiver, then writes the settings file. Stops both on quit. |
 | Contract | `src/main/claude-hooks/protocol.ts` | Hook path, header name and environment variable names. |
-| Logic | `src/main/notifications/claude-notifier.ts` | Decides if an applied hook shows a notification, from the state before and after the tracker applied it. Builds the text and keeps one notification per shell. Also `withoutHookConfirmed`, the filter for the generic notifier. |
+| Logic | `src/main/notifications/claude-hook-history.ts` | Confirms the current hook session and tracks notification eligibility separately from status. |
+| Logic | `src/main/notifications/claude-notifier.ts` | Applies the two notification toggles and viewing rules to eligible hooks. It also filters hook-confirmed shells from the generic notifier. |
 | Logic | `src/main/notifications/viewed-shells.ts` | Holds the shells the main window shows. Decides if the user is viewing a shell. |
 | Adapter | `src/main/notifications/os-notifications.ts` | Wraps Electron `Notification`. Keeps each instance referenced until it is clicked or closed. |
-| Composition | `src/main/notifications/install.ts` | Connects the Claude state tracker's `onHookApplied` stream, the notifier, windows and PTY exit events. Builds the click navigation. |
+| Composition | `src/main/notifications/install.ts` | Connects authenticated hooks, notification history, PTY answers and exits, the notifier and click navigation. |
 | Presentation | `src/renderer/viewed-shells.ts`, `src/renderer/hooks/useReportViewedShells.ts` | Derive the shells on screen and report them on `notifications:viewed-shells`. |
 | Presentation | `src/renderer/components/settings/GeneralPanel.tsx` | The two switches in Settings → General → Notifications. |
 
@@ -586,22 +586,16 @@ Rules:
   generic notifier.
 - The stored launch argv is never decorated. `PtyManager` applies the
   decorator to a copy inside `spawn`.
-- Notifications follow the Claude state (see "Claude status dots"). The
-  notifier reads each hook after the tracker applied it, with the shell's
-  state before and after.
-- Needs input is a `Notification` event with `notification_type`
+- `ClaudeHookHistory` owns notification eligibility. Screen-based status
+  does not affect it.
+- Needs input is an authenticated `Notification` with
   `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog` or
-  `agent_needs_input` that leaves the shell blocked. Claude Code's question
-  prompt also arrives as `permission_prompt`. A stale needs-input event
-  leaves the shell as it is and shows nothing.
-- Finished is a `Stop` event with no background tasks that moves the shell
-  from busy to idle. A `Stop` with background tasks, a `Stop` on an idle
-  shell, and an idle state from the stale-busy guard, `idle_prompt`,
-  `StopFailure` or a PTY exit show nothing.
-- All other events show nothing, but any confirmed event marks the shell
-  hook-confirmed. The tracker confirms the session.
-- The generic "Command finished" notifier skips hook-confirmed shells.
-  Before a shell is confirmed, the generic notifier is its fallback.
+  `agent_needs_input`, unless the user already answered that prompt.
+- Finished is a `Stop` without background tasks after a confirmed busy
+  turn. A background `Stop`, an idle `Stop` and a PTY exit do not notify.
+- A confirmed hook marks its current shell hook-confirmed. The generic
+  "Command finished" notifier skips that shell. Before confirmation,
+  the generic notifier remains available.
 - The user is viewing a shell when its popout window has focus, or when
   the main window has focus, shows the shell, and the shell is not popped
   out. In split view, both panes are shown.
@@ -609,47 +603,49 @@ Rules:
   releases the shell's session and closes its notification, unless a
   respawn has already replaced that PTY.
 
-### Claude status dots
+### Claude and OMP status dots
 
-Each live dot shows the Claude state of its shell: idle (green), busy
-(amber) or blocked (red). The main process derives the state and pushes it
-to every window. Renderers never read terminal text for it.
+The main process derives one status for each live agent shell. Claude status
+comes from current bottom terminal rows after xterm parses PTY output. OMP
+status comes from lifecycle events in the app-owned extension. Neither
+Claude hooks nor a renderer's scroll position control status dots.
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Contract | `src/shared/claude-state.ts` | `ClaudeShellState`, the state entry, the text label per state and the DOM test hooks. |
-| IO | `src/main/ipc/register.ts` | `claude-state:list` returns every shell that is not idle. |
-| Service | `src/main/claude-status/state-tracker.ts` | The state machine per shell. Confirms each hook session. Emits `onChange` on real transitions and `onHookApplied` for every confirmed hook. |
-| Logic | `src/main/claude-status/answer-input.ts` | `isAnsweringInput`: Enter, a lone Esc, Ctrl-C or a single digit 1-9. |
-| Composition | `src/main/claude-status/install.ts` | Connects the hook fan-out, PTY `input` and `exit` events and a 1 s guard tick to the tracker. Broadcasts `claude-state:changed`. |
-| Adapter | `src/main/pty/manager.ts` | `write()` emits `input` for every write to a shell. |
-| Logic | `src/renderer/claude-state.ts` | Pure snapshot and delta reducers, and the worst state of a shell, a project or all shells. |
-| Presentation | `src/renderer/hooks/useClaudeStates.ts` | One store per window. Fetches the snapshot on first use, applies deltas, and fetches again on `alive-shells:changed`. |
-| Presentation | `src/renderer/components/StatusDot.tsx` | The dot: colour from `data-claude-state`, `title` and `aria-label` from the state label. |
-| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the highlighted project row of the command palette. |
+| Contract | `src/shared/agent-state.ts`, `src/shared/omp-report.ts` | Define agent identity, three states, accessible labels and a versioned OMP report. |
+| Adapter | `src/main/pty/{manager,screen-mirror}.ts` | Preserve original launch identity and PTY generation. Sample only the active terminal's bottom eight rows. |
+| Adapter | `src/main/agent-status/foreground-posix.ts` | Check process ancestry and the foreground process group for a manually started Claude on macOS or Linux. |
+| Adapter | `src/main/agent-status/omp-receiver.ts` | Receive bounded reports on loopback. Authenticate the current OMP spawn and reject stale reports. |
+| Adapter | `src/main/agent-status/omp-launch.ts`, `resources/omp-status-extension.js` | Add an explicit app-owned extension to direct OMP launches. Report root-session lifecycle without prompt or tool arguments. |
+| Service | `src/main/agent-status/{claude-screen,omp-session,state-tracker}.ts` | Classify current Claude screen rows, apply ordered OMP events, and publish changed shell states. |
+| Composition | `src/main/agent-status/install.ts`, `src/main/index.ts` | Start the receiver before any launch, subscribe to PTY lifecycle, and sample Claude status every 250 ms. |
+| Transport | `src/main/ipc/register.ts`, `src/shared/ipc-contract.ts` | Send `agent-state:list` snapshots, including recognized idle agents, and `agent-state:changed` deltas to all windows. |
+| Renderer | `src/renderer/agent-state.ts`, `src/renderer/hooks/useAgentStates.ts` | Keep the current shell map, apply snapshots and deltas, and compute project/global severity. |
+| Presentation | `src/renderer/components/{StatusDot,ShellTabDot}.tsx`, `src/renderer/styles.css` | Show agent-specific shell labels, generic aggregate labels, the existing three colours and inactive grey tabs. |
 
 Rules:
 
-- A shell with no current hook session is always idle. The tracker keeps a
-  state only while its session is the shell's current session, so a
-  respawn or a release reads idle.
-- `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `PostToolUseFailure`
-  set busy. `PermissionRequest` and a needs-input `Notification` set
-  blocked.
-- `Stop` with no background tasks and `StopFailure` set idle. `idle_prompt`
-  sets idle unless the shell waits on background work.
-- `Stop` with background tasks sets busy and marks the shell as waiting on
-  background work. Claude Code resumes when that work reports back.
-  `session_crons` does not count.
-- An answering keystroke moves a blocked shell to busy. Terminal reports,
-  such as focus and cursor-position replies, and arrow keys do not.
-- A needs-input `Notification` that arrives after an answering keystroke,
-  with no hook since, is stale and is ignored.
-- A busy shell with no PTY output for 15 s becomes idle, unless it waits on
-  background work. Blocked never expires.
-- Per-shell dots show the shell's state. Project dots show the worst state
-  of the project's live shells. The "In use" header shows the worst state
-  of all live shells. An inactive shell tab is grey when idle.
+- A direct app-launched Claude keeps its launch identity for one PTY
+  generation, including a Windows `.cmd` wrapper or unavailable Claude
+  hooks. A manually started Claude requires foreground process evidence on
+  macOS or Linux. Without that evidence, including on Windows, its dot
+  remains idle.
+- Claude shows busy only for recognized working rows and blocked only for
+  a live known approval or question. Unknown or stale text remains idle.
+  The sampler never reads scrollback or a user-scrolled viewport.
+- A direct app-launched OMP loads `resources/omp-status-extension.js` with
+  `-e` alongside user extensions. It clears an inherited `OMPCODE=1`
+  nesting flag for this app-owned root shell. If the receiver or extension
+  is unavailable, or `--trusted-extension` conflicts, OMP still starts
+  and its status remains idle.
+- The OMP receiver accepts only bounded versioned reports for the current
+  spawn credential, PTY generation, session and increasing sequence. A
+  shell exit or replacement revokes that credential. OMP sends no OS
+  notification.
+- The IPC payload carries only `projectId`, `shellIndex`, `agent` and
+  `state`. An exit clears the renderer entry. Shell labels identify Claude
+  or OMP when working or blocked; mixed project and global labels use
+  generic text. Severity is blocked, then busy, then idle.
 
 ### Project and app-wide environment variables
 
@@ -848,11 +844,10 @@ links outside a diagram open through the `app:open-external` IPC channel.
 ### Claude notification event
 
 1. At app start, `runtime.ts` starts the receiver on an ephemeral
-   `127.0.0.1` port. It then writes
-   `~/.metaide/claude-hooks/settings-<port>.json`. The file registers
-   `http` hooks for `Notification`, `Stop`, `UserPromptSubmit`,
-   `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`
-   and `StopFailure`, with a timeout of 1 second.
+   `127.0.0.1` port. It writes
+   `~/.metaide/claude-hooks/settings-<port>.json` with `Notification`,
+   `Stop` and `UserPromptSubmit` HTTP hooks, each with a one-second timeout
+   (`src/main/claude-hooks/settings-file.ts:21-55`).
 2. When a Claude shell spawns, the decorator issues a session id and a
    secret. It adds `--settings <file>` after `argv[0]`, and
    `METAIDE_HOOK_SHELL` and `METAIDE_HOOK_TOKEN` to the environment.
@@ -862,15 +857,29 @@ links outside a diagram open through the `app:open-external` IPC channel.
    secret, and then the body size (1 MiB at most). It answers `204` with no
    body, and only then passes the event on through the fan-out. Claude Code
    never gets a decision from the app.
-5. The tracker confirms the session, marks the shell hook-confirmed and
-   applies the event. It broadcasts `claude-state:changed` when the state
-   changed, and emits the applied hook with its before and after state.
-6. The notifier classifies the applied hook. It reads the toggle, checks
-   that notifications are supported, and checks if the user is viewing the
-   shell. Then it shows the notification.
+5. `ClaudeHookHistory` confirms the current session and updates only
+   notification eligibility. It sends the applied event and its prior and
+   current eligibility to `ClaudeNotifier`.
+6. The notifier reads the appropriate toggle and checks support and
+   whether the user is viewing the shell. It then shows the notification.
 7. A click on a popped-out shell's notification focuses the popout.
    Otherwise the main window is restored and focused, and
    `shell:focus-request` is sent only while the shell is still alive.
+
+### Agent status update
+
+1. `PtyManager.spawn` records the requested agent identity and a new
+   generation before it emits `spawn`.
+2. Every 250 ms, `AgentStatusTracker` reads the bottom of a recognized
+   Claude shell's active screen after the parser drains. On macOS and
+   Linux, it first checks the foreground process for manually started
+   Claude. Unknown screen content or missing process evidence stays idle.
+3. A direct OMP launch loads the packaged extension. Its root session
+   sends versioned, ordered lifecycle reports to the local receiver.
+   The receiver accepts only credentials bound to the live PTY generation.
+4. The tracker sends changed identity or state through
+   `agent-state:changed`. A new window reads `agent-state:list`.
+   An exit revokes OMP credentials and removes the renderer entry.
 
 ### Project and app-wide environment variables at spawn
 
@@ -927,18 +936,23 @@ The user saves the project Env tab, and a shell starts:
 Not applicable to the preview. It reads only the local file buffer.
 
 The Claude hook receiver accepts requests only on `127.0.0.1`, with a
-`Host` header that matches its port. Each Claude spawn gets its own
-32-byte secret. The receiver compares it with `timingSafeEqual`. The
-secret is in the PTY environment only, never in argv, in the settings file
-or in logs. Processes that Claude starts inherit the secret, so they can
-raise notifications and change the dot colour for that shell only. A
-released session no longer authenticates. Authentication runs before the
-body is read, so an unauthenticated request never has its body buffered.
+`Host` header that matches its port. Each Claude spawn gets a 32-byte
+secret. The receiver compares it with `timingSafeEqual`. The secret stays
+in the PTY environment, not in argv, settings or logs. Child processes
+inherit it and can raise notifications for that shell, but cannot change
+status dots. Released sessions stop authenticating. The receiver
+authenticates before it buffers the request body.
 
-The `claude-state:list` reply and the `claude-state:changed` event carry
-only `projectId`, `shellIndex` and `state`. No hook message, tool input,
-tool response or background task leaves the parser. The tracker never logs
-PTY input.
+The OMP receiver binds only to `127.0.0.1`. It limits input size, concurrent
+connections and report rate. It checks a per-spawn secret, PTY generation,
+active session and increasing report sequence
+(`src/main/agent-status/omp-receiver.ts:13-36,62-101,104-145`).
+Only a process with the live shell's current credential can report its OMP status.
+
+The `agent-state:list` reply and `agent-state:changed` event carry only
+`projectId`, `shellIndex`, `agent` and `state`. No hook message, prompt,
+tool input, tool response, terminal text, session id or credential crosses
+the status IPC boundary (`src/shared/ipc-contract.ts:102-103,383-384`).
 
 Project variable values are stored in plain text in the project's
 `config_json` in SQLite, and the database backups copy them as they are.
