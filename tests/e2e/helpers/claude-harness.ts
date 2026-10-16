@@ -1,22 +1,12 @@
 /**
- * Shared harness for the Claude-hook E2E suites (notifications and status
- * dots): spins up the app with an isolated HOME + userData, a `claude`-named
- * shim that execs `scripts/mock-claude.mjs`, and the small IPC helpers both
- * suites drive shells through.
- *
- * Extracted from `claude-notifications.spec.ts` (docs/plan/claude-status-dots.md
- * §11 "Agent 3", then §12.2/§12.4 "Agent 3b") with no behaviour change to the
- * extracted functions — `installNotificationSpy`, `notifications` and
- * `clickNotification` are byte-identical to what that spec used to define
- * locally, so its own tests keep passing unchanged once repointed to import
- * from here. `waitForClaudeState` is new (3b), for the R1/R2 background-work
- * and stale-needs-input cases in `claude-status-dots.spec.ts`.
+ * Real Electron/PTY harness shared by Claude notification and agent-status
+ * journeys. The fake CLI renders deterministic terminal screens and, only
+ * when the app supplies settings, forwards Claude notification hooks.
  */
 import { _electron as electron, expect, type Page, type ElectronApplication } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import type { ClaudeShellState } from '../../../src/shared/claude-state';
+import { delimiter, join, resolve } from 'node:path';
 
 export type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 export type Recorded = { title: string; body: string; closed: boolean };
@@ -39,16 +29,26 @@ export function baseEnv(): NodeJS.ProcessEnv {
   const rest = { ...process.env };
   delete rest.METAIDE_HOOK_SHELL;
   delete rest.METAIDE_HOOK_TOKEN;
+  delete rest.METAIDE_OMP_STATUS_PORT;
+  delete rest.METAIDE_OMP_STATUS_TOKEN;
+  delete rest.METAIDE_OMP_STATUS_SPAWN;
+  // This test runner itself can be nested in OMP. App-launched child OMP is a
+  // new root session, not a child of the runner's ambient OMP process.
+  delete rest.OMPCODE;
   return rest;
 }
 
-/** Builds a `claude`-named shim in its own bin dir that execs mock-claude.mjs, so spawn argv[0] is a real Claude basename. */
+/** A named executable on both POSIX and Windows (ConPTY launches .cmd via cmd.exe /c). */
 export function makeClaudeShim(homeDir: string): string {
   const binDir = join(homeDir, 'bin');
   mkdirSync(binDir, { recursive: true });
-  const shimPath = join(binDir, 'claude');
-  writeFileSync(shimPath, `#!/bin/sh\nexec node ${JSON.stringify(MOCK_CLAUDE)} "$@"\n`);
-  chmodSync(shimPath, 0o755);
+  const windows = process.platform === 'win32';
+  const shimPath = join(binDir, windows ? 'claude.cmd' : 'claude');
+  if (windows) writeFileSync(shimPath, `@echo off\r\n"${process.execPath}" "${MOCK_CLAUDE}" %*\r\n`);
+  else {
+    writeFileSync(shimPath, `#!/bin/bash\nexec -a claude "${process.execPath}" "${MOCK_CLAUDE}" "$@"\n`);
+    chmodSync(shimPath, 0o755);
+  }
   return shimPath;
 }
 
@@ -78,14 +78,16 @@ export async function launch(projectNames: string[]): Promise<Harness> {
   }
   const shimPath = makeClaudeShim(isolatedHome);
   const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+    ...(process.env.METAIDE_PACKAGED_APP ? { executablePath: process.env.METAIDE_PACKAGED_APP } : {}),
+    args: [...(process.env.METAIDE_PACKAGED_APP ? [] : ['.']), `--user-data-dir=${join(isolatedHome, 'userData')}`],
     env: {
       ...baseEnv(),
       HOME: isolatedHome,
-      SHELL: '/bin/sh',
+      ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
+      PATH: `${join(isolatedHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
       METAIDE_TEST_MODE: '1',
       METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: [shimPath], env: {} }),
+      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
       METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
     },
   });
@@ -151,6 +153,18 @@ export async function waitForShell(win: Page, projId: number, shellIndex: number
   }, { timeout: 10000, message: `shell ${projId}:${shellIndex} prints ${pattern}` }).toContain(pattern);
 }
 
+/** Waits for a confirmed hook receipt, not a screen state: Stop eligibility uses hook history. */
+export async function sendAndConfirmUserPrompt(win: Page, projectId: number, shellIndex: number, text: string): Promise<void> {
+  const count = async (): Promise<number> => win.evaluate(async (shell: { projectId: number; shellIndex: number }) => {
+    const appWindow = window as unknown as { api: Api };
+    const snap = await appWindow.api.invoke('shells:snapshot', shell) as unknown as { output: string };
+    return snap.output.split('HOOK-ACK UserPromptSubmit').length - 1;
+  }, { projectId, shellIndex });
+  const before = await count();
+  await sendLine(win, projectId, shellIndex, text);
+  await expect.poll(count, { timeout: 5000, message: `UserPromptSubmit accepted for ${projectId}:${shellIndex}` }).toBeGreaterThan(before);
+}
+
 export async function aliveShells(win: Page): Promise<Array<{ projectId: number; shellIndex: number; launchArgv: string[] }>> {
   return win.evaluate(async () => {
     const api = (window as unknown as { api: Api }).api;
@@ -159,19 +173,6 @@ export async function aliveShells(win: Page): Promise<Array<{ projectId: number;
   });
 }
 
-/** Polls `claude-state:list` for one shell's Claude state — the list omits idle entries (contract), so absence means idle. */
-export async function waitForClaudeState(win: Page, projId: number, shellIndex: number, state: ClaudeShellState): Promise<void> {
-  await expect.poll(async () => {
-    const { shells } = await win.evaluate(async () => {
-      const api = (window as unknown as { api: Api }).api;
-      return await api.invoke('claude-state:list', undefined) as unknown as {
-        shells: Array<{ projectId: number; shellIndex: number; state: ClaudeShellState }>;
-      };
-    });
-    const entry = shells.find((s) => s.projectId === projId && s.shellIndex === shellIndex);
-    return entry ? entry.state : 'idle';
-  }, { timeout: 5000, message: `shell ${projId}:${shellIndex} reaches ${state}` }).toBe(state);
-}
 
 /** A shell's real hook credentials plus the receiver's authenticated POST URL. */
 export interface HookCredentials { url: string; shellId: string; token: string }

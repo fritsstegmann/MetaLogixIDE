@@ -19,6 +19,7 @@ export class ScreenMirror {
   private readonly term: Terminal;
   private readonly serializer = new SerializeAddon();
   private readonly pending = new Set<(value: string) => void>();
+  private readonly pendingRows = new Set<() => void>();
   private disposed = false;
 
   constructor(cols: number, rows: number) {
@@ -58,6 +59,34 @@ export class ScreenMirror {
       });
     });
   }
+  /** Reads at most eight physical bottom viewport rows, joining only xterm-wrapped lines. */
+  liveBottomRows(): Promise<string[]> {
+    if (this.disposed) return Promise.resolve([]);
+    return new Promise<string[]>((resolve) => {
+      const done = (): void => {
+        if (this.disposed) {
+          resolve([]);
+          return;
+        }
+        const buffer = this.term.buffer.active;
+        const start = buffer.baseY + Math.max(0, this.term.rows - 8);
+        const rows: string[] = [];
+        for (let i = start; i < buffer.baseY + this.term.rows; i++) {
+          const line = buffer.getLine(i);
+          const text = line?.translateToString(!buffer.getLine(i + 1)?.isWrapped) ?? '';
+          if (line?.isWrapped && rows.length > 0)
+            rows[rows.length - 1] = (rows.at(-1) ?? '') + text;
+          else rows.push(text);
+        }
+        resolve(rows);
+      };
+      this.pendingRows.add(done);
+      this.term.write('', () => {
+        if (!this.pendingRows.delete(done)) return;
+        done();
+      });
+    });
+  }
 
   /** Release the headless terminal and settle any in-flight snapshot with ''. */
   dispose(): void {
@@ -65,6 +94,8 @@ export class ScreenMirror {
     this.disposed = true;
     for (const resolve of this.pending) resolve('');
     this.pending.clear();
+    for (const resolve of this.pendingRows) resolve();
+    this.pendingRows.clear();
     this.term.dispose();
   }
 }
