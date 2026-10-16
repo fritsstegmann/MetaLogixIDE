@@ -499,8 +499,13 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     await openProject(h.win, 'beta');
     await expectAggregate(rowDot(h.win, 'beta'), 'idle'); // positive control: beta has a live idle shell
     await expectAggregate(inUseDot(h.win), 'busy');
+    // The global busy rollup above can come from OMP alone. Prove Claude's
+    // *current* live screen still says working after remount/project change,
+    // immediately before OMP ends, to isolate this shell transition.
+    await expectShellState(h.win, alpha, 0, 'busy');
     await sendLine(h.win, alpha, omp, '/end');
     await expectAgentDot(popout.getByTestId(AGENT_DOT.testId).first(), 'omp', 'idle', 500);
+    await expectShellState(h.win, alpha, 0, 'busy');
     await expectAggregate(rowDot(h.win, 'alpha'), 'busy'); // Claude still working
     await expectAggregate(inUseDot(h.win), 'busy');
     await sendLine(h.win, alpha, 0, '/status-ready');
