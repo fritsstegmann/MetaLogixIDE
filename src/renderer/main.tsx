@@ -8,6 +8,7 @@ import { TerminalFontWeightProvider } from './fonts/terminal-font-weight-context
 import { applyRootFlags, parseFrostTerminalQuery } from './root-flags';
 import './styles.css';
 import './frosted-chrome.css';
+import './frosted-glass-levels.css';
 import 'katex/dist/katex.min.css';
 
 const rootElement = document.getElementById('root');
