@@ -22,7 +22,7 @@
 // must NOT count as "finished" (AC24-AC26). `/hook-stop-crons` posts a Stop
 // with an empty `background_tasks` but a non-empty `session_crons`, which
 // must still count as "finished" (AC27, `session_crons` is never read).
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
 const isContinue = args.includes('--continue');
@@ -161,10 +161,16 @@ function work(seconds) {
 }
 
 let currentStatus = null;
+const noteStatus = (event) =>
+  appendFileSync(
+    `${process.env.HOME}/status-geometry.log`,
+    `pid=${process.pid} ${event} cols=${process.stdout.columns} rows=${process.stdout.rows}\n`,
+  );
 
 /** Minimal stable Claude-like bottom screen; no hook is emitted by any /status-* command. */
 function statusScreen(kind) {
   currentStatus = kind;
+  noteStatus(`draw ${kind}`);
   const lines = {
     ready: ['Claude Code', '> '],
     work: ['Claude Code', '✻ Thinking…', 'Esc to interrupt'],
@@ -179,6 +185,7 @@ function statusScreen(kind) {
 // PTY geometry. Otherwise the one-shot mock's bottom rows become scrollback.
 if (process.stdout.isTTY) {
   process.stdout.on('resize', () => {
+    noteStatus(`resize ${currentStatus}`);
     if (currentStatus !== null) statusScreen(currentStatus);
   });
 }
@@ -195,7 +202,10 @@ process.stdout.write(isContinue ? 'mock-claude resumed\n> ' : 'mock-claude ready
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   const line = String(chunk).trim();
-  if (!line.startsWith('/status-') || line === '/status-history') currentStatus = null;
+  if (!line.startsWith('/status-') || line === '/status-history') {
+    noteStatus(`clear ${JSON.stringify(line)}`);
+    currentStatus = null;
+  }
   if (line === '/status-ready') {
     statusScreen('ready');
   } else if (line === '/status-work' || line === '/status-resume') {

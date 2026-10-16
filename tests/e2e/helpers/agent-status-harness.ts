@@ -107,7 +107,7 @@ export async function launchStatus(
   try {
     app = await electron.launch(electronOptions(home, env));
     const win = await app.firstWindow();
-    await win.waitForLoadState('domcontentloaded');
+    await win.getByTestId('settings-open').waitFor();
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]!.setSize(1400, 900);
     });

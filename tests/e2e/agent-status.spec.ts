@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import headless from '@xterm/headless';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_DOT } from '../../src/shared/agent-state';
@@ -178,15 +179,12 @@ test('AC4: user --settings Claude launch still has working screen status without
 });
 
 test('AC1/AC12: authenticated contradictory Claude notification hooks never become status authority', async () => {
-  const h = await launchStatus(['demo']);
+  const h = await launchStatus(['demo', 'other']);
   try {
     await installNotificationSpy(h.app);
     await openProject(h.win, 'demo');
     const id = await projectId(h.win, 'demo');
     const creds = await hookCredentials(h.win, h.home, id, 0);
-    await h.app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]!.minimize();
-    });
     await sendLine(h.win, id, 0, '/status-work');
     await expectShellState(h.win, id, 0, 'busy');
     expect((await postRawHook(creds, { hook_event_name: 'Stop' })).status).toBe(204);
@@ -196,6 +194,7 @@ test('AC1/AC12: authenticated contradictory Claude notification hooks never beco
     expect((await postRawHook(creds, { hook_event_name: 'UserPromptSubmit' })).status).toBe(204);
     expect((await postRawHook(creds, { hook_event_name: 'PermissionRequest' })).status).toBe(204);
     await expectAgentDot(tabDot(h.win, 0), 'claude', 'idle');
+    await openProject(h.win, 'other'); // background demo without relying on a window manager
     // Notification policy remains separate: an authenticated needs-input event
     // still creates an OS notification while the terminal dot remains idle.
     expect(
@@ -210,7 +209,8 @@ test('AC1/AC12: authenticated contradictory Claude notification hooks never beco
     await expect
       .poll(() => notifications(h.app))
       .toContainEqual(expect.objectContaining({ body: 'Approval required' }));
-    await expectAgentDot(tabDot(h.win, 0), 'claude', 'idle');
+    await expectShellState(h.win, id, 0, 'idle');
+    await openProject(h.win, 'demo');
     await sendLine(h.win, id, 0, '/status-approval');
     await expectAgentDot(tabDot(h.win, 0), 'claude', 'blocked'); // positive blocked control
   } finally {
@@ -219,7 +219,7 @@ test('AC1/AC12: authenticated contradictory Claude notification hooks never beco
 });
 
 test('AC11/AC12: disabling both Claude notification toggles leaves Claude and OMP dots live', async () => {
-  const h = await launchStatus(['demo']);
+  const h = await launchStatus(['demo', 'other']);
   try {
     await installNotificationSpy(h.app);
     await openProject(h.win, 'demo');
@@ -243,9 +243,7 @@ test('AC11/AC12: disabling both Claude notification toggles leaves Claude and OM
     await sendLine(h.win, id, omp, '/start');
     await expectAgentDot(tabDot(h.win, omp), 'omp', 'busy');
     await expectAggregate(rowDot(h.win, 'demo'), 'blocked');
-    await h.app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]!.minimize();
-    });
+    await openProject(h.win, 'other'); // Linux Xvfb has no window manager to minimize a window
     expect(
       (
         await postRawHook(creds, {
@@ -255,11 +253,9 @@ test('AC11/AC12: disabling both Claude notification toggles leaves Claude and OM
         })
       ).status,
     ).toBe(204);
-    await expectAgentDot(tabDot(h.win, 0), 'claude', 'blocked'); // control: live dot unaffected by toggle
+    await expectShellState(h.win, id, 0, 'blocked'); // control: live dot unaffected by toggle
     expect(await notifications(h.app)).toHaveLength(0);
-    await h.app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]!.restore();
-    });
+    await openProject(h.win, 'demo');
     await h.win.getByTestId('settings-open').click();
     await modal.getByTestId('notify-needs-input-toggle').click();
     await expect(needsInput).toBeChecked();
@@ -281,14 +277,7 @@ test('AC11/AC12: disabling both Claude notification toggles leaves Claude and OM
         { message: 're-enabled needs-input setting persisted in main process' },
       )
       .toBe(true);
-    await h.app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]!.minimize();
-    });
-    await expect
-      .poll(() =>
-        h.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMinimized()),
-      )
-      .toBe(true);
+    await openProject(h.win, 'other'); // keep demo genuinely in background after reenabling
     expect(
       (
         await postRawHook(creds, {
@@ -502,7 +491,56 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     // The global busy rollup above can come from OMP alone. Prove Claude's
     // *current* live screen still says working after remount/project change,
     // immediately before OMP ends, to isolate this shell transition.
-    await expectShellState(h.win, alpha, 0, 'busy');
+    try {
+      await expectShellState(h.win, alpha, 0, 'busy');
+    } catch (error) {
+      const screen = await h.win.evaluate(
+        async ({ projectId }) =>
+          (
+            window as unknown as {
+              api: {
+                invoke: (
+                  channel: string,
+                  request: { projectId: number; shellIndex: number },
+                ) => Promise<{ output: string }>;
+              };
+            }
+          ).api.invoke('shells:snapshot', { projectId, shellIndex: 0 }),
+        { projectId: alpha },
+      );
+      const log = join(h.home, 'status-geometry.log');
+      const events = existsSync(log) ? readFileSync(log, 'utf8') : '';
+      const workPid = events.match(/pid=(\d+) draw work /)?.[1];
+      const ownEvents = events.split('\n').filter((line) => line.startsWith(`pid=${workPid} `));
+      const sizes = [...ownEvents.join('\n').matchAll(/cols=(\d+) rows=(\d+)/g)];
+      const lastSize = sizes.at(-1);
+      const terminal = new headless.Terminal({
+        cols: Number(lastSize?.[1] ?? 80),
+        rows: Number(lastSize?.[2] ?? 24),
+        scrollback: 5000,
+      });
+      await new Promise<void>((resolve) => terminal.write(screen.output, resolve));
+      const buffer = terminal.buffer.active;
+      const bottom = Array.from({ length: Math.min(8, terminal.rows) }, (_, index) =>
+        buffer
+          .getLine(buffer.baseY + terminal.rows - Math.min(8, terminal.rows) + index)
+          ?.translateToString(true),
+      );
+      terminal.dispose();
+      console.log(
+        'Claude screen failure',
+        JSON.stringify({
+          state: (await statusSnapshot(h.win)).find(
+            (shell) => shell.projectId === alpha && shell.shellIndex === 0,
+          ),
+          bottom,
+          geometry: lastSize?.[0],
+          events: ownEvents,
+          snapshotEnd: screen.output.slice(-1200),
+        }),
+      );
+      throw error;
+    }
     await sendLine(h.win, alpha, omp, '/end');
     await expectAgentDot(popout.getByTestId(AGENT_DOT.testId).first(), 'omp', 'idle', 500);
     await expectShellState(h.win, alpha, 0, 'busy');

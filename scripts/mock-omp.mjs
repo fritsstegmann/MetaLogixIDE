@@ -60,7 +60,11 @@ if (process.argv[2] === '--late-report') {
 
   if (extensionPath) {
     try {
-      const module = await import(pathToFileURL(resolve(extensionPath)).href);
+      const module = await import(
+        extensionPath.startsWith('file:')
+          ? new URL(extensionPath).href
+          : pathToFileURL(resolve(extensionPath)).href
+      );
       if (typeof module.default !== 'function')
         throw new TypeError('OMP extension has no default factory');
       await module.default(pi);
