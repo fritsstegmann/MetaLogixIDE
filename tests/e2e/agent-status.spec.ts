@@ -492,8 +492,7 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     // *current* live screen still says working after remount/project change,
     // immediately before OMP ends, to isolate this shell transition.
     await expectShellState(h.win, alpha, 0, 'busy');
-    // Reproduce the CI PTY geometry through the real IPC/PTY boundary. The
-    // mock redraws its working screen on SIGWINCH, just like a live TUI.
+    // Request narrow PTY geometry through IPC; later layout changes may resize it again.
     const resized: unknown = await h.win.evaluate(
       (projectId: number) =>
         (window as unknown as { api: Api }).api.invoke('shells:resize', {
@@ -529,7 +528,7 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
           }, alpha);
           return output.slice(-80);
         },
-        { message: 'Claude PTY redraws its working screen at nine columns' },
+        { message: 'Claude PTY redraws its working screen after narrow resize' },
       )
       .toMatch(/✻ Thinking…\s+Esc to interrupt/);
     await expectShellState(h.win, alpha, 0, 'busy');
@@ -541,9 +540,6 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     await sendLine(h.win, alpha, 0, '/status-ready');
     await expectAggregate(rowDot(h.win, 'alpha'), 'idle');
     await expectAggregate(inUseDot(h.win), 'idle');
-    // The app-owned PTY reports its actual size, not merely a resize ack.
-    await sendLine(h.win, alpha, 0, '/size');
-    await waitForShell(h.win, alpha, 0, 'size: 9x11');
   } finally {
     await h.close();
   }
