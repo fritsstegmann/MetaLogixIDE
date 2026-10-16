@@ -7,7 +7,7 @@ export const FROST_ATTR = {
 } as const;
 export const MAC_PLATFORM = 'mac' as const;
 export type SheetContent = 'shell' | 'other';
-export const FROST_TERMINAL_QUERY_KEY = 'frostTerminal' as const;
+export { FROST_TERMINAL_QUERY_KEY } from '@shared/frost-terminal';
 export const FROST_TERMINAL_SETTING_KEY = 'frost_terminal' as const;
 export const FROST_COPY = {
   label: 'Frosted terminal',

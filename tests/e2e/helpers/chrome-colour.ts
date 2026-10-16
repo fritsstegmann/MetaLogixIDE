@@ -12,9 +12,14 @@
 
 import type { Locator, Page } from '@playwright/test';
 import type { EffectiveTheme } from '../../../src/renderer/markdown/contract';
-import { contrast, over, readReferenceBackgrounds, resolveColour, toHex, type Rgb, type Rgba } from './mermaid-palette';
+import { contrast, isMacPlatform, over, readReferenceBackgrounds, resolveColour, toHex, type Rgb, type Rgba } from './mermaid-palette';
 
-export { resolveColour };
+export { isMacPlatform, resolveColour };
+
+/** Resolved `background-color` alpha (0-1) of an element, through the canvas oracle. */
+export async function backgroundAlpha(win: Page, el: Locator): Promise<number> {
+  return (await elementColour(win, el, 'background-color')).a;
+}
 
 /** A custom property resolved through a probe's computed `color`, then through the canvas. */
 export async function resolveToken(win: Page, name: `--${string}`): Promise<Rgba> {

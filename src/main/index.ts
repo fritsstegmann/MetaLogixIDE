@@ -12,6 +12,7 @@ import { installClaudeStatus } from './claude-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
+import { platformChrome, rendererQuery } from './window-chrome';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -127,21 +128,6 @@ function baseWebPreferences() {
   };
 }
 
-function platformChrome(): Partial<Electron.BrowserWindowConstructorOptions> {
-  return process.platform === 'darwin'
-    ? {
-        titleBarStyle: 'hiddenInset',
-        // y centres the lights on the 44px title bar shared by the main and popout windows.
-        trafficLightPosition: { x: 12, y: 14 },
-        vibrancy: 'sidebar',
-        visualEffectState: 'active',
-        roundedCorners: true,
-      }
-    // Windows/Linux draw the app menu as an in-window bar above our own title
-    // bar. Hide it until Alt is pressed; its accelerators keep working.
-    : { autoHideMenuBar: true };
-}
-
 function wireExternalLinks(win: BrowserWindow): void {
   // Any window.open / target=_blank / Ctrl+click routes to the OS browser
   // instead of spawning a new BrowserWindow inside metaIDE.
@@ -167,7 +153,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     height: 900,
     show: false,
     backgroundColor: '#00000000',
-    ...platformChrome(),
+    ...platformChrome(process.platform),
     webPreferences: baseWebPreferences(),
   });
   win.once('ready-to-show', () => win.show());
@@ -184,8 +170,9 @@ async function createMainWindow(): Promise<BrowserWindow> {
   });
   win.webContents.on('unresponsive', () => console.warn('[metaide] renderer unresponsive'));
   win.webContents.on('responsive', () => console.log('[metaide] renderer responsive again'));
-  if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else await win.loadFile(join(__dirname, '../renderer/index.html'));
+  const query = rendererQuery({ frostTerminal: readFrostTerminal(), platform: process.platform });
+  if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
+  else await win.loadFile(join(__dirname, '../renderer/index.html'), { search: `?${query}` });
   return win;
 }
 
@@ -201,10 +188,14 @@ export async function createPopoutWindow(projectId: number, shellIndex: number):
     height: 620,
     show: false,
     backgroundColor: '#00000000',
-    ...platformChrome(),
+    ...platformChrome(process.platform),
     webPreferences: baseWebPreferences(),
   });
-  const query = `popout=1&projectId=${projectId}&shellIndex=${shellIndex}`;
+  const query = rendererQuery({
+    popout: { projectId, shellIndex },
+    frostTerminal: readFrostTerminal(),
+    platform: process.platform,
+  });
   wireExternalLinks(win);
   applyPersistedOpacity(win);
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
@@ -338,6 +329,10 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+// Reads the stored `frost_terminal` setting for the renderer query string (AC7). Set once
+// services exist; a window created before then, or a failed read, falls back to OFF.
+let readFrostTerminal: () => boolean = () => false;
+
 // Reads the stored `window_opacity`. Set once services exist. The value is
 // clamped to 30..100 here; a window created before then, a failed read or a
 // non-numeric value stays fully opaque.
@@ -420,6 +415,9 @@ const startupReady = app.whenReady().then(async () => {
   }
   // New windows read the current opacity setting when they are created.
   readWindowOpacity = () => services.settings.get('window_opacity');
+  readFrostTerminal = () => {
+    try { return services.settings.get('frost_terminal'); } catch { return false; }
+  };
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),

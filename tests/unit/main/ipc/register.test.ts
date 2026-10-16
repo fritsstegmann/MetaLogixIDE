@@ -789,6 +789,73 @@ describe('registerIpc', () => {
       expect(viewedShells.isViewing({ projectId: 3, shellIndex: 1 }, mainFocused)).toBe(true);
     });
   });
+
+  describe('settings:set-frost-terminal (AC6-AC8)', () => {
+    it('settings:set rejects key frost_terminal without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'frost_terminal', value: true }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('frost_terminal')).toBe(false);
+    });
+
+    it.each(['yes', 1, null, undefined])('rejects a non-boolean enabled (%j) with {ok:false,error:"invalid"} and does not write', async (enabled) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled }),
+      ).resolves.toEqual({ ok: false, error: 'invalid' });
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('frost_terminal')).toBe(false);
+      expect(events).toEqual([]);
+    });
+
+    it('a valid boolean persists the value, returns {ok:true}, and emits settings:changed once to every window', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled: true }),
+      ).resolves.toEqual({ ok: true });
+      expect(settings.get('frost_terminal')).toBe(true);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'frost_terminal' } }]);
+    });
+
+    it('setting it back to false persists and emits again', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('frost_terminal', true);
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled: false }),
+      ).resolves.toEqual({ ok: true });
+      expect(settings.get('frost_terminal')).toBe(false);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'frost_terminal' } }]);
+    });
+  });
 });
 
 /**

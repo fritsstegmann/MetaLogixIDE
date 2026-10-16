@@ -614,6 +614,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (key === TERMINAL_FONT_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-weight`);
     if (key === TERMINAL_BOLD_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-bold-weight`);
     if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
+    if (key === 'frost_terminal') throw new Error('frost_terminal can only be changed via settings:set-frost-terminal');
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -731,8 +732,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true } as const;
   },
 
-  'settings:set-frost-terminal': async () => {
-    throw new Error('not implemented');
+  'settings:set-frost-terminal': async (s, { enabled }) => {
+    if (typeof enabled !== 'boolean') return { ok: false, error: 'invalid' } as const;
+    s.settings.set('frost_terminal', enabled);
+    return { ok: true } as const;
   },
 
   /* ─── metaproject chat ─── */
@@ -1366,6 +1369,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     'settings:set-terminal-bold-weight': true,
     'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
+    'settings:set-frost-terminal': true,
   };
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
@@ -1411,6 +1415,12 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('settings:set-claude-permission-mode', async (_e, req: IpcRequest<'settings:set-claude-permission-mode'>) => {
     const result = await handlers['settings:set-claude-permission-mode'](services, req);
     for (const key of result.changedKeys) sendEvent('settings:changed', { key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-frost-terminal', async (_e, req: IpcRequest<'settings:set-frost-terminal'>) => {
+    const result = await handlers['settings:set-frost-terminal'](services, req);
+    if (result.ok) sendEvent('settings:changed', { key: 'frost_terminal' });
     return result;
   });
 

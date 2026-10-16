@@ -66,6 +66,8 @@ import { ShellSplit } from './components/ShellSplit';
 import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
+import { useFrostTerminalAttribute } from './hooks/useFrostTerminalAttribute';
+import type { SheetContent } from './frosted-chrome-contract';
 
 
 interface PopoutInfo {
@@ -123,6 +125,7 @@ export function App() {
 
 function MainApp() {
   const platform = useShortcutPlatform();
+  useFrostTerminalAttribute();
   // App-boot auto-login: if the user opted into "Remember me" in a previous
   // session, the OS keychain has their password. Try the silent auto-login
   // once at startup so the chat unread badge, event stream, and rail state
@@ -770,8 +773,10 @@ function MainApp() {
     } catch (e) { console.error(e); }
   }
 
+  const mainSheetContent: SheetContent = mainTab === 'shell' ? 'shell' : 'other';
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]" data-chrome-root>
       {/* Native-feeling drag region for hidden-inset title bar. pr-[3px] puts the
           last button's 14px glyph 12px from the right edge, mirroring the traffic lights' inset. */}
       <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
@@ -920,7 +925,10 @@ function MainApp() {
             </FoldPane>
           )}
         </AnimatePresence>
-        <main className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2">
+        <main
+          className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
+          data-sheet-content={mainSheetContent}
+        >
           <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
@@ -1122,6 +1130,7 @@ function MainApp() {
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
+  useFrostTerminalAttribute();
   const claudeState = useShellClaudeState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
@@ -1146,8 +1155,9 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
       ? `${projectName} — Shell ${shellIndex} — MetaLogix IDE`
       : `MetaLogix IDE · shell`;
   }, [projectName, shellIndex]);
+  const popoutSheetContent: SheetContent = tab === 'shell' ? 'shell' : 'other';
   return (
-    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]">
+    <div className="h-screen w-screen flex flex-col bg-[--surface-chrome]" data-chrome-root>
       <div className="drag h-11 flex items-center gap-2 pl-[76px] pr-3 shrink-0 min-w-0">
         {/* Prominent project name — the whole reason a user pops shells out
             is to run several projects side by side, so the label needs to
@@ -1174,7 +1184,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
           className={`px-3 py-1 rounded-md transition-colors ${tab === 'files' ? 'bg-[--accent-soft] text-[--accent-soft-text] font-medium' : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'}`}
         >Files</button>
       </div>
-      <div className="flex-1 min-h-0 bg-[--surface-sheet] rounded-xl mx-2 mb-2">
+      <div className="flex-1 min-h-0 bg-[--surface-sheet] rounded-xl mx-2 mb-2" data-sheet-content={popoutSheetContent}>
         {tab === 'shell' ? (
           <ShellTab
             projectId={projectId}

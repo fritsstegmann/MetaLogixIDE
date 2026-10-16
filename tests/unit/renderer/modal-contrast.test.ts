@@ -7,6 +7,9 @@
  * and the D1T parameters (lift, alpha, scrim darken factor) are parsed straight out of
  * `styles.css`, using the composite model in `helpers/modal-composite.ts` (the same model the
  * design record's contrast table was built from), so a regression in either file fails this test.
+ * AC30 (macos-frosted-chrome): on macOS a modal composites over the translucent chrome (`--chrome-solid`
+ * at `--chrome-glass-alpha` over a grey sweep of the black-to-white material envelope) or the opaque
+ * `--sheet-solid`, read from `frosted-chrome.css`; the same floors hold there with unchanged `--modal-*`.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -254,6 +257,60 @@ describe.each(CASES)('$label AC23 contrast', (c) => {
   it(`${label}: a raised surface inside a modal is lighter than the panel alone over the theme base (R14, the settings-board oracle)`, () => {
     const panel = over({ c: panelBase(theme, params).c, a: params.panelAlpha }, solid(theme.dark ? '#000000' : '#ffffff'));
     expect(luminance(raisedInModal(theme, params))).toBeGreaterThan(luminance(panel));
+  });
+});
+
+const frostedCss = readFileSync(resolve(__dirname, '../../../src/renderer/frosted-chrome.css'), 'utf8');
+const MAC_BLOCKS: Record<string, { dark: string; light: string }> = {
+  default: {
+    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\],\s*:root\[data-platform="mac"\]\[data-theme="dark"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-theme="light"\]\s*\{/),
+  },
+  catppuccin: {
+    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="catppuccin"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="catppuccin"\]\[data-theme="light"\]\s*\{/),
+  },
+  'rose-pine': {
+    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="rose-pine"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="rose-pine"\]\[data-theme="light"\]\s*\{/),
+  },
+};
+
+const MATERIAL_SWEEP: readonly Colour[] = Array.from({ length: 18 }, (_, i) => rgba(i * 15, i * 15, i * 15));
+
+/** What sits under a modal on macOS: the frosted chrome over each grey material, and the opaque sheet. */
+function macUnders(c: Case): { readonly label: string; readonly under: Colour }[] {
+  const block = MAC_BLOCKS[c.palette]![c.dark ? 'dark' : 'light'];
+  const chrome = parseColour(extractVar(block, '--chrome-solid'));
+  const alpha = parseFloat(extractVar(block, '--chrome-glass-alpha'));
+  return [
+    ...MATERIAL_SWEEP.map((m, i) => ({ label: `chrome over grey ${i * 15}`, under: over({ c: chrome.c, a: alpha }, m) })),
+    { label: 'sheet', under: parseColour(extractVar(block, '--sheet-solid')) },
+  ];
+}
+
+describe.each(CASES)('$label AC30 contrast on the macOS stack', (c) => {
+  const theme = themeFor(c);
+  const params = MODAL_PARAMS[c.dark ? 'dark' : 'light'];
+  const text = textFor(c);
+  const muted = modalTextMuted(c);
+  const unders = macUnders(c);
+
+  it(`text, muted text and the highlighted row clear ${GATE}:1 over every mac backdrop`, () => {
+    for (const { label, under } of unders) {
+      const surface = modalSurface(theme, params, under);
+      expect(ratio(text, surface), `text, ${label}`).toBeGreaterThanOrEqual(GATE);
+      expect(ratio(muted, surface), `muted, ${label}`).toBeGreaterThanOrEqual(GATE);
+      expect(ratio(text, highlighted(c, surface)), `highlighted row, ${label}`).toBeGreaterThanOrEqual(GATE);
+    }
+  });
+
+  it(`reduced transparency text and muted text clear ${GATE}:1 over every mac backdrop`, () => {
+    for (const { label, under } of unders) {
+      const surface = reducedSurface(theme, params, under);
+      expect(ratio(text, surface), `text, ${label}`).toBeGreaterThanOrEqual(GATE);
+      expect(ratio(muted, surface), `muted, ${label}`).toBeGreaterThanOrEqual(GATE);
+    }
   });
 });
 

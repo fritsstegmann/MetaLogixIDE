@@ -1,3 +1,221 @@
 /* macOS frosted chrome. Every selector in this file starts with
  * :root[data-platform="mac"], so Windows and Linux never match it.
- * Imported after styles.css. */
+ * Imported after styles.css. html and body go transparent, so the chrome
+ * root is the only layer over the vibrancy material; it paints --chrome-solid
+ * at --chrome-glass-alpha. The working area paints the opaque --sheet-solid,
+ * and the frosted-terminal setting drops the Shell sheet and split cards to
+ * --terminal-glass-alpha. Palette blocks set only the solid, alpha and
+ * label-lift tokens (plus the raw panel tokens at alpha 1, so menus and
+ * popovers stay at least as opaque as before); each glass surface token is
+ * declared exactly twice, here and in the Reduce transparency override, so
+ * that override always wins. Values are tuned against the contrast floors in
+ * tests/unit/renderer/frosted-chrome-contrast.test.ts. */
+
+:root[data-platform="mac"],
+:root[data-platform="mac"] body {
+  background: transparent;
+}
+
+:root[data-platform="mac"] {
+  --text-muted-base: var(--text-muted);
+  --accent-soft-text-base: var(--accent-soft-text);
+  --accent-soft-base: var(--accent-soft);
+  --surface-hover-base: var(--surface-hover);
+  --surface-active-base: var(--surface-active);
+  --hue-cyan-base: var(--hue-cyan);
+  --terminal-live-alpha: 1;
+  --surface-chrome: rgb(from var(--chrome-solid) r g b / var(--chrome-glass-alpha));
+  --surface-sheet: var(--sheet-solid);
+  --surface-terminal: rgb(from var(--sheet-solid) r g b / var(--terminal-live-alpha));
+  --surface-pane: rgb(from var(--pane-solid) r g b / var(--terminal-live-alpha));
+}
+
+:root[data-platform="mac"][data-frost-terminal] {
+  --terminal-live-alpha: var(--terminal-glass-alpha);
+}
+
+/* Chrome labels are lifted (D2) and selection fills become opaque chips (D11), so neither depends on the material. */
+:root[data-platform="mac"] [data-chrome-root] {
+  --text-muted: var(--chrome-text-muted);
+  --accent-soft-text: var(--chrome-chip-text);
+  --accent-soft: color-mix(in oklab, var(--accent) 22%, var(--chrome-solid));
+  --surface-hover: color-mix(in oklab, var(--text) 7%, var(--chrome-solid));
+  --surface-active: color-mix(in oklab, var(--text) 10%, var(--chrome-solid));
+}
+
+:root[data-platform="mac"] [data-chrome-root] [data-sheet-content],
+:root[data-platform="mac"] [data-chrome-root] [data-view="chat"] {
+  --text-muted: var(--text-muted-base);
+  --accent-soft-text: var(--accent-soft-text-base);
+  --accent-soft: var(--accent-soft-base);
+  --surface-hover: var(--surface-hover-base);
+  --surface-active: var(--surface-active-base);
+  --hue-cyan: var(--hue-cyan-base);
+}
+
+/* Catppuccin light cyan cannot reach 3:1 on frosted chrome, so chrome glyphs get a darker cyan; --term-cyan is untouched. */
+:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"] [data-chrome-root] {
+  --hue-cyan: #127c82;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-platform="mac"][data-palette="catppuccin"]:not([data-theme]) [data-chrome-root] {
+    --hue-cyan: #127c82;
+  }
+}
+
+:root[data-platform="mac"] [data-sheet-content="shell"] {
+  --surface-sheet: var(--surface-terminal);
+}
+
+:root[data-platform="mac"][data-frost-terminal] [data-chrome-root] [data-sheet-content="shell"] {
+  --text-muted: var(--terminal-text-muted);
+  --accent-soft: color-mix(in oklab, var(--accent) 22%, var(--sheet-solid));
+  --surface-hover: color-mix(in oklab, var(--text) 7%, var(--sheet-solid));
+  --surface-active: color-mix(in oklab, var(--text) 10%, var(--sheet-solid));
+}
+
+/* The chat column sits on the chrome, outside the sheet, so it needs its own solid surface (D10). */
+:root[data-platform="mac"] [data-view="chat"] {
+  background-color: var(--sheet-solid);
+}
+
+:root[data-platform="mac"],
+:root[data-platform="mac"][data-theme="dark"] {
+  --chrome-solid: #12151a;
+  --chrome-glass-alpha: 0.85;
+  --sheet-solid: #1e222a;
+  --pane-solid: #1c1f27;
+  --terminal-glass-alpha: 0.06;
+  --chrome-text-muted: #9aa3ac;
+  --chrome-chip-text: #78aaf8;
+  --terminal-text-muted: #99a2ab;
+  --panel: rgb(28 32 40);
+  --panel-strong: rgb(34 38 46);
+  --chat-surface: rgb(22 26 33);
+}
+
+:root[data-platform="mac"][data-theme="light"] {
+  --chrome-solid: #f0f1f5;
+  --chrome-glass-alpha: 0.855;
+  --sheet-solid: #eceef3;
+  --pane-solid: #f0f1f5;
+  --terminal-glass-alpha: 0.05;
+  --chrome-text-muted: #4b5563;
+  --chrome-chip-text: #20479a;
+  --terminal-text-muted: #4b5563;
+  --panel: rgb(232 234 240);
+  --panel-strong: rgb(238 240 245);
+  --chat-surface: rgb(240 242 246);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-platform="mac"]:not([data-theme]) {
+    --chrome-solid: #f0f1f5;
+    --chrome-glass-alpha: 0.855;
+    --sheet-solid: #eceef3;
+    --pane-solid: #f0f1f5;
+    --terminal-glass-alpha: 0.05;
+    --chrome-text-muted: #4b5563;
+    --chrome-chip-text: #20479a;
+    --terminal-text-muted: #4b5563;
+    --panel: rgb(232 234 240);
+    --panel-strong: rgb(238 240 245);
+    --chat-surface: rgb(240 242 246);
+  }
+}
+
+:root[data-platform="mac"][data-palette="catppuccin"] {
+  --chrome-solid: #181825;
+  --chrome-glass-alpha: 0.805;
+  --sheet-solid: #262636;
+  --pane-solid: #242432;
+  --terminal-glass-alpha: 0.18;
+  --chrome-text-muted: #adb4cf;
+  --chrome-chip-text: #a1c0f8;
+  --terminal-text-muted: #a6adc8;
+  --panel: #181825;
+  --panel-strong: #313244;
+  --chat-surface: #1e1e2e;
+}
+
+:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"] {
+  --chrome-solid: #eef0f4;
+  --chrome-glass-alpha: 0.855;
+  --sheet-solid: #e1e4eb;
+  --pane-solid: #e4e6ed;
+  --terminal-glass-alpha: 0.05;
+  --chrome-text-muted: #52556e;
+  --chrome-chip-text: #435892;
+  --terminal-text-muted: #52566f;
+  --panel: #e6e9ef;
+  --panel-strong: #dce0e8;
+  --chat-surface: #eff1f5;
+}
+
+:root[data-platform="mac"][data-palette="rose-pine"] {
+  --chrome-solid: #1f1d2e;
+  --chrome-glass-alpha: 0.81;
+  --sheet-solid: #232035;
+  --pane-solid: #211e32;
+  --terminal-glass-alpha: 0.17;
+  --chrome-text-muted: #bab7d1;
+  --chrome-chip-text: #cebaec;
+  --terminal-text-muted: #b1aec9;
+  --panel: #1f1d2e;
+  --panel-strong: #26233a;
+  --chat-surface: #191724;
+}
+
+:root[data-platform="mac"][data-palette="rose-pine"][data-theme="light"] {
+  --chrome-solid: #fffbf4;
+  --chrome-glass-alpha: 0.87;
+  --sheet-solid: #f8f1e9;
+  --pane-solid: #f9f3ec;
+  --terminal-glass-alpha: 0;
+  --chrome-text-muted: #5f5b7f;
+  --chrome-chip-text: #40607f;
+  --terminal-text-muted: #5f5b7f;
+  --panel: #fffaf3;
+  --panel-strong: #f2e9e1;
+  --chat-surface: #faf4ed;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-platform="mac"][data-palette="catppuccin"]:not([data-theme]) {
+    --chrome-solid: #eef0f4;
+    --chrome-glass-alpha: 0.855;
+    --sheet-solid: #e1e4eb;
+    --pane-solid: #e4e6ed;
+    --terminal-glass-alpha: 0.05;
+    --chrome-text-muted: #52556e;
+    --chrome-chip-text: #435892;
+    --terminal-text-muted: #52566f;
+    --panel: #e6e9ef;
+    --panel-strong: #dce0e8;
+    --chat-surface: #eff1f5;
+  }
+
+  :root[data-platform="mac"][data-palette="rose-pine"]:not([data-theme]) {
+    --chrome-solid: #fffbf4;
+    --chrome-glass-alpha: 0.87;
+    --sheet-solid: #f8f1e9;
+    --pane-solid: #f9f3ec;
+    --terminal-glass-alpha: 0;
+    --chrome-text-muted: #5f5b7f;
+    --chrome-chip-text: #40607f;
+    --terminal-text-muted: #5f5b7f;
+    --panel: #fffaf3;
+    --panel-strong: #f2e9e1;
+    --chat-surface: #faf4ed;
+  }
+}
+
+/* Reads only the media query, never the frosted-terminal attribute, so the stored setting is untouched (AC12). */
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-platform="mac"] {
+    --surface-chrome: var(--chrome-solid);
+    --surface-terminal: var(--sheet-solid);
+    --surface-pane: var(--pane-solid);
+  }
+}
