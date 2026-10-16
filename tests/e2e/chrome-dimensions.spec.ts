@@ -331,6 +331,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
   await expect(taskBadge).toHaveText('3');
 
   const look = await currentLook(win);
+  const mac = await isMacPlatform(win);
   try {
     for (const palette of PALETTES) {
       for (const theme of THEMES) {
@@ -387,10 +388,17 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
             .toBeGreaterThanOrEqual(4.5);
         }
 
-        // AC3
+        // AC3. The token is resolved beside the branch, so on macOS it reads the
+        // chrome's D16 lift (docs/specs/macos-frosted-chrome.md); off mac nothing
+        // overrides it and this equals the root value.
         const branchColour = await elementColour(win, titleBranch(), 'color');
-        const pink = await resolveToken(win, '--hue-pink');
+        const pink = await resolveToken(win, '--hue-pink', titleBranch().locator('xpath=..'));
         expect(colourDistance(branchColour, pink), `${at} branch ${fmtColour(branchColour)} is --hue-pink ${fmtColour(pink)}`).toBeLessThanOrEqual(1);
+        if (mac) {
+          // Positive control: on mac the chrome pink is lifted away from the root (working-area) pink.
+          const rootPink = await resolveToken(win, '--hue-pink');
+          expect(colourDistance(pink, rootPink), `${at} control: chrome --hue-pink ${fmtColour(pink)} is lifted from root ${fmtColour(rootPink)}`).toBeGreaterThan(1);
+        }
 
         // AC15 (fresh HOME, no stored width)
         expect((await box(win.locator('aside[data-view="projects"]'))).width, `${at} sidebar width`).toBe(SIDEBAR_WIDTH.default);

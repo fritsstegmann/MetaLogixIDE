@@ -48,10 +48,11 @@ describe('applyRootFlags — frost terminal', () => {
     expect(el.set[FROST_ATTR.frostTerminal]).toBeUndefined();
   });
 
-  it('applies frostTerminal independently of platform', () => {
+  it.each(['win32', 'linux', undefined])('never sets data-frost-terminal for platform %s, even when stored ON (AC13)', (platform) => {
     const el = fakeTarget();
-    applyRootFlags(el, { platform: 'win32', frostTerminal: true });
-    expect(el.set[FROST_ATTR.frostTerminal]).toBe('');
+    applyRootFlags(el, { platform, frostTerminal: true });
+    expect(el.set[FROST_ATTR.frostTerminal]).toBeUndefined();
+    expect(el.removed).toContain(FROST_ATTR.frostTerminal);
   });
 });
 

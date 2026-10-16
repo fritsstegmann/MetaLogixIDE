@@ -1,16 +1,61 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   AppearanceSection,
   FrostTerminalRow,
+  GeneralPanel,
   loadBoard,
   setFrostTerminal,
+  useBoardSettings,
   type AppearanceSectionProps,
 } from '@renderer/components/settings/GeneralPanel';
 import { FROST_COPY, FROST_TESTIDS } from '@renderer/frosted-chrome-contract';
+import { ShortcutPlatformContext } from '@renderer/shortcut-platform';
+import type { ShortcutPlatform } from '@renderer/shortcut-contract';
 
+const rt = vi.hoisted(() => {
+  const slots: unknown[] = [];
+  let cursor = 0;
+  let active = false;
+  return {
+    get active() { return active; },
+    reset() { slots.length = 0; },
+    render<T>(fn: () => T): T {
+      cursor = 0;
+      active = true;
+      try { return fn(); } finally { active = false; }
+    },
+    useState<S>(init: S) {
+      const i = cursor++;
+      if (!(i in slots)) slots[i] = init;
+      const set = (v: S | ((p: S) => S)) => { slots[i] = typeof v === 'function' ? (v as (p: S) => S)(slots[i] as S) : v; };
+      return [slots[i] as S, set] as const;
+    },
+  };
+});
+
+vi.mock('react', async (orig) => {
+  const real = await orig<typeof import('react')>();
+  return {
+    ...real,
+    useState: ((init: unknown) => (rt.active ? rt.useState(init) : real.useState(init))) as typeof real.useState,
+    useEffect: ((run: () => void, deps?: unknown[]) => (rt.active ? undefined : real.useEffect(run, deps))) as typeof real.useEffect,
+  };
+});
 vi.mock('@renderer/api', () => ({ api: { invoke: vi.fn() } }));
+vi.mock('@renderer/hooks/useTheme', () => ({
+  useTheme: () => ({ mode: 'dark', palette: 'default', effective: 'dark', setMode: () => undefined, setPalette: () => undefined, cycle: () => undefined }),
+}));
+vi.mock('@renderer/fonts/font-settings-context', () => ({
+  useFontSettings: () => ({ uiFontFamily: null, terminalFontFamily: null }),
+}));
+vi.mock('@renderer/components/FontControl', () => ({ FontControl: () => null }));
+vi.mock('@renderer/components/settings/TerminalFontSizeControl', () => ({ TerminalFontSizeControl: () => null }));
+vi.mock('@renderer/components/settings/TerminalFontWeightControl', () => ({
+  TerminalFontWeightControl: () => null,
+  TerminalBoldWeightControl: () => null,
+}));
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 
@@ -110,5 +155,65 @@ describe('setFrostTerminal', () => {
     vi.mocked(api.invoke).mockResolvedValue({ ok: true });
     await setFrostTerminal(true);
     expect(api.invoke).toHaveBeenCalledWith('settings:set-frost-terminal', { enabled: true });
+  });
+});
+
+describe('GeneralPanel — frosted terminal row only on mac (AC13)', () => {
+  function panel(platform: ShortcutPlatform): string {
+    return renderToStaticMarkup(
+      <ShortcutPlatformContext.Provider value={platform}>
+        <GeneralPanel fontDiscovery={{ status: 'idle' }} onLoadInstalledFonts={async () => undefined} />
+      </ShortcutPlatformContext.Provider>,
+    );
+  }
+
+  it('renders the toggle under the mac platform', () => {
+    expect(panel('mac')).toContain(`data-testid="${FROST_TESTIDS.toggle}"`);
+  });
+
+  it('omits the toggle and its copy under any other platform', () => {
+    const html = panel('other');
+    expect(html).toContain('data-testid="window-opacity-slider"');
+    expect(html).not.toContain(FROST_TESTIDS.toggle);
+    expect(html).not.toContain(FROST_COPY.label);
+  });
+});
+
+describe('useBoardSettings — onFrostTerminal persists and reverts on failure', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    rt.reset();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => { errorSpy.mockRestore(); });
+
+  async function toggle(reply: () => Promise<unknown>): Promise<boolean> {
+    const { api } = await import('@renderer/api');
+    vi.mocked(api.invoke).mockReset();
+    vi.mocked(api.invoke).mockImplementation(reply as never);
+    const board = rt.render(() => useBoardSettings());
+    expect(board.frostTerminal).toBe(false);
+    const pending = board.onFrostTerminal(true);
+    expect(rt.render(() => useBoardSettings()).frostTerminal).toBe(true);
+    await pending;
+    expect(api.invoke).toHaveBeenCalledWith('settings:set-frost-terminal', { enabled: true });
+    return rt.render(() => useBoardSettings()).frostTerminal;
+  }
+
+  it('flips the local value and keeps it when the save succeeds', async () => {
+    expect(await toggle(async () => ({ ok: true }))).toBe(true);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('reverts the local value and logs when the main process refuses the value', async () => {
+    expect(await toggle(async () => ({ ok: false, error: 'invalid' }))).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('reverts the local value and logs when the IPC call rejects', async () => {
+    expect(await toggle(() => Promise.reject(new Error('ipc down')))).toBe(false);
+    expect(errorSpy).toHaveBeenCalled();
   });
 });

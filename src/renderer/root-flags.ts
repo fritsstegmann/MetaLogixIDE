@@ -10,10 +10,11 @@ export interface RootFlags {
   frostTerminal: boolean;
 }
 
-/** Sets the root attributes the macOS frosted-chrome CSS keys on. Off darwin, sets nothing mac-specific. */
+/** Sets the root attributes the macOS frosted-chrome CSS keys on. Off darwin, sets nothing mac-specific and clears the frosted-terminal attribute whatever the stored value. */
 export function applyRootFlags(el: RootFlagTarget, flags: RootFlags): void {
-  if (flags.platform === 'darwin') el.setAttribute(FROST_ATTR.platform, MAC_PLATFORM);
-  if (flags.frostTerminal) el.setAttribute(FROST_ATTR.frostTerminal, '');
+  const mac = flags.platform === 'darwin';
+  if (mac) el.setAttribute(FROST_ATTR.platform, MAC_PLATFORM);
+  if (mac && flags.frostTerminal) el.setAttribute(FROST_ATTR.frostTerminal, '');
   else el.removeAttribute(FROST_ATTR.frostTerminal);
 }
 

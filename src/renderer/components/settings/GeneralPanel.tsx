@@ -49,7 +49,7 @@ export function GeneralPanel({
         onOpacity={(v) => void board.applyOpacity(v)}
         showFrostTerminal={platform === 'mac'}
         frostTerminal={board.frostTerminal}
-        onFrostTerminal={board.onFrostTerminal}
+        onFrostTerminal={(v) => void board.onFrostTerminal(v)}
       />
       <FontSettingsControls discovery={fontDiscovery} onLoadInstalledFonts={onLoadInstalledFonts} />
       <WorkspaceSection
@@ -127,13 +127,20 @@ export async function loadBoard(): Promise<BoardValues> {
   };
 }
 
-/** Persists the frosted-terminal setting through its dedicated validated channel. */
-export async function setFrostTerminal(enabled: boolean): Promise<void> {
-  await api.invoke('settings:set-frost-terminal', { enabled });
+/** Persists the frosted-terminal setting through its dedicated validated channel. Resolves `false`, after logging, when the main process refuses the value or the call rejects. */
+export async function setFrostTerminal(enabled: boolean): Promise<boolean> {
+  try {
+    const res = await api.invoke('settings:set-frost-terminal', { enabled });
+    if (res.ok) return true;
+    console.error('frost terminal setting refused', res.error);
+  } catch (e) {
+    console.error('frost terminal setting save failed', e);
+  }
+  return false;
 }
 
-/** Board settings state: loads the six keys once, `update` sets a value locally and saves it, `applyOpacity` clamps to 30..100 and applies window opacity. */
-function useBoardSettings() {
+/** Board settings state: loads the seven keys once, `update` sets a value locally and saves it, `applyOpacity` clamps to 30..100 and applies window opacity, `onFrostTerminal` flips the frosted-terminal value at once and reverts it when the save fails. */
+export function useBoardSettings() {
   const [values, setValues] = useState<BoardValues>(INITIAL);
 
   useEffect(() => { void loadBoard().then(setValues); }, []);
@@ -149,9 +156,9 @@ function useBoardSettings() {
     await api.invoke('app:set-window-opacity', { percent: clamped });
   }
 
-  function onFrostTerminal(next: boolean): void {
+  async function onFrostTerminal(next: boolean): Promise<void> {
     setValues((prev) => ({ ...prev, frostTerminal: next }));
-    void setFrostTerminal(next);
+    if (!(await setFrostTerminal(next))) setValues((prev) => ({ ...prev, frostTerminal: !next }));
   }
 
   return { ...values, update, applyOpacity, onFrostTerminal };

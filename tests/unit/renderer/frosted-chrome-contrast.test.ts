@@ -7,7 +7,8 @@
  * black-to-white material envelope (`REFERENCE_MATERIALS`). Custom properties resolve where they are
  * declared, as in CSS, so a token captured on `:root` keeps the root value inside a region that overrides
  * its source. Baselines are literals computed at 26eed37 and checked against the engine run without the
- * mac attribute, so a drift in either stylesheet fails here.
+ * mac attribute, so a drift in either stylesheet fails here. Chrome text labels that paint fixed hues (the
+ * title-bar branch name, the Tasks badge, the Git panel status letters) are held to the text floor too (D16).
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -18,7 +19,9 @@ import {
   REFERENCE_MATERIALS,
 } from '@renderer/markdown/mermaid/paletteContract';
 import { FROST_ATTR, MAC_PLATFORM, type SheetContent } from '@renderer/frosted-chrome-contract';
-import { hex, ratio, type Colour } from './helpers/modal-composite';
+import { gitStatusTextClass } from '@renderer/git-status-style';
+import tailwindColors from 'tailwindcss/colors';
+import { hex, luminance, ratio, type Colour } from './helpers/modal-composite';
 
 const STYLES = readFileSync(resolve(__dirname, '../../../src/renderer/styles.css'), 'utf8');
 const FROSTED = readFileSync(
@@ -313,7 +316,7 @@ function evalColour(expr: string, scope: Scope): Colour {
   if (e.startsWith('var(')) {
     const [name, fallback] = varArgs(e);
     const hit = lookup(name, scope);
-    if (hit) return evalColour(hit.expr, hit.scope);
+    if (hit && hit.expr.trim() !== 'initial') return evalColour(hit.expr, hit.scope);
     if (fallback !== undefined) return evalColour(fallback, scope);
     throw new Error(`undefined colour ${name}`);
   }
@@ -588,6 +591,34 @@ const CHROME_INDICATORS = [
 const ROW_DOTS = ['--claude-idle', '--claude-busy', '--claude-blocked'] as const;
 const TAB_INDICATORS = ['--claude-idle', '--claude-busy', '--claude-blocked', '--accent'] as const;
 
+const GIT_HUES = { M: 'amber', A: 'emerald', D: 'rose', '?': 'sky' } as const;
+type GitLetter = keyof typeof GIT_HUES;
+const GIT_LETTERS = Object.keys(GIT_HUES) as GitLetter[];
+const GIT_TOKEN = /var\((--git-[\w-]+),(#[0-9a-f]{6})\)/;
+
+/** The colour a git status class paints: `var(--git-*, #hex)` when it reads a lifted token, else its bare Tailwind -400 hue. */
+function gitLetterExpr(status: GitLetter): string {
+  const m = GIT_TOKEN.exec(gitStatusTextClass(status));
+  return m ? `var(${m[1]}, ${m[2]})` : tailwindColors[GIT_HUES[status]][400];
+}
+
+/** Chrome text labels and the backdrops they sit on: the badge label on its fill, the branch name and git letters on the chrome. */
+function chromeLabels(t: Tree): [string, Colour, Colour[]][] {
+  return [
+    [
+      'Tasks badge (--hue-orange-soft-text on --hue-orange-soft)',
+      token(t, '--hue-orange-soft-text'),
+      chip(t, '--hue-orange-soft'),
+    ],
+    ['title-bar branch name (--hue-pink)', token(t, '--hue-pink'), composites(t)],
+    ...GIT_LETTERS.map((s): [string, Colour, Colour[]] => [
+      `Git panel status letter ${s}`,
+      evalColour(gitLetterExpr(s), t.scope),
+      composites(t),
+    ]),
+  ];
+}
+
 const baseKey = (c: Combo): `${Palette}/${Resolved}` => `${c.palette}/${c.resolved}`;
 
 describe('baseline at 26eed37 (engine without the mac attribute equals the recorded literals)', () => {
@@ -664,6 +695,14 @@ describe.each(COMBOS)('$label frosted chrome (AC1, AC2, AC14 to AC16, AC19)', (c
       expect(minRatio(token(chrome, name), chip(chrome, '--accent-soft'))).toBeGreaterThanOrEqual(
         CONTRAST_GRAPHIC,
       );
+    },
+  );
+
+  it.each(chromeLabels(chrome).map(([label], i) => [label, i] as const))(
+    `the %s clears ${CONTRAST_TEXT}:1 across the envelope (AC15, D16)`,
+    (_, i) => {
+      const [, fg, under] = chromeLabels(chrome)[i] as [string, Colour, Colour[]];
+      expect(minRatio(fg, under)).toBeGreaterThanOrEqual(CONTRAST_TEXT);
     },
   );
 
@@ -795,6 +834,11 @@ describe.each(COMBOS)('$label Reduce transparency (AC12, AC21, AC23)', (c) => {
       expect(minRatio(token(t, name), composites(t))).toBeGreaterThanOrEqual(CONTRAST_TEXT);
     });
 
+    it(`every chrome text label clears ${CONTRAST_TEXT}:1 on the solid chrome (AC15, D16)`, () => {
+      for (const [label, fg, under] of chromeLabels(tree(c, state, 'chrome')))
+        expect(minRatio(fg, under), label).toBeGreaterThanOrEqual(CONTRAST_TEXT);
+    });
+
     it(`the cursor clears ${CONTRAST_GRAPHIC}:1 on the solid sheet unless pinned`, () => {
       if (exempt(c, 'terminal', '--term-cursor')) return;
       const t = tree(c, state, 'sheet');
@@ -829,6 +873,8 @@ const WORKING_TOKENS = [
   '--surface-hover',
   '--surface-active',
   '--hue-cyan',
+  '--hue-pink',
+  '--hue-orange-soft',
 ] as const;
 
 describe.each(COMBOS)('$label working-area tokens stay the palette values (AC10)', (c) => {
@@ -845,6 +891,10 @@ describe.each(COMBOS)('$label working-area tokens stay the palette values (AC10)
         const t = tree(c, state, region, content);
         for (const name of WORKING_TOKENS)
           expect(token(t, name), name).toEqual(token(rootScope, name));
+        for (const s of GIT_LETTERS)
+          expect(evalColour(gitLetterExpr(s), t.scope).c, `git ${s}`).toEqual(
+            hex(tailwindColors[GIT_HUES[s]][400]),
+          );
       }
     },
   );
@@ -962,4 +1012,35 @@ describe('catppuccin light chrome cyan (AC16 ruling: darker on mac chrome only)'
       for (const region of ['chrome', 'sheet', 'card', 'chat'] as const)
         expect(token(tree(c, state, region), '--term-cyan')).toEqual(palette);
   });
+});
+
+describe('chrome text label lifts (D16: macOS chrome only, lighter in dark themes, darker in light themes)', () => {
+  it.each(GIT_LETTERS)(
+    'git status %s reads a --git-* token whose fallback is its Tailwind -400 hue, so off mac nothing changes',
+    (s) => {
+      const m = GIT_TOKEN.exec(gitStatusTextClass(s));
+      expect(m?.[1]).toMatch(/^--git-/);
+      expect(m?.[2]).toBe(tailwindColors[GIT_HUES[s]][400]);
+    },
+  );
+
+  it.each(COMBOS)(
+    '$label chrome --hue-pink and the deleted letter move toward the theme pole',
+    (c) => {
+      const chrome = tree(c, OFF, 'chrome');
+      const toPole = (lifted: Colour, palette: Colour) =>
+        c.resolved === 'dark'
+          ? luminance(lifted) > luminance(palette)
+          : luminance(lifted) < luminance(palette);
+      expect(
+        toPole(token(chrome, '--hue-pink'), token(tree(c, BASE, 'chrome'), '--hue-pink')),
+      ).toBe(true);
+      expect(
+        toPole(evalColour(gitLetterExpr('D'), chrome.scope), {
+          c: hex(tailwindColors.rose[400]),
+          a: 1,
+        }),
+      ).toBe(true);
+    },
+  );
 });
