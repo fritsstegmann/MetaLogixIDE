@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { installAgentStatus } from '@main/agent-status/install';
 
 class FakePty extends EventEmitter {
-  liveShell(): { pid: number; generation: string; agent: 'omp' } { return { pid: 12, generation: 'g1', agent: 'omp' }; }
-  async liveBottomRows(): Promise<string[]> { return []; }
+  agent: 'omp' | null = 'omp';
+  rows: string[] = [];
+  liveShell(): { pid: number; generation: string; agent: 'omp' | null } { return { pid: 12, generation: 'g1', agent: this.agent }; }
+  async liveBottomRows(): Promise<string[]> { return this.rows; }
 }
 
 describe('status installer', () => {
@@ -56,6 +58,38 @@ describe('status installer', () => {
         expect(tracker.list()).toEqual([{ projectId: 2, shellIndex: 1, agent: 'omp', state: 'idle' }]);
         expect(broadcast).toHaveBeenLastCalledWith('agent-state:changed', { projectId: 2, shellIndex: 1, agent: 'omp', state: 'idle' });
         expect(broadcast).toHaveBeenCalledTimes(3);
+      } finally {
+        stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('samples a manually launched POSIX Claude and clears it when the foreground changes', async () => {
+    vi.useFakeTimers();
+    try {
+      const ptyManager = new FakePty();
+      ptyManager.agent = null;
+      ptyManager.rows = ['✳ Thinking…', 'esc to interrupt'];
+      const observeForeground = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const receiver = { bind: vi.fn(), release: vi.fn(), setListener: vi.fn() };
+      const broadcast = vi.fn();
+      const { tracker, stop } = installAgentStatus({
+        ptyManager, receiver, broadcast, platform: 'darwin', observeForeground,
+      });
+      try {
+        ptyManager.emit('spawn', { projectId: 2, shellIndex: 1, pid: 12, generation: 'g1', agent: null });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(tracker.list()).toEqual([{ projectId: 2, shellIndex: 1, agent: 'claude', state: 'busy' }]);
+        expect(observeForeground).toHaveBeenCalledWith(12);
+        expect(broadcast).toHaveBeenLastCalledWith('agent-state:changed', {
+          projectId: 2, shellIndex: 1, agent: 'claude', state: 'busy',
+        });
+        await vi.advanceTimersByTimeAsync(250);
+        expect(tracker.list()).toEqual([]);
+        expect(broadcast).toHaveBeenLastCalledWith('agent-state:changed', {
+          projectId: 2, shellIndex: 1, agent: null, state: 'idle',
+        });
       } finally {
         stop();
       }
