@@ -435,6 +435,7 @@ const startupReady = app.whenReady().then(async () => {
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
     listPopped: () => listPopped(),
     tileAll: () => tileAllOurWindows(),
+    setVibrancy: () => { /* wired by Agent 1 */ },
   });
   installClaudeNotifications({
     hooks: createHookFanout(services.hookReceiver),

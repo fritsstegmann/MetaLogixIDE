@@ -8,6 +8,7 @@ import { pruneMissingProjects } from '@main/domain/prune-missing';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
+import type { VibrancyMaterial } from '@shared/frosted-glass';
 import { resolveLaunch } from '@main/domain/launch';
 import { parseProjectDefaultAgent, setProjectDefaultAgent } from '@main/domain/project-default-agent';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
@@ -138,6 +139,8 @@ export interface WindowHooks {
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
   listPopped: () => Array<{ projectId: number; shellIndex: number }>;
   tileAll: () => number;
+  /** Applies the vibrancy material to every open window (no-op off darwin). */
+  setVibrancy: (material: VibrancyMaterial) => void;
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
@@ -733,6 +736,19 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       if (!w.isDestroyed()) w.setOpacity(clamped / 100);
     }
     return { ok: true } as const;
+  },
+
+  'settings:set-frost-chrome': async () => {
+    throw new Error('not implemented');
+  },
+  'settings:set-chrome-frost-level': async () => {
+    throw new Error('not implemented');
+  },
+  'settings:set-terminal-frost-level': async () => {
+    throw new Error('not implemented');
+  },
+  'settings:set-vibrancy-material': async () => {
+    throw new Error('not implemented');
   },
 
   'settings:set-frost-terminal': async (s, { enabled }) => {

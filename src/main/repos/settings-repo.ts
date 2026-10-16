@@ -25,6 +25,10 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'notify_claude_needs_input':     true,
   'notify_claude_finished':        true,
   'frost_terminal':                false,
+  'frost_chrome':                  true,
+  'chrome_frost_level':            'subtle',
+  'terminal_frost_level':          'off',
+  'vibrancy_material':             'sidebar',
   'app_env':                       {},
   // Seeded named CLIs the "+ new shell" menu shows out of the box. The bare
   // "Terminal" (login $SHELL) is offered by the menu itself as a separate
