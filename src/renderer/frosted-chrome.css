@@ -1,0 +1,3 @@
+/* macOS frosted chrome. Every selector in this file starts with
+ * :root[data-platform="mac"], so Windows and Linux never match it.
+ * Imported after styles.css. */

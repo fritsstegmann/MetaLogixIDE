@@ -124,6 +124,8 @@ export type SettingsMap = {
   'notify_claude_needs_input':     boolean;
   /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
   'notify_claude_finished':        boolean;
+  /** macOS only: let the vibrancy material show through the terminal group. Default false. Write via settings:set-frost-terminal only. */
+  'frost_terminal':                boolean;
   /** App-wide env variables applied to every spawn; project variables override. Write via settings:set-app-env only. */
   'app_env':                       Record<string, string>;
 };

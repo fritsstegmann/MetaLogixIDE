@@ -731,6 +731,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true } as const;
   },
 
+  'settings:set-frost-terminal': async () => {
+    throw new Error('not implemented');
+  },
+
   /* ─── metaproject chat ─── */
   'metaproject:login': async (s, { username, password, remember }) => {
     const baseUrl = s.settings.get('metaproject_base_url') || 'https://projects.metalogix.solutions';
