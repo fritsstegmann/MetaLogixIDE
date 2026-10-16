@@ -32,6 +32,9 @@ export function baseEnv(): NodeJS.ProcessEnv {
   delete rest.METAIDE_OMP_STATUS_PORT;
   delete rest.METAIDE_OMP_STATUS_TOKEN;
   delete rest.METAIDE_OMP_STATUS_SPAWN;
+  // This test runner itself can be nested in OMP. App-launched child OMP is a
+  // new root session, not a child of the runner's ambient OMP process.
+  delete rest.OMPCODE;
   return rest;
 }
 

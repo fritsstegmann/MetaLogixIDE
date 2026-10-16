@@ -1,13 +1,28 @@
 import { test, expect } from '@playwright/test';
 import { AGENT_DOT } from '../../src/shared/agent-state';
-import { launchStatus, openProject, projectId, sendLine, expectAgentDot, expectAggregate, tabDot, rowDot, inUseDot, launchCli } from './helpers/agent-status-harness';
+import {
+  launchStatus,
+  openProject,
+  projectId,
+  sendLine,
+  expectAgentDot,
+  expectAggregate,
+  tabDot,
+  rowDot,
+  inUseDot,
+  launchCli,
+} from './helpers/agent-status-harness';
 
 test('AC8/AC9: inactive idle tab stays static grey; only its live agent changes its own dot', async () => {
   const h = await launchStatus(['proja', 'projb']);
   try {
     await openProject(h.win, 'proja');
     const a = await projectId(h.win, 'proja');
-    const second = await launchCli(h.win, a, 'Claude', [h.claude, '--settings', `${h.home}/unused-settings.json`]);
+    const second = await launchCli(h.win, a, 'Claude', [
+      h.claude,
+      '--settings',
+      `${h.home}/unused-settings.json`,
+    ]);
     const inactive = tabDot(h.win, second);
     await expect(inactive).toHaveAccessibleName('Idle');
     await expect(inactive).not.toHaveAttribute(AGENT_DOT.stateAttr, /.+/);
@@ -45,8 +60,10 @@ test('AC8/AC9: ChatTab and unopened project keep their original unrelated indica
     const chat = h.win.locator('[data-view="chat"]');
     await expect(chat).toBeVisible();
     await expect(chat.getByTestId(AGENT_DOT.testId)).toHaveCount(0);
-    const unopened = h.win.locator('[data-testid="project-row"][data-alive="0"]')
-      .filter({ has: h.win.getByText('untouched', { exact: true }) }).first();
+    const unopened = h.win
+      .locator('[data-testid="project-row"][data-alive="0"]')
+      .filter({ has: h.win.getByText('untouched', { exact: true }) })
+      .first();
     await expect(unopened).toBeVisible();
     await expect(unopened.getByTestId(AGENT_DOT.testId)).toHaveCount(0);
     await expectAggregate(rowDot(h.win, 'proja'), 'blocked'); // control: status still rendered elsewhere
