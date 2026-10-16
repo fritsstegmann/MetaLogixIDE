@@ -58,7 +58,7 @@ import { useTerminalGeometryHold } from './hooks/useTerminalGeometryHold';
 import { useSplitLifecycle } from './hooks/useSplitLifecycle';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
-import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
+import { useProjectAgentState, useShellAgentState } from './hooks/useAgentStates';
 import { useApplyUiFont } from './fonts/use-apply-ui-font';
 import { XIcon } from './components/shell-icons';
 import { ShellTabsBar } from './components/ShellTabsBar';
@@ -157,7 +157,7 @@ function MainApp() {
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
   // -1 never matches a real project id, so this reads idle when nothing is selected.
-  const selectedClaudeState = useProjectClaudeState(selected?.id ?? -1);
+  const selectedAgentState = useProjectAgentState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
   // useEffect with an empty dep list) always reads the current project.
   const selectedRef = useRef<Project | null>(null);
@@ -961,7 +961,7 @@ function MainApp() {
               {selected && (
                 <>
                   <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
-                    <StatusDot state={selectedClaudeState} />
+                    <StatusDot state={selectedAgentState} />
                     <span className="truncate font-medium">{selected.name}</span>
                     <button
                       onClick={unloadCurrent}
@@ -1122,7 +1122,7 @@ function MainApp() {
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
-  const claudeState = useShellClaudeState(projectId, shellIndex);
+  const shellAgentState = useShellAgentState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
   const [projectName, setProjectName] = useState<string>('');
@@ -1153,7 +1153,7 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
             is to run several projects side by side, so the label needs to
             read at a glance even in a narrow window. Trailing subtitle is
             shortened + hidden first when space runs out. */}
-        <StatusDot state={claudeState} className="shrink-0" />
+        <StatusDot agent={shellAgentState.agent} state={shellAgentState.state} className="shrink-0" />
         <span className="text-sm font-semibold text-[--text] truncate min-w-0" title={projectName}>
           {projectName || 'MetaLogix IDE'}
         </span>

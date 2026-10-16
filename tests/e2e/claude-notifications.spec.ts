@@ -43,9 +43,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type Api, MOCK_CLAUDE, makeClaudeShim, launch, projectId, openProject, sendLine, waitForShell, aliveShells,
-  waitForClaudeState, installNotificationSpy, notifications, clickNotification, baseEnv,
+  installNotificationSpy, notifications, clickNotification, baseEnv, sendAndConfirmUserPrompt,
   hookCredentials, postRawHook,
 } from './helpers/claude-harness';
+import { electronOptions } from './helpers/agent-status-harness';
 
 type ClaudePathSnapshot =
   | { present: false }
@@ -83,13 +84,11 @@ test.describe('Claude Code system notifications', () => {
       const projB = await projectId(h.win, 'projb');
       // Confirm both shells so they're hook-confirmed (AC18 depends on this
       // elsewhere) and to establish a UserPromptSubmit baseline.
-      await sendLine(h.win, projA, 0, 'hello');
-      await sendLine(h.win, projB, 0, 'hello');
-      // Resolve proja shell 0's real hook credentials now, while it's busy
-      // (safe — AC7 only answers a BLOCKED shell). Needed below: once this
-      // shell is blocked, any further typed command's own submit Enter would
-      // itself answer it (AC7), so the second permission_prompt has to be
-      // posted directly rather than typed.
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
+      await sendAndConfirmUserPrompt(h.win, projB, 0, 'hello');
+      // Capture credentials before sending needs-input. Later notifications
+      // are posted directly so a typed command cannot mark an outstanding
+      // notification answered in the independent hook history.
       const projACreds = await hookCredentials(h.win, h.isolatedHome, projA, 0);
 
       // Currently viewing projb: an event on proja (not viewed) must notify.
@@ -100,11 +99,8 @@ test.describe('Claude Code system notifications', () => {
       expect(list[0]!.body, 'AC9 body is Claude\'s message').toBe('Claude needs your permission to run rm -rf');
       expect(list[0]!.closed).toBe(false);
 
-      // AC9 truncation: a message over 200 chars is cut to exactly 200.
-      // Posted directly (not typed): proja's shell 0 is now BLOCKED from the
-      // event above, and typing anything here would submit an Enter that
-      // answers it (AC7/AC12c stale-needs-input), suppressing this exact
-      // notification instead of testing truncation.
+      // Post directly: typing through the PTY would answer the previous
+      // notification in hook history, making this a stale-notice test.
       const longMessage = 'x'.repeat(250);
       await postRawHook(projACreds, { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: longMessage });
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(2);
@@ -115,14 +111,9 @@ test.describe('Claude Code system notifications', () => {
       expect(list[0]!.closed, 'AC14 previous notification for the shell closed').toBe(true);
       expect(list[1]!.closed).toBe(false);
 
-      // AC2/AC10: a Stop event finishes with a fixed body, no response text.
-      // "Finished" is now shown only for a Stop that moves busy -> idle
-      // (amended AC12a). The shell is already blocked here (the permission
-      // Notification above), so `/hook-stop`'s own submit Enter would answer
-      // it into busy anyway (AC7) — but make the busy precondition explicit
-      // and deterministic rather than relying on that side effect.
-      await sendLine(h.win, projA, 0, 'hello');
-      await waitForClaudeState(h.win, projA, 0, 'busy');
+      // Stop notifies only after a hook-confirmed turn has started. This
+      // UserPromptSubmit is notification-history setup, not dot authority.
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
       await sendLine(h.win, projA, 0, '/hook-stop');
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(3);
       list = await notifications(h.app);
@@ -216,21 +207,15 @@ test.describe('Claude Code system notifications', () => {
       const projB = await projectId(h.win, 'projb');
       await waitForShell(h.win, projB, 0, 'mock-claude ready');
 
-      // AC16: main window focused, but on a different project — now notify.
-      // Posted directly: proja's shell 0 is BLOCKED from the AC15 step
-      // above, and typing here would submit an Enter that answers it
-      // (AC7/AC12c), suppressing this exact notification as stale instead
-      // of testing AC16.
+      // Post directly so input through the PTY cannot mark this notification
+      // answered before the hook-history eligibility check.
       await postRawHook(projACreds, { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'now on a different project' });
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(1);
 
-      // AC17: no focused window at all (minimised) — still notifies.
+      // No focused window: notification eligibility still uses hook
+      // history. Re-establish a UserPromptSubmit before the Stop.
       await h.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.minimize(); });
-      // Amended AC12a: "finished" requires busy -> idle. Make that explicit
-      // rather than relying on `/hook-stop`'s own submit Enter answering the
-      // still-blocked shell (AC7).
-      await sendLine(h.win, projA, 0, 'hello');
-      await waitForClaudeState(h.win, projA, 0, 'busy');
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
       await sendLine(h.win, projA, 0, '/hook-stop');
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(2);
       await h.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.restore(); });
@@ -292,7 +277,7 @@ test.describe('Claude Code system notifications', () => {
       await openProject(h.win, 'proja');
       const projA = await projectId(h.win, 'proja');
       await waitForShell(h.win, projA, 0, 'mock-claude ready');
-      await sendLine(h.win, projA, 0, 'hello');
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
 
       const [popout] = await Promise.all([
         h.app.waitForEvent('window'),
@@ -359,9 +344,8 @@ test.describe('Claude Code system notifications', () => {
       await openProject(h.win, 'proja');
       const projA = await projectId(h.win, 'proja');
       await waitForShell(h.win, projA, 0, 'mock-claude ready');
-      // Amended AC12a: "finished" requires busy -> idle.
-      await sendLine(h.win, projA, 0, 'hello');
-      await waitForClaudeState(h.win, projA, 0, 'busy');
+      // Start the notification-only hook turn before a finished Stop.
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
       await sendLine(h.win, projA, 0, '/hook-stop');
       await h.win.evaluate(async (id: number) => {
         await (window as unknown as { api: Api }).api.invoke('shells:kill', { projectId: id, shellIndex: 0 });
@@ -537,7 +521,7 @@ test.describe('Claude Code system notifications', () => {
       await openProject(h.win, 'proja');
       const projA = await projectId(h.win, 'proja');
       await waitForShell(h.win, projA, 0, 'mock-claude ready');
-      await sendLine(h.win, projA, 0, 'hello');
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
 
       // Kill shell 0 and relaunch the primary slot: firstLaunchedAt is
       // already set, so this resolves to the `subsequent` (--continue) variant.
@@ -572,8 +556,7 @@ test.describe('Claude Code system notifications', () => {
       // Amended AC12a: "finished" requires busy -> idle. The relaunched
       // shell is a fresh session (idle baseline) — the `/hook-env` line just
       // sent posts no hook, so establish busy explicitly.
-      await sendLine(h.win, projA, relaunchedIdx, 'hello');
-      await waitForClaudeState(h.win, projA, relaunchedIdx, 'busy');
+      await sendAndConfirmUserPrompt(h.win, projA, relaunchedIdx, 'hello');
       await sendLine(h.win, projA, relaunchedIdx, '/hook-stop');
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(1);
       expect((await notifications(h.app))[0]!.title).toBe(`proja — shell ${relaunchedIdx}`);
@@ -587,8 +570,7 @@ test.describe('Claude Code system notifications', () => {
         }) as unknown as { shellIndex: number }).shellIndex;
       }, { id: projA, shim: h.shimPath });
       await waitForShell(h.win, projA, cliIdx, 'mock-claude ready');
-      await sendLine(h.win, projA, cliIdx, 'hello');
-      await waitForClaudeState(h.win, projA, cliIdx, 'busy');
+      await sendAndConfirmUserPrompt(h.win, projA, cliIdx, 'hello');
       await sendLine(h.win, projA, cliIdx, '/hook-stop');
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(2);
       expect((await notifications(h.app))[1]!.title).toBe(`proja — shell ${cliIdx}`);
@@ -628,10 +610,9 @@ test.describe('Claude Code system notifications', () => {
       // window focus, not DOM focus). Minimise for real so the toggle, not
       // AC15, is what's under test here.
       await h.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.minimize(); });
-      // Amended AC12a: "finished" requires busy -> idle — establish busy
-      // first so this is a real test of the toggle, not just "no hook fired".
-      await sendLine(h.win, projA, 0, 'hello');
-      await waitForClaudeState(h.win, projA, 0, 'busy');
+      // Start a hook-confirmed turn so this checks the disabled toggle,
+      // not merely a Stop from an already-settled notification history.
+      await sendAndConfirmUserPrompt(h.win, projA, 0, 'hello');
       await sendLine(h.win, projA, 0, '/hook-stop');
       await h.win.waitForTimeout(2000);
       expect(await notifications(h.app), 'finished toggle off: no notification').toHaveLength(0);
@@ -642,18 +623,15 @@ test.describe('Claude Code system notifications', () => {
 
       // AC20 persistence: relaunch with the same HOME, toggle still off.
       await h.app.close();
-      const app2 = await electron.launch({
-        args: ['.', `--user-data-dir=${join(h.isolatedHome, 'userData')}`],
-        env: {
-          ...baseEnv(),
-          HOME: h.isolatedHome,
-          SHELL: '/bin/sh',
-          METAIDE_TEST_MODE: '1',
-          METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-          METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: [h.shimPath], env: {} }),
-          METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [h.shimPath, '--continue'], env: {} }),
-        },
-      });
+      const app2 = await electron.launch(electronOptions(h.isolatedHome, {
+        ...baseEnv(),
+        HOME: h.isolatedHome,
+        ...(process.platform === 'win32' ? { USERPROFILE: h.isolatedHome } : { SHELL: '/bin/bash' }),
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [h.shimPath], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [h.shimPath, '--continue'], env: {} }),
+      }));
       const win2 = await app2.firstWindow();
       await win2.waitForLoadState('domcontentloaded');
       await win2.getByTestId('settings-open').click();
@@ -687,18 +665,15 @@ test.describe('Claude Code system notifications', () => {
       mkdirSync(metaideDir, { recursive: true });
       writeFileSync(join(metaideDir, 'claude-hooks'), 'not a directory');
 
-      const app = await electron.launch({
-        args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-        env: {
-          ...baseEnv(),
-          HOME: isolatedHome,
-          SHELL: '/bin/sh',
-          METAIDE_TEST_MODE: '1',
-          METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-          METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: [shimPath], env: {} }),
-          METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
-        },
-      });
+      const app = await electron.launch(electronOptions(isolatedHome, {
+        ...baseEnv(),
+        HOME: isolatedHome,
+        ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
+      }));
       try {
         const win = await app.firstWindow();
         await win.waitForLoadState('domcontentloaded');

@@ -55,18 +55,21 @@ describe('registerIpc', () => {
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
       'settings:get', 'settings:set', 'settings:set-font', 'settings:set-app-env', 'settings:set-claude-permission-mode',
-      'files:tree', 'app:ping', 'notifications:viewed-shells', 'claude-state:list',
+      'files:tree', 'app:ping', 'notifications:viewed-shells', 'agent-state:list',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
   });
 
-  it('claude-state:list returns the tracker list as { shells }', async () => {
+  it('agent-state:list returns recognized idle and working shells without credentials', async () => {
     const ipc = fakeIpcMain();
-    const shells = [{ projectId: 1, shellIndex: 0, state: 'busy' }, { projectId: 2, shellIndex: 3, state: 'blocked' }];
+    const shells = [
+      { projectId: 1, shellIndex: 0, agent: 'claude', state: 'idle' },
+      { projectId: 2, shellIndex: 3, agent: 'omp', state: 'blocked' },
+    ];
     const list = vi.fn(() => shells);
-    const services = { claudeState: { list } } as unknown as Parameters<typeof registerIpc>[1];
+    const services = { agentStatus: { list } } as unknown as Parameters<typeof registerIpc>[1];
     registerIpc(ipc as unknown as IpcMain, services, () => {});
-    await expect(ipc.handlers.get('claude-state:list')!({}, undefined)).resolves.toEqual({ shells });
+    await expect(ipc.handlers.get('agent-state:list')!({}, undefined)).resolves.toEqual({ shells });
     expect(list).toHaveBeenCalledTimes(1);
   });
 

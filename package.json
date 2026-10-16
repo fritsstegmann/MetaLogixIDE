@@ -39,6 +39,10 @@
       {
         "from": "resources/omp-status-extension.js",
         "to": "omp-status-extension.js"
+      },
+      {
+        "from": "resources/package.json",
+        "to": "package.json"
       }
     ],
     "files": [

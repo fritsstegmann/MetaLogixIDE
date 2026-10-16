@@ -31,7 +31,7 @@ import {
 import { MODAL_CLASSES } from '../../src/renderer/modal-glass';
 import { DIFF_COPY } from '../../src/renderer/diff-tab-copy';
 import { SETTINGS_NAV_ITEMS } from '../../src/renderer/components/settings/nav-icons';
-import { CLAUDE_DOT } from '../../src/shared/claude-state';
+import { AGENT_DOT } from '../../src/shared/agent-state';
 import {
   launch, openProject, projectIdByName, aliveProjectNames, terminalActiveIn, waitForProjectShown,
   PRIMARY, SIDEBAR_FILTER_INPUT, type Launched,
@@ -426,9 +426,9 @@ test.describe('rows', () => {
       }
 
       // Live dot: alpha and gamma have live shells, beta has none.
-      await expect(optionFor(win, 'alpha').getByTestId(CLAUDE_DOT.testId), 'live project shows the status dot').toHaveCount(1);
-      await expect(optionFor(win, 'gamma').getByTestId(CLAUDE_DOT.testId)).toHaveCount(1);
-      await expect(optionFor(win, 'beta').getByTestId(CLAUDE_DOT.testId), 'a project with no live shell has no dot').toHaveCount(0);
+      await expect(optionFor(win, 'alpha').getByTestId(AGENT_DOT.testId), 'live project shows the status dot').toHaveCount(1);
+      await expect(optionFor(win, 'gamma').getByTestId(AGENT_DOT.testId)).toHaveCount(1);
+      await expect(optionFor(win, 'beta').getByTestId(AGENT_DOT.testId), 'a project with no live shell has no dot').toHaveCount(0);
 
       // Current: alpha (not highlighted; beta is first) shows the marker, the others do not.
       const alpha = optionFor(win, 'alpha');
@@ -681,7 +681,7 @@ test.describe('typing and errors', () => {
       await openPalette(win);
       await expect(optionFor(win, 'alpha'), 'positive control').toHaveCount(1);
       await expect(optionFor(win, 'beta')).toHaveCount(1);
-      await expect(optionFor(win, 'beta').getByTestId(CLAUDE_DOT.testId), 'beta has no live shell yet').toHaveCount(0);
+      await expect(optionFor(win, 'beta').getByTestId(AGENT_DOT.testId), 'beta has no live shell yet').toHaveCount(0);
 
       const betaId = await projectIdByName(win, 'beta');
       await invoke(win, 'projects:hide', { id: betaId, hidden: true });
@@ -691,7 +691,7 @@ test.describe('typing and errors', () => {
       await expect(optionFor(win, 'beta'), 'unhiding brings it back').toHaveCount(1);
 
       await invoke(win, 'shells:launch-plain', { projectId: betaId });
-      await expect(optionFor(win, 'beta').getByTestId(CLAUDE_DOT.testId), 'beta\'s dot appears live').toHaveCount(1);
+      await expect(optionFor(win, 'beta').getByTestId(AGENT_DOT.testId), 'beta\'s dot appears live').toHaveCount(1);
       await expect(root(win)).toBeVisible();
     });
   });

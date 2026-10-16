@@ -4,6 +4,29 @@ import { PtyManager } from '@main/pty/manager';
 import { ScreenMirror } from '@main/pty/screen-mirror';
 
 const COLS = 80;
+describe('bounded live-screen observation', () => {
+  it('reads only bottom viewport rows after writes drain, never historical approval scrollback', async () => {
+    const mirror = new ScreenMirror(32, 6);
+    mirror.write('Allow Bash command?\r\nEsc to cancel\r\n');
+    for (let n = 0; n < 20; n++) mirror.write(`old ${n}\r\n`);
+    mirror.write('> ');
+    const rows = await mirror.liveBottomRows();
+    expect(rows.length).toBeLessThanOrEqual(8);
+    expect(rows.join('\n')).not.toContain('Allow Bash command?');
+    expect(rows.join('\n')).toContain('> ');
+    mirror.dispose();
+    expect(await mirror.liveBottomRows()).toEqual([]);
+  });
+
+  it('reads active alternate buffer rather than normal-buffer transcript', async () => {
+    const mirror = new ScreenMirror(30, 5);
+    mirror.write('Allow Bash command?\r\nEsc to cancel');
+    mirror.write('\x1b[?1049h\x1b[H> Ready for another task');
+    expect((await mirror.liveBottomRows()).join('\n')).toContain('Ready for another task');
+    expect((await mirror.liveBottomRows()).join('\n')).not.toContain('Allow Bash command?');
+    mirror.dispose();
+  });
+});
 const ROWS = 24;
 
 function nodeLaunch(script: string) {

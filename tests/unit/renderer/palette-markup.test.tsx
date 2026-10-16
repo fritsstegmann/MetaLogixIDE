@@ -26,7 +26,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@renderer/api', () => ({ api: { invoke: vi.fn(), on: vi.fn(() => () => undefined) } }));
 vi.mock('@renderer/hooks/useProjects', () => ({ useProjects: () => ({ projects: state.projects, refresh: vi.fn() }) }));
 vi.mock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: state.alive, refresh: vi.fn() }) }));
-vi.mock('@renderer/hooks/useClaudeStates', () => ({ useProjectClaudeState: () => 'busy' }));
+vi.mock('@renderer/hooks/useAgentStates', () => ({ useProjectAgentState: () => 'busy' }));
 vi.mock('@renderer/hooks/usePaletteFiles', () => ({ usePaletteFiles: () => state.files }));
 
 const { CommandPalette } = await import('@renderer/components/CommandPalette');
@@ -291,13 +291,22 @@ describe('CommandPalette — project rows (AC7)', () => {
     expect(byTestId(idle, PALETTE_TESTIDS.projectStatus)).toEqual([]);
   });
 
-  it('shows a running project\'s Claude state as text and the Open ↩ hint on the highlighted row', () => {
+  it('shows generic running-project severity text and the Open ↩ hint on the highlighted row', () => {
     const html = render();
     const row = outer(html, options(html)[0] as El);
     expect(text(outer(row, one(row, PALETTE_TESTIDS.projectStatus)))).toBe(PALETTE_COPY.projectStatus.busy);
     expect(text(row)).toContain(PALETTE_COPY.openHint);
     expect(text(outer(html, options(html)[1] as El))).not.toContain(PALETTE_COPY.openHint);
   });
+  it('names live project severity without attributing it to Claude or OMP', () => {
+    const html = render();
+    const live = outer(html, options(html)[0] as El);
+    const dot = elements(live).find((e) => e.attrs['data-testid'] === 'claude-dot');
+    expect(dot?.attrs['aria-label']).toBe('Working');
+    expect(dot?.attrs.title).toBe('Working');
+    expect(live).not.toMatch(/Claude is working|OMP is working/);
+  });
+
 
   it('puts running projects under a Running heading with its count', () => {
     state.alive = new Set([1, 2]);

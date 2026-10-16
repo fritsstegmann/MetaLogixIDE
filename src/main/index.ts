@@ -8,7 +8,7 @@ import { buildServices, type Services } from './services';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
-import { installClaudeStatus } from './claude-status/install';
+import { installAgentStatus } from './agent-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
@@ -352,16 +352,14 @@ export function applyPersistedOpacity(win: BrowserWindow): void {
 }
 
 /**
- * Starts the Claude hook receiver and writes its settings file. A failure
- * is logged and otherwise ignored: Claude shells then launch undecorated,
- * keep the generic notifier (AC22) and show a green status dot, with no
- * dialog.
+ * Starts the Claude notification hook receiver. Failure does not affect the
+ * independent live-screen status monitor or generic command notifications.
  */
 async function startClaudeHooks(services: Services): Promise<void> {
   try {
     await services.hookRuntime.start();
-  } catch (err) {
-    console.warn('[metaide] Claude hook receiver unavailable; Claude notifications disabled and Claude status dots stay green', err);
+  } catch {
+    console.warn('[metaide] Claude hook receiver unavailable; Claude hook notifications disabled');
   }
 }
 
@@ -394,8 +392,22 @@ const startupReady = app.whenReady().then(async () => {
   scanArgvForFiles(process.argv);
   // Windows toasts are dropped without an AppUserModelID matching build.appId.
   if (process.platform === 'win32') app.setAppUserModelId('com.metalogix.metaide');
-  const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations') });
+  const ompExtensionPath = app.isPackaged
+    ? join(process.resourcesPath, 'omp-status-extension.js')
+    : resolve(app.getAppPath(), 'resources/omp-status-extension.js');
+  const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations'), ompExtensionPath });
   await startClaudeHooks(services);
+  try {
+    await services.ompReceiver.start();
+  } catch {
+    console.warn('[metaide] OMP status receiver unavailable; OMP launches remain runnable without status integration');
+  }
+  const agentStatus = installAgentStatus({
+    ptyManager: services.ptyManager,
+    receiver: services.ompReceiver,
+    broadcast,
+  });
+  services.agentStatus = agentStatus.tracker;
   // Auto-rescan every registered root at boot so folders added on disk since
   // the last launch (or after a discovery-rule change) surface without the
   // user having to remember Settings → Rescan. Cheap: it's just directory
@@ -426,10 +438,9 @@ const startupReady = app.whenReady().then(async () => {
     listPopped: () => listPopped(),
     tileAll: () => tileAllOurWindows(),
   });
-  mainWindow = await createMainWindow();
-  Menu.setApplicationMenu(buildAppMenu(mainWindow));
   installClaudeNotifications({
-    hooks: services.claudeState,
+    hooks: createHookFanout(services.hookReceiver),
+    history: services.hookHistory,
     sessions: services.hookSessions,
     ptyManager: services.ptyManager,
     viewedShells: services.viewedShells,
@@ -443,12 +454,9 @@ const startupReady = app.whenReady().then(async () => {
     },
     broadcast,
   });
-  const claudeStatus = installClaudeStatus({
-    receiver: createHookFanout(services.hookReceiver),
-    tracker: services.claudeState,
-    ptyManager: services.ptyManager,
-    broadcast,
-  });
+  mainWindow = await createMainWindow();
+  Menu.setApplicationMenu(buildAppMenu(mainWindow));
+
 
   // ─── Long-running command "done" notifier ─────────────────────────────
   // Every 500 ms ask the PtyManager which shells just finished a command
@@ -507,7 +515,8 @@ const startupReady = app.whenReady().then(async () => {
 
   app.on('before-quit', () => {
     clearInterval(donePoll);
-    claudeStatus.stop();
+    agentStatus.stop();
+    services.ompReceiver.stop();
     void services.hookRuntime.stop();
   });
 });

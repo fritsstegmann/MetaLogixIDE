@@ -1,6 +1,6 @@
 import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
 import type { ClaudePermissionMode } from './claude-permission-mode';
-import type { ClaudeShellStateEntry } from './claude-state';
+import type { AgentShellStateEntry } from './agent-state';
 import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
@@ -99,8 +99,8 @@ export interface IpcContract {
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'shells:alive-list':  { request: undefined;                                   response: { shells: AliveShellSummary[] } };
-  /** Claude state of every shell that is not idle; shells absent from the list are idle. */
-  'claude-state:list':  { request: undefined;                                   response: { shells: ClaudeShellStateEntry[] } };
+  /** Current live agent shells, including recognized idle shells; absent shells are non-agent idle. */
+  'agent-state:list': { request: undefined; response: { shells: AgentShellStateEntry[] } };
   'shells:pin':         { request: { projectId: number; shellIndex: number; pinned: boolean }; response: { ok: true } };
   'shells:snapshot':    { request: { projectId: number; shellIndex: number };   response: { output: string; alive: boolean } };
   /**
@@ -380,8 +380,8 @@ export interface IpcEvents {
   'popout:changed':         { popped: Array<{ projectId: number; shellIndex: number }> };
   'metaproject:event':      { event: string; payload: unknown };
   'ports:changed':          { projectId: number; shellIndex: number; ports: number[] };
-  /** A shell's Claude state changed; sent to every window on real transitions only. */
-  'claude-state:changed':   ClaudeShellStateEntry;
+  /** An agent shell changed state; emitted after screen observation or an authenticated OMP report. */
+  'agent-state:changed': AgentShellStateEntry;
   /**
    * Fired when the user clicks an OS notification for a live shell — the
    * generic "command finished" one or a Claude "needs input" / "finished"
