@@ -563,16 +563,16 @@ const SOURCE: Readonly<Record<string, string>> = {
 /**
  * D13: indicator tokens already below 3:1 on the opaque baseline surfaces at 26eed37, on every surface and
  * under Reduce transparency. Only pairs that still fail on the mac stack are pinned: the selected-row
- * `--claude-blocked` extension passes there now (the opaque chip, and the D17 chrome lift in rose-pine light).
+ * `--agent-blocked` extension passes there now (the opaque chip, and the D17 chrome lift in rose-pine light).
  * Each pin still fails on the terminal surfaces, which D17 does not lift.
  */
 const D13_DEBT: readonly Pin[] = [
-  ['default', 'light', '--claude-idle', 'any'],
-  ['catppuccin', 'light', '--claude-idle', 'any'],
-  ['catppuccin', 'light', '--claude-busy', 'any'],
+  ['default', 'light', '--agent-idle', 'any'],
+  ['catppuccin', 'light', '--agent-idle', 'any'],
+  ['catppuccin', 'light', '--agent-busy', 'any'],
   ['catppuccin', 'light', '--term-yellow', 'any'],
   ['catppuccin', 'light', '--term-cursor', 'any'],
-  ['rose-pine', 'light', '--claude-busy', 'any'],
+  ['rose-pine', 'light', '--agent-busy', 'any'],
   ['rose-pine', 'light', '--term-yellow', 'any'],
   ['rose-pine', 'light', '--term-cyan', 'any'],
 ];
@@ -590,16 +590,16 @@ function exempt(combo: Combo, surface: Surface, painted: string): boolean {
 }
 
 const CHROME_INDICATORS = [
-  '--claude-idle',
-  '--claude-busy',
-  '--claude-blocked',
+  '--agent-idle',
+  '--agent-busy',
+  '--agent-blocked',
   '--accent',
   '--hue-yellow',
   '--hue-pink',
   '--hue-cyan',
 ] as const;
-const ROW_DOTS = ['--claude-idle', '--claude-busy', '--claude-blocked'] as const;
-const TAB_INDICATORS = ['--claude-idle', '--claude-busy', '--claude-blocked', '--accent'] as const;
+const ROW_DOTS = ['--agent-idle', '--agent-busy', '--agent-blocked'] as const;
+const TAB_INDICATORS = ['--agent-idle', '--agent-busy', '--agent-blocked', '--accent'] as const;
 
 const GIT_HUES = { M: 'amber', A: 'emerald', D: 'rose', '?': 'sky' } as const;
 type GitLetter = keyof typeof GIT_HUES;
@@ -888,9 +888,9 @@ const WORKING_TOKENS = [
   '--hue-yellow',
   '--hue-purple',
   '--danger',
-  '--claude-idle',
-  '--claude-busy',
-  '--claude-blocked',
+  '--agent-idle',
+  '--agent-busy',
+  '--agent-blocked',
   '--surface-field',
 ] as const;
 
@@ -978,12 +978,12 @@ describe.each(COMBOS)('$label non-mac is untouched (AC25)', (c) => {
 describe('pinned exemptions (D13)', () => {
   it('pins exactly the D13 list', () => {
     expect(D13_DEBT.map((p) => p.join(' '))).toEqual([
-      'default light --claude-idle any',
-      'catppuccin light --claude-idle any',
-      'catppuccin light --claude-busy any',
+      'default light --agent-idle any',
+      'catppuccin light --agent-idle any',
+      'catppuccin light --agent-busy any',
       'catppuccin light --term-yellow any',
       'catppuccin light --term-cursor any',
-      'rose-pine light --claude-busy any',
+      'rose-pine light --agent-busy any',
       'rose-pine light --term-yellow any',
       'rose-pine light --term-cyan any',
     ]);
@@ -1112,7 +1112,7 @@ function paint(
   return { kind, src, element, fg, classes, on, opacity };
 }
 
-const CLAUDE_DOTS = ['--claude-idle', '--claude-busy', '--claude-blocked'] as const;
+const CLAUDE_DOTS = ['--agent-idle', '--agent-busy', '--agent-blocked'] as const;
 
 /**
  * D17: every coloured text and non-text indicator rendered under `[data-chrome-root]` outside the sheet and

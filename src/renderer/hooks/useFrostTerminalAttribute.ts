@@ -7,14 +7,16 @@ import { applyRootFlags, type RootFlagTarget } from '@renderer/root-flags';
  * Keeps the root's frosted-terminal attribute in sync with the stored `frost_terminal` setting,
  * live. Re-reads `settings:get` on mount (covers a stale first-paint query string after a crash
  * reload) and again on every `settings:changed` for that key, applying the result through
- * `applyRootFlags`. Defaults to `document.documentElement`; tests inject a fake target.
+ * `applyRootFlags`. Defaults to `document.documentElement`, resolved inside the effect so a
+ * render without a DOM never touches `document`; tests inject a fake target.
  */
-export function useFrostTerminalAttribute(target: RootFlagTarget = document.documentElement): void {
+export function useFrostTerminalAttribute(target?: RootFlagTarget): void {
   useEffect(() => {
+    const el = target ?? document.documentElement;
     async function load(): Promise<void> {
       try {
         const { value } = await api.invoke('settings:get', { key: FROST_TERMINAL_SETTING_KEY });
-        applyRootFlags(target, { platform: api.platform, frostTerminal: Boolean(value) });
+        applyRootFlags(el, { platform: api.platform, frostTerminal: Boolean(value) });
       } catch (e) {
         console.error('frost terminal setting load failed', e);
       }

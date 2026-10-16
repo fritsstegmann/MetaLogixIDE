@@ -8,7 +8,7 @@ import { SIDEBAR_WIDTH } from '../../src/renderer/sidebar-width';
 import { DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
 import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
-import { CLAUDE_DOT } from '../../src/shared/claude-state';
+import { AGENT_DOT } from '../../src/shared/agent-state';
 import { PALETTE_COPY } from '../../src/renderer/command-palette-contract';
 import type { EffectiveTheme } from '../../src/renderer/markdown/contract';
 import { commitAll, git, GIT_ENV, initRepo, porcelain } from './helpers/git-repo';
@@ -540,7 +540,7 @@ test('AC9a/AC28: a popout shell window\'s title bar is 44px in every palette and
     await expect(drag.getByText('chromed', { exact: true })).toBeVisible({ timeout: 8000 });
     await expect(drag.getByText('Shell 0', { exact: true })).toBeVisible();
     await expect(drag.getByText('MetaLogix IDE', { exact: true })).toHaveCount(1);
-    await expect(drag.getByTestId(CLAUDE_DOT.testId)).toHaveCount(1);
+    await expect(drag.getByTestId(AGENT_DOT.testId)).toHaveCount(1);
     for (const palette of PALETTES) {
       for (const theme of THEMES) {
         await setLook(popout, palette, theme);

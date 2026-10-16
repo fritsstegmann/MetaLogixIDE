@@ -65,7 +65,12 @@ function postHook(body) {
   for (const [key, template] of Object.entries(hookConfig.headers)) {
     headers[key] = resolveHeaderTemplate(template, hookConfig.allowedEnvVars);
   }
-  fetch(hookConfig.url, { method: 'POST', headers, body: JSON.stringify(body) }).catch(() => {});
+  fetch(hookConfig.url, { method: 'POST', headers, body: JSON.stringify(body) }).then(
+    (response) => {
+      if (response.ok && body.hook_event_name === 'UserPromptSubmit') process.stdout.write('HOOK-ACK UserPromptSubmit\n');
+    },
+    () => {},
+  );
 }
 
 // Text of the /flood footer. Tests match these exactly.
@@ -155,11 +160,53 @@ function work(seconds) {
   }, 500);
 }
 
+let currentStatus = null;
+
+/** Minimal stable Claude-like bottom screen; no hook is emitted by any /status-* command. */
+function statusScreen(kind) {
+  currentStatus = kind;
+  const lines = {
+    ready: ['Claude Code', '> '],
+    work: ['Claude Code', '✻ Thinking…', 'Esc to interrupt'],
+    approval: ['Claude Code', 'Allow Bash command?', '❯ Yes', '  No', 'Esc to cancel'],
+    question: ['Claude Code', 'Do you want to continue?', '❯ Yes', '  No', 'Esc to cancel'],
+  }[kind];
+  const rows = Math.max(6, process.stdout.rows || 24);
+  process.stdout.write(`\x1b[2J\x1b[H\x1b[${rows - lines.length + 1};1H${lines.join('\n')}`);
+}
+
+// Real terminal UIs redraw their live state when a remount or split changes
+// PTY geometry. Otherwise the one-shot mock's bottom rows become scrollback.
+if (process.stdout.isTTY) {
+  process.stdout.on('resize', () => {
+    if (currentStatus !== null) statusScreen(currentStatus);
+  });
+}
+
+function statusHistory() {
+  // Keep a former approval in scrollback, never on the live bottom screen.
+  process.stdout.write('\x1b[2J\x1b[HAllow Bash command?\nEsc to cancel\n');
+  const rows = process.stdout.rows || 24;
+  process.stdout.write('\n'.repeat(rows + 8));
+  process.stdout.write('Claude Code\n> ');
+}
+
 process.stdout.write(isContinue ? 'mock-claude resumed\n> ' : 'mock-claude ready\n> ');
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   const line = String(chunk).trim();
-  if (line.startsWith('/model ')) {
+  if (!line.startsWith('/status-') || line === '/status-history') currentStatus = null;
+  if (line === '/status-ready') {
+    statusScreen('ready');
+  } else if (line === '/status-work' || line === '/status-resume') {
+    statusScreen('work');
+  } else if (line === '/status-approval') {
+    statusScreen('approval');
+  } else if (line === '/status-question') {
+    statusScreen('question');
+  } else if (line === '/status-history') {
+    statusHistory();
+  } else if (line.startsWith('/model ')) {
     process.stdout.write(`model set to ${line.slice(7)}\n> `);
   } else if (line === '/size') {
     process.stdout.write(`size: ${process.stdout.columns}x${process.stdout.rows}\n> `);
