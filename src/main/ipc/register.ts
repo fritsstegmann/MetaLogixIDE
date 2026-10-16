@@ -8,6 +8,8 @@ import { pruneMissingProjects } from '@main/domain/prune-missing';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
+import type { VibrancyMaterial } from '@shared/frosted-glass';
+import { isChromeFrostLevel, isTerminalFrostLevel, isVibrancyMaterial } from '@shared/frosted-glass';
 import { resolveLaunch } from '@main/domain/launch';
 import { parseProjectDefaultAgent, setProjectDefaultAgent } from '@main/domain/project-default-agent';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
@@ -138,6 +140,8 @@ export interface WindowHooks {
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
   listPopped: () => Array<{ projectId: number; shellIndex: number }>;
   tileAll: () => number;
+  /** Applies the vibrancy material to every open window (no-op off darwin). */
+  setVibrancy: (material: VibrancyMaterial) => void;
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
@@ -617,7 +621,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (key === TERMINAL_FONT_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-weight`);
     if (key === TERMINAL_BOLD_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-bold-weight`);
     if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
-    if (key === 'frost_terminal') throw new Error('frost_terminal can only be changed via settings:set-frost-terminal');
+    // Legacy key: read only by the terminal_frost_level migration, never written again (D19).
+    if ((key as string) === 'frost_terminal') throw new Error('frost_terminal is a legacy key; use settings:set-terminal-frost-level');
+    if (key === 'frost_chrome') throw new Error('frost_chrome can only be changed via settings:set-frost-chrome');
+    if (key === 'chrome_frost_level') throw new Error('chrome_frost_level can only be changed via settings:set-chrome-frost-level');
+    if (key === 'terminal_frost_level') throw new Error('terminal_frost_level can only be changed via settings:set-terminal-frost-level');
+    if (key === 'vibrancy_material') throw new Error('vibrancy_material can only be changed via settings:set-vibrancy-material');
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -735,9 +744,24 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { ok: true } as const;
   },
 
-  'settings:set-frost-terminal': async (s, { enabled }) => {
+  'settings:set-frost-chrome': async (s, { enabled }) => {
     if (typeof enabled !== 'boolean') return { ok: false, error: 'invalid' } as const;
-    s.settings.set('frost_terminal', enabled);
+    s.settings.set('frost_chrome', enabled);
+    return { ok: true } as const;
+  },
+  'settings:set-chrome-frost-level': async (s, { level }) => {
+    if (!isChromeFrostLevel(level)) return { ok: false, error: 'invalid' } as const;
+    s.settings.set('chrome_frost_level', level);
+    return { ok: true } as const;
+  },
+  'settings:set-terminal-frost-level': async (s, { level }) => {
+    if (!isTerminalFrostLevel(level)) return { ok: false, error: 'invalid' } as const;
+    s.settings.set('terminal_frost_level', level);
+    return { ok: true } as const;
+  },
+  'settings:set-vibrancy-material': async (s, { material }) => {
+    if (!isVibrancyMaterial(material)) return { ok: false, error: 'invalid' } as const;
+    s.settings.set('vibrancy_material', material);
     return { ok: true } as const;
   },
 
@@ -1372,7 +1396,10 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     'settings:set-terminal-bold-weight': true,
     'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
-    'settings:set-frost-terminal': true,
+    'settings:set-frost-chrome': true,
+    'settings:set-chrome-frost-level': true,
+    'settings:set-terminal-frost-level': true,
+    'settings:set-vibrancy-material': true,
   };
 
   for (const channel of Object.keys(handlers) as IpcChannelName[]) {
@@ -1421,9 +1448,30 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     return result;
   });
 
-  ipcMain.handle('settings:set-frost-terminal', async (_e, req: IpcRequest<'settings:set-frost-terminal'>) => {
-    const result = await handlers['settings:set-frost-terminal'](services, req);
-    if (result.ok) sendEvent('settings:changed', { key: 'frost_terminal' });
+  ipcMain.handle('settings:set-frost-chrome', async (_e, req: IpcRequest<'settings:set-frost-chrome'>) => {
+    const result = await handlers['settings:set-frost-chrome'](services, req);
+    if (result.ok) sendEvent('settings:changed', { key: 'frost_chrome' });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-chrome-frost-level', async (_e, req: IpcRequest<'settings:set-chrome-frost-level'>) => {
+    const result = await handlers['settings:set-chrome-frost-level'](services, req);
+    if (result.ok) sendEvent('settings:changed', { key: 'chrome_frost_level' });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-frost-level', async (_e, req: IpcRequest<'settings:set-terminal-frost-level'>) => {
+    const result = await handlers['settings:set-terminal-frost-level'](services, req);
+    if (result.ok) sendEvent('settings:changed', { key: 'terminal_frost_level' });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-vibrancy-material', async (_e, req: IpcRequest<'settings:set-vibrancy-material'>) => {
+    const result = await handlers['settings:set-vibrancy-material'](services, req);
+    if (result.ok) {
+      sendEvent('settings:changed', { key: 'vibrancy_material' });
+      windowHooks?.setVibrancy(req.material);
+    }
     return result;
   });
 

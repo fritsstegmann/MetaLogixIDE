@@ -800,70 +800,138 @@ describe('registerIpc', () => {
     });
   });
 
-  describe('settings:set-frost-terminal (AC6-AC8)', () => {
-    it('settings:set rejects key frost_terminal without writing (bypass guard)', async () => {
-      const ipc = fakeIpcMain();
-      const settings = realSettings();
-      const setSpy = vi.spyOn(settings, 'set');
-      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
-      registerIpc(ipc as unknown as IpcMain, services, () => {});
-
-      await expect(
-        ipc.handlers.get('settings:set')!({}, { key: 'frost_terminal', value: true }),
-      ).rejects.toThrow();
-      expect(setSpy).not.toHaveBeenCalled();
-      expect(settings.get('frost_terminal')).toBe(false);
-    });
-
-    it.each(['yes', 1, null, undefined])('rejects a non-boolean enabled (%j) with {ok:false,error:"invalid"} and does not write', async (enabled) => {
-      const ipc = fakeIpcMain();
-      const settings = realSettings();
-      const setSpy = vi.spyOn(settings, 'set');
-      const events: Array<{ channel: string; payload: unknown }> = [];
-      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
-      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
-        events.push({ channel, payload });
-      }) as never);
-
-      await expect(
-        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled }),
-      ).resolves.toEqual({ ok: false, error: 'invalid' });
-      expect(setSpy).not.toHaveBeenCalled();
-      expect(settings.get('frost_terminal')).toBe(false);
-      expect(events).toEqual([]);
-    });
-
-    it('a valid boolean persists the value, returns {ok:true}, and emits settings:changed once to every window', async () => {
+  describe('frosted-glass settings channels (AC1-AC4, AC18-AC20, AC34)', () => {
+    function setup() {
       const ipc = fakeIpcMain();
       const settings = realSettings();
       const events: Array<{ channel: string; payload: unknown }> = [];
+      const setVibrancy = vi.fn();
       const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
-      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
-        events.push({ channel, payload });
-      }) as never);
+      registerIpc(
+        ipc as unknown as IpcMain,
+        services,
+        ((channel: string, payload: unknown) => { events.push({ channel, payload }); }) as never,
+        {
+          createPopoutWindow: vi.fn(),
+          returnPopoutWindow: vi.fn(),
+          listPopped: vi.fn(() => []),
+          tileAll: vi.fn(() => 0),
+          setVibrancy,
+        },
+      );
+      return { ipc, settings, events, setVibrancy };
+    }
 
-      await expect(
-        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled: true }),
-      ).resolves.toEqual({ ok: true });
-      expect(settings.get('frost_terminal')).toBe(true);
-      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'frost_terminal' } }]);
+    it('registers the four dedicated channels', () => {
+      const { ipc } = setup();
+      for (const c of ['settings:set-frost-chrome', 'settings:set-chrome-frost-level', 'settings:set-terminal-frost-level', 'settings:set-vibrancy-material']) {
+        expect(ipc.handlers.has(c)).toBe(true);
+      }
     });
 
-    it('setting it back to false persists and emits again', async () => {
-      const ipc = fakeIpcMain();
-      const settings = realSettings();
-      settings.set('frost_terminal', true);
-      const events: Array<{ channel: string; payload: unknown }> = [];
-      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
-      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
-        events.push({ channel, payload });
-      }) as never);
+    describe('settings:set-frost-chrome', () => {
+      it('a valid boolean persists, returns ok and emits settings:changed once', async () => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-frost-chrome')!({}, { enabled: false })).resolves.toEqual({ ok: true });
+        expect(settings.get('frost_chrome')).toBe(false);
+        expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'frost_chrome' } }]);
+      });
 
-      await expect(
-        ipc.handlers.get('settings:set-frost-terminal')!({}, { enabled: false }),
-      ).resolves.toEqual({ ok: true });
-      expect(settings.get('frost_terminal')).toBe(false);
-      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'frost_terminal' } }]);
+      it.each(['yes', 1, null, undefined, {}])('rejects a non-boolean enabled (%j) without writing or emitting', async (enabled) => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-frost-chrome')!({}, { enabled })).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('frost_chrome')).toBe(true);
+        expect(events).toEqual([]);
+      });
+
+      it('rejects a missing field without writing or emitting', async () => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-frost-chrome')!({}, {})).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('frost_chrome')).toBe(true);
+        expect(events).toEqual([]);
+      });
+    });
+
+    describe('settings:set-chrome-frost-level', () => {
+      it.each(['subtle', 'medium', 'strong'])('a valid level %s persists, returns ok and emits settings:changed once', async (level) => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-chrome-frost-level')!({}, { level })).resolves.toEqual({ ok: true });
+        expect(settings.get('chrome_frost_level')).toBe(level);
+        expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'chrome_frost_level' } }]);
+      });
+
+      it.each(['off', 'STRONG', 1, null, undefined])('rejects an invalid level (%j) without writing or emitting', async (level) => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-chrome-frost-level')!({}, { level })).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('chrome_frost_level')).toBe('subtle');
+        expect(events).toEqual([]);
+      });
+
+      it('rejects a missing field without writing or emitting', async () => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-chrome-frost-level')!({}, {})).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('chrome_frost_level')).toBe('subtle');
+        expect(events).toEqual([]);
+      });
+    });
+
+    describe('settings:set-terminal-frost-level', () => {
+      it.each(['off', 'subtle', 'medium', 'strong'])('a valid level %s persists, returns ok and emits settings:changed once', async (level) => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-terminal-frost-level')!({}, { level })).resolves.toEqual({ ok: true });
+        expect(settings.get('terminal_frost_level')).toBe(level);
+        expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_frost_level' } }]);
+      });
+
+      it.each(['SUBTLE', 'none', 1, null, undefined])('rejects an invalid level (%j) without writing or emitting', async (level) => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-terminal-frost-level')!({}, { level })).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('terminal_frost_level')).toBe('off');
+        expect(events).toEqual([]);
+      });
+
+      it('rejects a missing field without writing or emitting', async () => {
+        const { ipc, settings, events } = setup();
+        await expect(ipc.handlers.get('settings:set-terminal-frost-level')!({}, {})).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('terminal_frost_level')).toBe('off');
+        expect(events).toEqual([]);
+      });
+    });
+
+    describe('settings:set-vibrancy-material', () => {
+      it.each(['sidebar', 'under-window', 'hud', 'menu', 'popover'])('a valid material %s persists, returns ok, emits settings:changed once and calls setVibrancy once with it', async (material) => {
+        const { ipc, settings, events, setVibrancy } = setup();
+        await expect(ipc.handlers.get('settings:set-vibrancy-material')!({}, { material })).resolves.toEqual({ ok: true });
+        expect(settings.get('vibrancy_material')).toBe(material);
+        expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'vibrancy_material' } }]);
+        expect(setVibrancy).toHaveBeenCalledTimes(1);
+        expect(setVibrancy).toHaveBeenCalledWith(material);
+      });
+
+      it.each(['window', '', 1, null, undefined])('rejects an invalid material (%j) without writing, emitting or calling setVibrancy', async (material) => {
+        const { ipc, settings, events, setVibrancy } = setup();
+        await expect(ipc.handlers.get('settings:set-vibrancy-material')!({}, { material })).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('vibrancy_material')).toBe('sidebar');
+        expect(events).toEqual([]);
+        expect(setVibrancy).not.toHaveBeenCalled();
+      });
+
+      it('rejects a missing field without writing, emitting or calling setVibrancy', async () => {
+        const { ipc, settings, events, setVibrancy } = setup();
+        await expect(ipc.handlers.get('settings:set-vibrancy-material')!({}, {})).resolves.toEqual({ ok: false, error: 'invalid' });
+        expect(settings.get('vibrancy_material')).toBe('sidebar');
+        expect(events).toEqual([]);
+        expect(setVibrancy).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('generic settings:set refuses the four new keys and keeps refusing frost_terminal (AC3, D19)', () => {
+      it.each(['frost_chrome', 'chrome_frost_level', 'terminal_frost_level', 'vibrancy_material', 'frost_terminal'])('refuses key %s without writing', async (key) => {
+        const { ipc, settings } = setup();
+        const setSpy = vi.spyOn(settings, 'set');
+        await expect(ipc.handlers.get('settings:set')!({}, { key, value: 'strong' })).rejects.toThrow();
+        expect(setSpy).not.toHaveBeenCalled();
+      });
     });
   });
 });

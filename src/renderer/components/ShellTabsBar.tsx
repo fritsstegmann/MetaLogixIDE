@@ -61,6 +61,7 @@ export function NewShellMenu({
   const panelProps = {
     ...motionProps,
     'data-new-shell-menu': '1',
+    'data-overlay': '',
     ...(present ? {} : { inert: '' }),
     'data-testid': present ? undefined : 'new-shell-menu-leaving',
     style: { transformOrigin: 'top left', pointerEvents: present ? undefined : ('none' as const) },

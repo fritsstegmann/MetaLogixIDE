@@ -1,5 +1,6 @@
 import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
 import type { ClaudePermissionMode } from './claude-permission-mode';
+import type { ChromeFrostLevel, TerminalFrostLevel, VibrancyMaterial } from './frosted-glass';
 import type { AgentShellStateEntry } from './agent-state';
 import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 import type { TerminalFontWeight } from './terminal-font-weight';
@@ -218,7 +219,10 @@ export interface IpcContract {
 
   /** Set every open window's opacity. percent: 30..100. */
   'app:set-window-opacity': { request: { percent: number }; response: { ok: true } };
-  'settings:set-frost-terminal': { request: { enabled: boolean }; response: { ok: true } | { ok: false; error: 'invalid' } };
+  'settings:set-frost-chrome': { request: { enabled: boolean }; response: { ok: true } | { ok: false; error: 'invalid' } };
+  'settings:set-chrome-frost-level': { request: { level: ChromeFrostLevel }; response: { ok: true } | { ok: false; error: 'invalid' } };
+  'settings:set-terminal-frost-level': { request: { level: TerminalFrostLevel }; response: { ok: true } | { ok: false; error: 'invalid' } };
+  'settings:set-vibrancy-material': { request: { material: VibrancyMaterial }; response: { ok: true } | { ok: false; error: 'invalid' } };
   /** Returns the absolute path of the current electron-log file so users can attach it to a bug report. */
   'app:get-log-path':       { request: undefined; response: { path: string } };
   /** Returns the app version (`app.getVersion()`) for the status-bar footer / About dialog. */

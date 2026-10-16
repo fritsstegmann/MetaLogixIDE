@@ -286,7 +286,7 @@ function ProjectRow({
         onClick={() => onSelect(project)}
         data-testid="project-row"
         data-alive={alive ? '1' : '0'}
-        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] rounded-lg"
+        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-mark,var(--accent))] rounded-lg"
         style={{ paddingLeft: indent }}
       >
         {alive ? (
@@ -295,7 +295,7 @@ function ProjectRow({
           <span
             aria-hidden
             className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
-              selected ? 'bg-[color:var(--accent)]' : 'bg-[--surface-active]'
+              selected ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--surface-active]'
             }`}
           />
         )}

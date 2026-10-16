@@ -37,7 +37,7 @@ export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps
   return (
     <div className="h-[34px] shrink-0 px-3 text-xs text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
       <span className="flex items-center gap-1.5">
-        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[--accent]' : 'bg-[--text-muted]/50'}`} />
+        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--text-muted]/50'}`} />
         {project ? project.name : 'no project'}
       </span>
       {git.isRepo && (

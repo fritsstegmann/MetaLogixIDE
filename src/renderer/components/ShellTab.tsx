@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '@renderer/api';
+import { FROST_ATTR } from '@renderer/frosted-chrome-contract';
 import { useShellStream } from '@renderer/hooks/useShellStream';
 import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
@@ -358,9 +359,9 @@ export function ShellTab({
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onScheme = () => { term.options.theme = buildTheme(); };
     media.addEventListener('change', onScheme);
-    // Both appearance and palette changes must refresh existing terminals.
+    // Appearance, palette and frosted-glass level changes (the level-scoped --term-fg) must refresh existing terminals.
     const themeObserver = new MutationObserver(() => { term.options.theme = buildTheme(); });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette', FROST_ATTR.platform, FROST_ATTR.chromeFrost, FROST_ATTR.terminalFrost] });
 
     return () => {
       fontUpdater.dispose();
@@ -537,7 +538,7 @@ export function ShellTab({
         </div>
       )}
       {dropActive && (
-        <div className="absolute inset-2 pointer-events-none rounded-md border-2 border-dashed border-[color:var(--accent)] bg-[color:var(--accent)]/10 flex items-center justify-center text-xs text-[--text] font-medium">
+        <div className="absolute inset-2 pointer-events-none rounded-md border-2 border-dashed border-[color:var(--accent-mark,var(--accent))] bg-[color:var(--accent)]/10 flex items-center justify-center text-xs text-[--text] font-medium">
           Drop to paste path
         </div>
       )}

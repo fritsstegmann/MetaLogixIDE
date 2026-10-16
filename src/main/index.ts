@@ -12,7 +12,14 @@ import { installAgentStatus } from './agent-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
-import { platformChrome, rendererQuery } from './window-chrome';
+import {
+  FROSTED_GLASS_FALLBACK,
+  applyVibrancy,
+  platformChrome,
+  readStoredFrostedGlass,
+  rendererQuery,
+  type StoredFrostedGlass,
+} from './window-chrome';
 
 // Route console.log/warn/error to a rolling file at
 // `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
@@ -153,7 +160,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
     height: 900,
     show: false,
     backgroundColor: '#00000000',
-    ...platformChrome(process.platform),
+    ...platformChrome(process.platform, readFrostedGlass().vibrancyMaterial),
     webPreferences: baseWebPreferences(),
   });
   win.once('ready-to-show', () => win.show());
@@ -170,7 +177,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
   });
   win.webContents.on('unresponsive', () => console.warn('[metaide] renderer unresponsive'));
   win.webContents.on('responsive', () => console.log('[metaide] renderer responsive again'));
-  const query = rendererQuery({ frostTerminal: readFrostTerminal(), platform: process.platform });
+  const query = rendererQuery({ ...readFrostedGlass(), platform: process.platform });
   if (process.env.ELECTRON_RENDERER_URL) await win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
   else await win.loadFile(join(__dirname, '../renderer/index.html'), { search: `?${query}` });
   return win;
@@ -188,12 +195,12 @@ export async function createPopoutWindow(projectId: number, shellIndex: number):
     height: 620,
     show: false,
     backgroundColor: '#00000000',
-    ...platformChrome(process.platform),
+    ...platformChrome(process.platform, readFrostedGlass().vibrancyMaterial),
     webPreferences: baseWebPreferences(),
   });
   const query = rendererQuery({
     popout: { projectId, shellIndex },
-    frostTerminal: readFrostTerminal(),
+    ...readFrostedGlass(),
     platform: process.platform,
   });
   wireExternalLinks(win);
@@ -329,9 +336,12 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-// Reads the stored `frost_terminal` setting for the renderer query string (AC7). Set once
-// services exist; a window created before then, or a failed read, falls back to OFF.
-let readFrostTerminal: () => boolean = () => false;
+/**
+ * Reads the four frosted-glass settings for `BrowserWindow` creation and the renderer query
+ * string (AC1, AC5), each validated by `readStoredFrostedGlass`. Late-bound: set once services
+ * exist; a window created before then, or a failed read, falls back to the shared defaults (AC1).
+ */
+let readFrostedGlass: () => StoredFrostedGlass = () => FROSTED_GLASS_FALLBACK;
 
 // Reads the stored `window_opacity`. Set once services exist. The value is
 // clamped to 30..100 here; a window created before then, a failed read or a
@@ -427,14 +437,13 @@ const startupReady = app.whenReady().then(async () => {
   }
   // New windows read the current opacity setting when they are created.
   readWindowOpacity = () => services.settings.get('window_opacity');
-  readFrostTerminal = () => {
-    try { return services.settings.get('frost_terminal'); } catch { return false; }
-  };
+  readFrostedGlass = () => readStoredFrostedGlass((key) => services.settings.get(key));
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
     listPopped: () => listPopped(),
     tileAll: () => tileAllOurWindows(),
+    setVibrancy: (material) => applyVibrancy(BrowserWindow.getAllWindows(), material, process.platform),
   });
   installClaudeNotifications({
     hooks: createHookFanout(services.hookReceiver),

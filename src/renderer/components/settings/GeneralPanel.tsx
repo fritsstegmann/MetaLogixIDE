@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { SettingsMap } from '@shared/types';
 import {
   TERMINAL_FONT_FALLBACK,
@@ -7,8 +7,8 @@ import {
 } from '@shared/font-settings';
 import { api } from '@renderer/api';
 import { useShortcutPlatform } from '@renderer/shortcut-platform';
-import { FROST_COPY, FROST_TERMINAL_SETTING_KEY, FROST_TESTIDS } from '@renderer/frosted-chrome-contract';
 import { useTheme, type ThemeMode, type ThemePalette } from '@renderer/hooks/useTheme';
+import { FrostedGlassGroup } from '@renderer/components/settings/FrostedGlassGroup';
 import {
   FontControl,
   type FontDiscoveryState,
@@ -47,10 +47,9 @@ export function GeneralPanel({
         onMode={setMode}
         onPalette={setPalette}
         onOpacity={(v) => void board.applyOpacity(v)}
-        showFrostTerminal={platform === 'mac'}
-        frostTerminal={board.frostTerminal}
-        onFrostTerminal={(v) => void board.onFrostTerminal(v)}
-      />
+      >
+        {platform === 'mac' && <FrostedGlassGroup />}
+      </AppearanceSection>
       <FontSettingsControls discovery={fontDiscovery} onLoadInstalledFonts={onLoadInstalledFonts} />
       <WorkspaceSection
         cap={board.cap}
@@ -84,7 +83,6 @@ interface BoardValues {
   readonly opacity: number;
   readonly notifyNeedsInput: boolean;
   readonly notifyFinished: boolean;
-  readonly frostTerminal: boolean;
 }
 
 const INITIAL: BoardValues = {
@@ -94,7 +92,6 @@ const INITIAL: BoardValues = {
   opacity: 100,
   notifyNeedsInput: true,
   notifyFinished: true,
-  frostTerminal: false,
 };
 
 const FIELD: Readonly<Record<BoardKey, keyof BoardValues>> = {
@@ -105,16 +102,15 @@ const FIELD: Readonly<Record<BoardKey, keyof BoardValues>> = {
   notify_claude_finished: 'notifyFinished',
 };
 
-/** Loads the General board's seven settings keys in one batch. `frostTerminal` reads OFF for a stored `null` or `false` (AC6 default). */
+/** Loads the General board's six settings keys in one batch. */
 export async function loadBoard(): Promise<BoardValues> {
-  const [c, d, w, o, ni, nf, ft] = await Promise.all([
+  const [c, d, w, o, ni, nf] = await Promise.all([
     api.invoke('settings:get', { key: 'keep_alive_cap' }),
     api.invoke('settings:get', { key: 'scan_depth' }),
     api.invoke('settings:get', { key: 'max_watched_paths' }),
     api.invoke('settings:get', { key: 'window_opacity' }),
     api.invoke('settings:get', { key: 'notify_claude_needs_input' }),
     api.invoke('settings:get', { key: 'notify_claude_finished' }),
-    api.invoke('settings:get', { key: FROST_TERMINAL_SETTING_KEY }),
   ]);
   return {
     cap: c.value as number,
@@ -123,23 +119,10 @@ export async function loadBoard(): Promise<BoardValues> {
     opacity: (o.value as number) ?? 100,
     notifyNeedsInput: (ni.value as boolean) ?? true,
     notifyFinished: (nf.value as boolean) ?? true,
-    frostTerminal: Boolean(ft.value),
   };
 }
 
-/** Persists the frosted-terminal setting through its dedicated validated channel. Resolves `false`, after logging, when the main process refuses the value or the call rejects. */
-export async function setFrostTerminal(enabled: boolean): Promise<boolean> {
-  try {
-    const res = await api.invoke('settings:set-frost-terminal', { enabled });
-    if (res.ok) return true;
-    console.error('frost terminal setting refused', res.error);
-  } catch (e) {
-    console.error('frost terminal setting save failed', e);
-  }
-  return false;
-}
-
-/** Board settings state: loads the seven keys once, `update` sets a value locally and saves it, `applyOpacity` clamps to 30..100 and applies window opacity, `onFrostTerminal` flips the frosted-terminal value at once and reverts it when the save fails. */
+/** Board settings state: loads the six keys once, `update` sets a value locally and saves it, `applyOpacity` clamps to 30..100 and applies window opacity. The Frosted glass group owns its own four settings through `useFrostedGlassSettings`. */
 export function useBoardSettings() {
   const [values, setValues] = useState<BoardValues>(INITIAL);
 
@@ -156,12 +139,7 @@ export function useBoardSettings() {
     await api.invoke('app:set-window-opacity', { percent: clamped });
   }
 
-  async function onFrostTerminal(next: boolean): Promise<void> {
-    setValues((prev) => ({ ...prev, frostTerminal: next }));
-    if (!(await setFrostTerminal(next))) setValues((prev) => ({ ...prev, frostTerminal: !next }));
-  }
-
-  return { ...values, update, applyOpacity, onFrostTerminal };
+  return { ...values, update, applyOpacity };
 }
 
 export interface AppearanceSectionProps {
@@ -170,21 +148,11 @@ export interface AppearanceSectionProps {
   readonly onMode: (mode: ThemeMode) => void;
   readonly onPalette: (palette: ThemePalette) => void;
   readonly onOpacity: (percent: number) => void;
-  readonly showFrostTerminal: boolean;
-  readonly frostTerminal: boolean;
-  readonly onFrostTerminal: (next: boolean) => void;
+  readonly children?: ReactNode;
 }
 
-export function AppearanceSection({
-  theme,
-  opacity,
-  onMode,
-  onPalette,
-  onOpacity,
-  showFrostTerminal,
-  frostTerminal,
-  onFrostTerminal,
-}: AppearanceSectionProps) {
+/** Settings > General > Appearance section: Theme, Mode, Window opacity, then `children` (the Frosted glass group on mac, D21/AC26). */
+export function AppearanceSection({ theme, opacity, onMode, onPalette, onOpacity, children }: AppearanceSectionProps) {
   return (
     <SettingsSection title="Appearance">
       <SettingStack label="Theme">
@@ -209,29 +177,8 @@ export function AppearanceSection({
           <span className="w-10 text-right text-[13px] tabular-nums text-[--text]">{opacity}%</span>
         </div>
       </SettingRow>
-      {showFrostTerminal && <FrostTerminalRow checked={frostTerminal} onChange={onFrostTerminal} />}
+      {children}
     </SettingsSection>
-  );
-}
-
-export interface FrostTerminalRowProps {
-  readonly checked: boolean;
-  readonly onChange: (next: boolean) => void;
-}
-
-/** Settings > General row toggling the macOS frosted-terminal setting (D9); `GeneralPanel` renders it only on mac (AC13). */
-export function FrostTerminalRow({ checked, onChange }: FrostTerminalRowProps) {
-  return (
-    <div className="flex flex-col gap-1">
-      <Switch
-        label={FROST_COPY.label}
-        ariaLabel={FROST_COPY.label}
-        testId={FROST_TESTIDS.toggle}
-        checked={checked}
-        onChange={onChange}
-      />
-      <span className="text-xs text-[--text-muted]">{FROST_COPY.description}</span>
-    </div>
   );
 }
 
