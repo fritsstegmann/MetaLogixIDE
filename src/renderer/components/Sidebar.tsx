@@ -11,11 +11,14 @@ import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { ModalFrame } from './ModalFrame';
 import { StatusDot } from './StatusDot';
+import { RootFolderGlyph, rootFolderName } from './RootFolderGlyph';
 import { ENV_COPY } from '@renderer/project-env-copy';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '@renderer/sidebar-copy';
 import { SIDEBAR_WIDTH } from '@renderer/sidebar-width';
 import { SidebarHeader } from './SidebarHeader';
+import { PROJECT_SETTINGS_COPY, type ProjectSettingsTarget } from '@renderer/project-settings-contract';
 
 interface Props {
   selectedProjectId: number | null;
@@ -23,10 +26,11 @@ interface Props {
   onNewProject?: () => void;
   /** Opens the environment variables editor for a project (context menu). */
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
   width?: number;
 }
 
-export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, width }: Props) {
+export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, onProjectSettings, width }: Props) {
   const { roots, refresh: refreshRoots } = useRoots();
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
@@ -106,6 +110,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
+                onProjectSettings={onProjectSettings}
               />
             ))}
           </Section>
@@ -122,6 +127,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
+                onProjectSettings={onProjectSettings}
               />
             ))}
           </Section>
@@ -138,6 +144,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
               onSelect={onSelect}
               onRename={askRename}
               onEditEnv={onEditEnv}
+              onProjectSettings={onProjectSettings}
             />
           ))}
         </Section>
@@ -211,6 +218,7 @@ function ProjectRow({
   onSelect,
   onRename,
   onEditEnv,
+  onProjectSettings,
   indent = 0,
 }: {
   project: Project;
@@ -220,6 +228,7 @@ function ProjectRow({
   /** Lifted so the Rename dialog lives at Sidebar level and stays open across rerenders. */
   onRename: (p: Project) => void;
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
   indent?: number;
 }) {
   const claudeState = useProjectClaudeState(project.id);
@@ -246,9 +255,19 @@ function ProjectRow({
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY });
   }
+  function openKeyboardMenu(event: React.KeyboardEvent<HTMLButtonElement>): void {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setMenu({ x: bounds.left, y: bounds.bottom });
+  }
   const menuItems: ContextMenuItem[] = [
     { label: 'Rename folder…',  onClick: () => onRename(project) },
     { label: ENV_COPY.contextMenuItem, onClick: () => onEditEnv(project) },
+    { label: PROJECT_SETTINGS_COPY.contextMenuItem, onClick: () => {
+      onProjectSettings({ id: project.id, name: project.name, path: project.path });
+    } },
     { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
     { label: 'Copy full path',   onClick: () => void copyPath() },
   ];
@@ -261,10 +280,13 @@ function ProjectRow({
       }`}
     >
       <button
+        onKeyDown={openKeyboardMenu}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
         onClick={() => onSelect(project)}
         data-testid="project-row"
         data-alive={alive ? '1' : '0'}
-        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left"
+        className="flex-1 min-w-0 h-full flex items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] rounded-lg"
         style={{ paddingLeft: indent }}
       >
         {alive ? (
@@ -295,7 +317,7 @@ function ProjectRow({
       )}
       <AnimatePresence>
         {menu && (
-          <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+          <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={menuItems} autoFocus onClose={() => setMenu(null)} />
         )}
       </AnimatePresence>
     </div>
@@ -332,6 +354,7 @@ function RootBlock({
   onSelect,
   onRename,
   onEditEnv,
+  onProjectSettings,
 }: {
   root: Root;
   projects: Project[];
@@ -340,6 +363,7 @@ function RootBlock({
   onSelect: (p: Project) => void;
   onRename: (p: Project) => void;
   onEditEnv: (p: Project) => void;
+  onProjectSettings: (target: ProjectSettingsTarget) => void;
 }) {
   const [collapsed, setCollapsedState] = useState<Set<number>>(readCollapsed);
   const open = !collapsed.has(root.id);
@@ -377,6 +401,7 @@ function RootBlock({
           onSelect={onSelect}
           onRename={onRename}
           onEditEnv={onEditEnv}
+          onProjectSettings={onProjectSettings}
           indent={12}
         />
       ))}
@@ -389,13 +414,13 @@ function RootBlock({
  * that live shells will be killed and the git working dir path changes.
  * Focus is auto-set to the input; ⏎ submits, Esc dismisses.
  */
-function RenameProjectDialog({
+export function RenameProjectDialog({
   project, onClose, onDone,
 }: {
   project: Project | null;
   onClose: () => void;
   onDone: () => void | Promise<void>;
-}) {
+}): React.JSX.Element | null {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -430,14 +455,17 @@ function RenameProjectDialog({
     }
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose} data-testid="rename-project">
-      <div
-        className="bg-[--panel-strong] w-[440px] max-w-[92vw] rounded-xl shadow-2xl border border-[--border] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalFrame
+      testId="rename-project"
+      tier="modal"
+      motion="none"
+      layerClassName="flex items-center justify-center"
+      onDismiss={onClose}
+    >
+      <div className="modal-sheet w-[440px] max-w-[92vw] overflow-hidden">
         <div className="px-4 py-3 border-b border-[--border]">
           <div className="font-semibold text-sm">Rename project folder</div>
-          <div className="text-[11px] text-[--text-muted] truncate mt-0.5" title={project.path}>{project.path}</div>
+          <div className="text-[11px] text-[--modal-text-muted] truncate mt-0.5" title={project.path}>{project.path}</div>
         </div>
         <div className="p-4 space-y-3">
           <input
@@ -448,7 +476,7 @@ function RenameProjectDialog({
             placeholder="New folder name"
             className="w-full bg-[--panel] border border-[--border] rounded-md px-2.5 py-1.5 text-sm outline-none focus:ring-1 focus:ring-[--accent]/60"
           />
-          <div className="text-[11px] text-[--text-muted] leading-relaxed">
+          <div className="text-[11px] text-[--modal-text-muted] leading-relaxed">
             Renames the folder on disk and updates every reference here. Any
             live shells for this project will be closed first (the pty holds
             the old path). If this is a git repo, the working tree moves with
@@ -458,7 +486,7 @@ function RenameProjectDialog({
         <div className="px-4 py-3 border-t border-[--border] flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--text-muted] hover:text-[--text] hover:bg-[--panel]"
+            className="text-xs px-3 py-1.5 rounded-md border border-[--border] text-[--modal-text-muted] hover:text-[--text] hover:bg-[--panel]"
           >
             Cancel
           </button>
@@ -471,7 +499,7 @@ function RenameProjectDialog({
           </button>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -496,23 +524,3 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-/** Human-friendly folder name for a root — the trailing segment of the path.
- * Dropping the `~/D/` prefix: single-letter parent abbreviations plus CSS
- * truncation made the row read as "~/D/Pro" / "~/D/my" / etc. which users
- * perceived as weird-char noise. The full absolute path still lives in the
- * row's `title=` tooltip for anyone who wants to see where it points. */
-function rootFolderName(path: string): string {
-  const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
-  const trimmed = path.length > 1 ? path.replace(/[\\/]+$/u, '') : path;
-  const last = trimmed.split(sep).pop();
-  return last && last.length > 0 ? last : trimmed;
-}
-
-/** Folder glyph tinted with the root's stable hue (see root-hue.ts). */
-function RootFolderGlyph({ color }: { color: string }) {
-  return (
-    <svg aria-hidden data-testid="root-hue" width="13" height="13" viewBox="0 0 24 24" fill={color} fillOpacity={0.25} stroke={color} strokeWidth="1.8" strokeLinejoin="round" className="shrink-0">
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  );
-}

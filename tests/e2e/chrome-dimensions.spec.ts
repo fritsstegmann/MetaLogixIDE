@@ -7,7 +7,9 @@ import { CHROME_TESTIDS } from '../../src/renderer/chrome-testids';
 import { SIDEBAR_WIDTH } from '../../src/renderer/sidebar-width';
 import { DIFF_TESTIDS } from '../../src/renderer/diff-tab-copy';
 import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
+import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 import { CLAUDE_DOT } from '../../src/shared/claude-state';
+import { PALETTE_COPY } from '../../src/renderer/command-palette-contract';
 import type { EffectiveTheme } from '../../src/renderer/markdown/contract';
 import { commitAll, git, GIT_ENV, initRepo, porcelain } from './helpers/git-repo';
 import { badgeContrast, colourDistance, elementColour, fmtColour, resolveToken } from './helpers/chrome-colour';
@@ -35,7 +37,8 @@ const LONG_BRANCH = `feature/${'x'.repeat(192)}`;
 /** The migration marker named in plan §2.8; not exported by the contract, so named here. */
 const WIDTH_KEY = 'metaide.sidebarWidth';
 const MIGRATED_KEY = 'metaide.sidebarWidth.migrated';
-const STATUS_HINTS = ['⌘K project', '⌘P file', '⌘⇧F search', '⌘B sidebar', '⌘, settings'];
+/** The status bar's only hint (command-palette AC29, AC32): one `<kbd>` inside the palette button. */
+const STATUS_HINTS = [`${PALETTE_COPY.statusHintKey} ${PALETTE_COPY.statusHintText}`];
 
 let app: ElectronApplication;
 let win: Page;
@@ -404,6 +407,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
           ['Files', tabBar.getByRole('button', { name: 'Files', exact: true })],
           ['Diff', win.getByTestId(DIFF_TESTIDS.tab)],
           ['Env', win.getByTestId(ENV_TESTIDS.tab)],
+          [PROJECT_SETTINGS_COPY.tab, win.getByTestId(PROJECT_SETTINGS_TESTIDS.tab)],
         ] as const) {
           expect((await box(tab)).height, `${at} ${label} tab height`).toBe(32);
           expect([await css(tab, 'padding-left'), await css(tab, 'padding-right')], `${at} ${label} tab padding`).toEqual(['12px', '12px']);
@@ -415,7 +419,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
         expect((await box(status)).height, `${at} status bar height`).toBe(34);
         expect(await css(status, 'font-size'), `${at} status bar font size`).toBe('12px');
         const hints = await status.locator('kbd').evaluateAll((kbds) => kbds.map((k) => (k.parentElement?.textContent ?? '').trim()));
-        expect(hints, `${at} the five hints, copy unchanged`).toEqual(STATUS_HINTS);
+        expect(hints, `${at} the single palette hint`).toEqual(STATUS_HINTS);
         await expect(status.getByText(/^v\d+\.\d+\.\d+/), `${at} version`).toBeVisible();
       }
     }

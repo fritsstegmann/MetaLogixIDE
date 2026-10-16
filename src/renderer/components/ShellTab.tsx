@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePersistedNumber } from '@renderer/hooks/usePersistedNumber';
 import { Terminal, type IDisposable, type ITheme, type ILinkProvider, type IBufferCellPosition } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -17,7 +16,16 @@ import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
+import { createTerminalKeyHandler, terminalTabAction } from '@renderer/terminal-keys';
+import type { TerminalTabAction } from '@renderer/shortcut-contract';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { useFontSettings } from '@renderer/fonts/font-settings-context';
+import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
+import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-context';
+import { terminalFontWeightOptions } from '@renderer/terminal-font-weight-apply';
+import type { TerminalWeights } from '@shared/terminal-font-weight';
+import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
 import {
@@ -58,6 +66,12 @@ function buildTheme(): ITheme {
   };
 }
 
+const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out' | 'reset'>> = {
+  'zoom-in': 'in',
+  'zoom-out': 'out',
+  'zoom-reset': 'reset',
+};
+
 export function ShellTab({
   projectId, shellIndex, onOpenFile, primary = false,
 }: {
@@ -67,6 +81,9 @@ export function ShellTab({
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
 }) {
+  const platform = useShortcutPlatform();
+  const platformRef = useRef(platform);
+  platformRef.current = platform;
   const containerRef = useRef<HTMLDivElement>(null);
   const termHostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -86,7 +103,16 @@ export function ShellTab({
   const pendingLive = useRef('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [fontSize, setFontSize] = usePersistedNumber('metaide.shellFontSize', 14, 9, 28);
+  const { size: fontSize, ready: fontSizeReady, setSize: setFontSize } = useTerminalFontSize();
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const fontSizeReadyRef = useRef(fontSizeReady);
+  fontSizeReadyRef.current = fontSizeReady;
+  const { weight: fontWeight, boldWeight, ready: fontWeightReady } = useTerminalFontWeight();
+  const fontWeightsRef = useRef<TerminalWeights>({ weight: fontWeight, boldWeight });
+  fontWeightsRef.current = { weight: fontWeight, boldWeight };
+  const fontWeightReadyRef = useRef(fontWeightReady);
+  fontWeightReadyRef.current = fontWeightReady;
   const { terminalFontFamily } = useFontSettings();
   const terminalFontFamilyRef = useRef<FontFamilyPreference>(terminalFontFamily);
   terminalFontFamilyRef.current = terminalFontFamily;
@@ -112,9 +138,8 @@ export function ShellTab({
       // common developer monospace fonts. `ui-monospace` alone can pick
       // Menlo bitmap fallback on some setups and looks pixelated.
       fontFamily: buildFontFamilyStack(terminalFontFamilyRef.current, TERMINAL_FONT_FALLBACK),
-      fontSize,
-      fontWeight: 'normal',
-      fontWeightBold: 'bold',
+      fontSize: fontSizeRef.current,
+      ...terminalFontWeightOptions(fontWeightsRef.current),
       lineHeight: 1.25,
       letterSpacing: 0,
       cursorBlink: true,
@@ -139,6 +164,17 @@ export function ShellTab({
     const search = new SearchAddon();
     term.loadAddon(search);
     searchRef.current = search;
+    term.attachCustomKeyEventHandler(createTerminalKeyHandler({
+      platform: platformRef.current,
+      hasSelection: () => term.hasSelection(),
+      getSelection: () => term.getSelection(),
+      writeClipboard: (text) => navigator.clipboard.writeText(text),
+      readClipboard: () => navigator.clipboard.readText(),
+      paste: (text) => term.paste(text),
+      onClipboardError: (op, err) => {
+        toast(SHORTCUT_COPY.clipboardErrorTitle(op), { kind: 'error', detail: String(err).replace(/^Error:\s*/, '') });
+      },
+    }));
 
     // File-path link provider: matches things like src/main/index.ts:42
     // in terminal output, shows a hover preview, click opens in Files.
@@ -248,13 +284,14 @@ export function ShellTab({
       await initialFontUpdate;
       try { await document.fonts.ready; }
       catch { /* fine — best-effort */ }
-      // Poll (via rAF) until the host has real dimensions. Bail after
+      // Poll (via rAF) until the host has real dimensions and the shared
+      // font size and weight have loaded, so we never open at the defaults. Bail after
       // ~2s so we don't hold up the terminal forever if a parent layout
       // is stuck; fallback opens against whatever's there.
       const startedAt = performance.now();
       while (!disposed) {
         const host = termHostRef.current;
-        if (host && host.clientWidth >= 20 && host.clientHeight >= 20) break;
+        if (host && host.clientWidth >= 20 && host.clientHeight >= 20 && fontSizeReadyRef.current && fontWeightReadyRef.current) break;
         if (performance.now() - startedAt > 2000) break;
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
@@ -346,8 +383,7 @@ export function ShellTab({
       searchRef.current = null;
     };
     // Font metric changes must not recreate the terminal. Dedicated effects below
-    // apply font size and family updates to the live instance instead.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // apply font size, weight and family updates to the live instance instead.
   }, [projectId, shellIndex]);
 
   const findNext = useCallback((q: string) => {
@@ -366,6 +402,12 @@ export function ShellTab({
     geometrySyncRef.current?.({ forceResize: true });
   }, [fontSize]);
 
+  // Weight changes repaint without remeasuring: xterm's cell size ignores weight, so the PTY keeps its geometry.
+  useEffect(() => {
+    if (!termRef.current) return;
+    termRef.current.options = terminalFontWeightOptions({ weight: fontWeight, boldWeight });
+  }, [fontWeight, boldWeight]);
+
   useEffect(() => {
     const updater = fontUpdaterRef.current;
     if (!updater || appliedFontFamilyRef.current === terminalFontFamily) return;
@@ -373,31 +415,23 @@ export function ShellTab({
     void updater.apply(terminalFontFamily);
   }, [terminalFontFamily]);
 
-  // ⌘F opens the terminal search overlay when this tab has focus.
-  // ⌘= / ⌘- / ⌘0 zoom the terminal font.
   useEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key === 'f' && !e.shiftKey) {
-        e.preventDefault();
+      const action = terminalTabAction(e, platform);
+      if (!action) return;
+      e.preventDefault();
+      if (action === 'find') {
         setSearchOpen(true);
         requestAnimationFrame(() => searchInputRef.current?.focus());
-      } else if (mod && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        setFontSize(fontSize + 1);
-      } else if (mod && e.key === '-') {
-        e.preventDefault();
-        setFontSize(fontSize - 1);
-      } else if (mod && e.key === '0') {
-        e.preventDefault();
-        setFontSize(14);
+      } else {
+        setFontSize(stepTerminalFontSize(fontSize, ZOOM_STEP[action]));
       }
     };
     el.addEventListener('keydown', onKey);
     return () => el.removeEventListener('keydown', onKey);
-  }, [fontSize, setFontSize]);
+  }, [fontSize, setFontSize, platform]);
 
   useShellStream(
     projectId,
@@ -523,8 +557,8 @@ export function ShellTab({
             placeholder="Find…"
             className="bg-transparent text-sm px-2 py-0.5 outline-none placeholder:text-[--text-muted] w-40"
           />
-          <button onClick={() => findPrev(searchQuery)} title="Previous (⇧↩)" className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↑</button>
-          <button onClick={() => findNext(searchQuery)} title="Next (↩)"      className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↓</button>
+          <button onClick={() => findPrev(searchQuery)} title={SHORTCUT_COPY.searchPrevTitle(platform)} className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↑</button>
+          <button onClick={() => findNext(searchQuery)} title={SHORTCUT_COPY.searchNextTitle(platform)} className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]">↓</button>
           <button
             onClick={() => { setSearchOpen(false); setSearchQuery(''); searchRef.current?.clearDecorations(); termRef.current?.focus(); }}
             title="Close (Esc)"

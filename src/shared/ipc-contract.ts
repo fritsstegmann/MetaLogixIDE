@@ -2,6 +2,8 @@ import type { Project, Root, AliveShellSummary, SettingsMap } from './types';
 import type { ClaudePermissionMode } from './claude-permission-mode';
 import type { ClaudeShellStateEntry } from './claude-state';
 import type { FontFamilyPreference, FontSettingKey } from './font-settings';
+import type { TerminalFontWeight } from './terminal-font-weight';
+import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -83,16 +85,16 @@ export interface IpcContract {
   // ∪ global defaults so the renderer sees one flat, deduplicated list.
   'shells:cli-profiles-list': {
     request: { projectId: number };
-    response: { profiles: Array<{ name: string; argv: string[]; env?: Record<string, string>; icon?: string; scope: 'project' | 'global' }> };
+    response: { profiles: ScopedCliProfile[] };
   };
   'shells:cli-profiles-remove': { request: { projectId: number; name: string }; response: { ok: true } };
   /**
-   * Set (or clear with `name: null`) the CLI profile that auto-launches
-   * when this project is opened. Name is resolved against project +
-   * global profiles at spawn time, so renaming a profile after pinning
-   * gracefully falls back to the classic Claude default.
+   * Set (or clear with `name: null`) the CLI profile for future automatic
+   * launches. Explicit choices replace both custom launch variants.
+   * Names resolve project-first, then globally; a later missing profile
+   * falls back to the configured global first/subsequent launch command.
    */
-  'shells:set-default-cli':     { request: { projectId: number; name: string | null }; response: { project: Project } };
+  'shells:set-default-cli':     { request: ProjectDefaultAgentRequest; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };
@@ -137,6 +139,13 @@ export interface IpcContract {
   'settings:get': { request: { key: keyof SettingsMap };                        response: { value: SettingsMap[keyof SettingsMap] } };
   'settings:set': { request: { key: keyof SettingsMap; value: SettingsMap[keyof SettingsMap] }; response: { ok: true } };
   'settings:set-font': { request: { key: FontSettingKey; value: unknown }; response: { value: FontFamilyPreference } };
+  'settings:set-terminal-font-size': { request: { value: unknown; onlyIfUnset?: boolean }; response: { value: number; changed: boolean } };
+  /** Validated write of the terminal font weight W; main also sets the bold weight to derivedBoldWeight(W), both in one transaction. changedKeys lists the keys whose stored value changed (empty = nothing written); emits settings:changed once per changed key. */
+  'settings:set-terminal-font-weight': { request: { value: unknown }; response: { weight: TerminalFontWeight; boldWeight: TerminalFontWeight; changedKeys: Array<keyof SettingsMap> } };
+  /** Validated write of the terminal bold weight; rejects a weight not heavier than the font weight in use (resolveTerminalWeights). changed=false when equal to the stored value. Emits settings:changed { key: 'terminal_bold_weight' } on change. */
+  'settings:set-terminal-bold-weight': { request: { value: unknown }; response: { value: TerminalFontWeight; changed: boolean } };
+  /** Validated replace of the whole app env map; rejects naming the key only; emits settings:changed { key: 'app_env' }. */
+  'settings:set-app-env': { request: { env: Record<string, string> }; response: { env: Record<string, string> } };
   'settings:set-claude-permission-mode': { request: { mode: ClaudePermissionMode }; response: { mode: ClaudePermissionMode; changedKeys: Array<keyof SettingsMap> } };
 
   // notifications

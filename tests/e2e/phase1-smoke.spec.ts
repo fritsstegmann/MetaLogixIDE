@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { rmSync } from 'node:fs';
+import { PALETTE_COPY, PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
 
 /**
  * Reads the shell's terminal state via `shells:snapshot` (main's headless
@@ -99,26 +100,26 @@ test('Phase 1 smoke: multi-root, switcher, shell, alive panel, files tab', async
   await expect(win.getByRole('button', { name: 'gamma', exact: true })).toBeVisible({ timeout: 5000 });
   await expect(win.getByRole('button', { name: 'delta', exact: true })).toBeVisible({ timeout: 5000 });
 
-  // ── 4. Open Cmd+K project switcher ────────────────────────────────────────
+  // ── 4. Open the Cmd+K command palette (it replaced the project switcher) ───
   // Dispatch a synthetic keydown that the App's listener will catch
   // (OS-level Cmd+K may be intercepted before reaching the renderer on macOS;
   // dispatching via evaluate bypasses that).
   await win.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
   });
-  const switcherInput = win.getByPlaceholder('Switch to project…');
+  const switcherInput = win.getByPlaceholder(PALETTE_COPY.placeholder);
   await expect(switcherInput).toBeVisible({ timeout: 3000 });
 
 
-  // ── 5. Filter in switcher — wait for projects to load then narrow results ──
+  // ── 5. Filter in the palette — wait for projects to load then narrow results ─
   // useProjects hook fires on mount; wait for list items to appear.
   // Note: the evaluate probe above confirmed IPC works; React hook may need
   // a small settle time.
   await win.waitForTimeout(500); // let React effect settle
-  const firstResult = win.locator('ul li button').first();
+  const firstResult = win.getByTestId(PALETTE_TESTIDS.root).getByRole('option').first();
   await expect(firstResult).toBeVisible({ timeout: 10000 });
 
-  // Type a filter to verify Fuse narrows results.
+  // Type a filter to verify Fuse narrows results (the Projects group comes first).
   await switcherInput.fill('alpha');
   await expect(firstResult).toBeVisible({ timeout: 3000 });
   await expect(firstResult).toContainText('alpha', { timeout: 3000 });

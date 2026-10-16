@@ -1,10 +1,13 @@
+import { SHORTCUT_COPY } from './shortcut-copy';
+
 /** User-facing copy for the sidebar header, "+" menu and section headings. */
 export const SIDEBAR_COPY = {
   filterPlaceholder: 'Filter projects',
   filterLabel: 'Filter projects',
   addButtonLabel: 'New project',
   menuNewProject: 'New project…',
-  menuNewProjectHint: '⌘⇧N',
+  /** Mac value, kept for existing callers; the menu uses `SHORTCUT_COPY.newProjectHint(platform)`. */
+  menuNewProjectHint: SHORTCUT_COPY.newProjectHint('mac'),
   menuAddRoot: 'Add root folder…',
   menuRescan: 'Rescan roots',
   menuRescanning: 'Rescanning…',

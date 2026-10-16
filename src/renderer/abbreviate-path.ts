@@ -22,3 +22,9 @@ function initial(segment: string): string {
   const chars = Array.from(segment);
   return chars[0] === '.' && chars.length > 1 ? chars.slice(0, 2).join('') : chars[0] ?? '';
 }
+
+/** The path with the macOS home prefix as `~` and no trailing separator: `/Users/me/Projects` → `~/Projects`. */
+export function homeRelativePath(path: string): string {
+  const trimmed = path.length > 1 ? path.replace(/[\\/]+$/u, '') : path;
+  return trimmed.replace(/^\/Users\/[^/]+/u, '~');
+}

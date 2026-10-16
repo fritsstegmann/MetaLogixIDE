@@ -11,9 +11,11 @@ import { ShellsRepo } from '@main/repos/shells-repo';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
+import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { commitAll, git, makeConflict, markerScript, stubGitEnv, tempProject } from '../git/temp-repo';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
+import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -52,7 +54,7 @@ describe('registerIpc', () => {
       'projects:update-config', 'projects:recents',
       'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
-      'settings:get', 'settings:set', 'settings:set-font', 'settings:set-claude-permission-mode',
+      'settings:get', 'settings:set', 'settings:set-font', 'settings:set-app-env', 'settings:set-claude-permission-mode',
       'files:tree', 'app:ping', 'notifications:viewed-shells', 'claude-state:list',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
@@ -89,6 +91,104 @@ describe('registerIpc', () => {
     await expect(ipc.handlers.get('settings:set')!({}, { key, value: 'Bypass Font' })).rejects.toThrow();
     expect(setSpy).not.toHaveBeenCalled();
     expect(settings.get(key)).toBeNull();
+  });
+
+  it('settings:set rejects key app_env without writing (bypass of settings:set-app-env, AC4)', async () => {
+    const ipc = fakeIpcMain();
+    const settings = realSettings();
+    const setSpy = vi.spyOn(settings, 'set');
+    const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+    await expect(
+      ipc.handlers.get('settings:set')!({}, { key: 'app_env', value: { X: '1' } }),
+    ).rejects.toThrow();
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(settings.get('app_env')).toEqual({});
+  });
+
+  describe('settings:set-app-env (AC4, AC6)', () => {
+    it('a valid save replaces the whole map, returns { env }, and emits exactly one keyed settings:changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { OLD: '1' });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-app-env')!({}, { env: { NEW: '1' } }),
+      ).resolves.toEqual({ env: { NEW: '1' } });
+      expect(settings.get('app_env')).toEqual({ NEW: '1' });
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'app_env' } }]);
+    });
+
+    it('an empty map clears the stored app env', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { OLD: '1' });
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env: {} })).resolves.toEqual({
+        env: {},
+      });
+      expect(settings.get('app_env')).toEqual({});
+    });
+
+    it.each([
+      ['invalid name', { 'MY-VAR': 'x' }],
+      ['reserved name', { METAIDE_HOOK_TOKEN: 'x' }],
+      ['reserved __proto__ name', JSON.parse('{"__proto__": "x"}') as unknown],
+      ['NUL value', { TOKEN: 'S3CRET\0' }],
+      ['non-object request', 'not-a-map'],
+      ['non-string value', { TOKEN: { nested: 'S3CRET' } }],
+    ])('rejects %s, writes nothing, and emits nothing', async (_label, env) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('app_env', { KEEP: '1' });
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env })).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('app_env')).toEqual({ KEEP: '1' });
+      expect(events).toEqual([]);
+    });
+
+    it('rejects a custom-prototype map and names the key, never the value', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const env = Object.create({ A: 'x' }) as Record<string, string>;
+      env.TOKEN = 'S3CRET';
+
+      await expect(ipc.handlers.get('settings:set-app-env')!({}, { env })).rejects.toThrow();
+      expect(settings.get('app_env')).toEqual({});
+    });
+
+    it('the error names the offending key and never contains the value', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set-app-env')!({}, { env: { TOKEN: 'S3CRET\0' } }),
+      ).rejects.toThrow(/TOKEN/);
+      try {
+        await ipc.handlers.get('settings:set-app-env')!({}, { env: { TOKEN: 'S3CRET\0' } });
+      } catch (e) {
+        expect((e as Error).message).not.toContain('S3CRET');
+      }
+    });
   });
 
   it('settings:set-font normalizes, persists, returns, then emits one keyed change event', async () => {
@@ -183,6 +283,407 @@ describe('registerIpc', () => {
     expect(settings.get('ui_font_family')).toBe('Existing Font');
     expect(settings.get('terminal_font_family')).toBeNull();
     expect(events).toEqual([]);
+  });
+
+  describe('settings:set-terminal-font-size (AC9, AC10)', () => {
+    it('settings:set rejects key terminal_font_size without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_font_size', value: 16 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBeNull();
+    });
+
+    it.each([8, 29, 16.5, '16', null])('rejects invalid value %j, leaves the store untouched, emits nothing', async (value) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('a valid value writes, returns { value, changed: true }, and emits exactly one keyed settings:changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 16 }),
+      ).resolves.toEqual({ value: 16, changed: true });
+      expect(settings.get('terminal_font_size')).toBe(16);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_font_size' } }]);
+    });
+
+    it('onlyIfUnset with a null stored value writes and emits once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 18, onlyIfUnset: true }),
+      ).resolves.toEqual({ value: 18, changed: true });
+      expect(settings.get('terminal_font_size')).toBe(18);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_font_size' } }]);
+    });
+
+    it('onlyIfUnset with an already-saved value does not write, returns changed: false, and emits nothing', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_size', 20);
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-size')!({}, { value: 18, onlyIfUnset: true }),
+      ).resolves.toEqual({ value: 20, changed: false });
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_size')).toBe(20);
+      expect(events).toEqual([]);
+    });
+
+    it('settings:get on a fresh DB returns null for the key', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:get')!({}, { key: 'terminal_font_size' }),
+      ).resolves.toEqual({ value: null });
+    });
+  });
+
+  describe('settings:set-terminal-font-weight (AC4, AC8, AC11)', () => {
+    it('settings:set rejects key terminal_font_weight without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_font_weight', value: 500 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_weight')).toBeNull();
+    });
+
+    it('settings:set rejects key terminal_bold_weight without writing (bypass guard)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set')!({}, { key: 'terminal_bold_weight', value: 700 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+    });
+
+    it.each([450, 1000, 0, 'bold', null])('rejects invalid value %j, leaves both keys untouched, emits nothing', async (value) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(setManySpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_font_weight')).toBeNull();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('a valid value writes {weight, derivedBoldWeight} through one setMany call and returns {weight, boldWeight, changedKeys}', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: expect.arrayContaining(['terminal_font_weight', 'terminal_bold_weight']) });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(setManySpy).toHaveBeenCalledTimes(1);
+      const settingsChangedKeys = events.filter(e => e.channel === 'settings:changed').map(e => (e.payload as { key: string }).key);
+      expect(new Set(settingsChangedKeys)).toEqual(new Set(['terminal_font_weight', 'terminal_bold_weight']));
+    });
+
+    it.each([
+      [100, 300],
+      [400, 600],
+      [800, 900],
+    ] as const)('choosing W %i stores bold %i (min(W + 200, 900), no 700 floor)', async (weight, bold) => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: weight }),
+      ).resolves.toMatchObject({ weight, boldWeight: bold });
+      expect(settings.get('terminal_bold_weight')).toBe(bold);
+    });
+
+    it('resets a hand-set bold weight (W 400, B 900, then choosing W 500 resets B to 700)', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 400, terminal_bold_weight: 900 });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: expect.arrayContaining(['terminal_font_weight', 'terminal_bold_weight']) });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+    });
+
+    it('atomicity: when setMany throws, the handler rejects and neither stored value changes', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 400, terminal_bold_weight: 700 });
+      vi.spyOn(settings, 'setMany').mockImplementation(() => { throw new Error('write failed'); });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).rejects.toThrow();
+      expect(settings.get('terminal_font_weight')).toBe(400);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(events).toEqual([]);
+    });
+
+    it('no-op: when both stored values already equal the target pair, changedKeys is empty, nothing is written, nothing is emitted', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 700 });
+      const setManySpy = vi.spyOn(settings, 'setMany');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: [] });
+      expect(setManySpy).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
+
+    it('no-op on weight alone: when only the bold weight differs, changedKeys lists only terminal_bold_weight and emits once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 600 });
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-font-weight')!({}, { value: 500 }),
+      ).resolves.toEqual({ weight: 500, boldWeight: 700, changedKeys: ['terminal_bold_weight'] });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+      expect(settings.get('terminal_bold_weight')).toBe(700);
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_bold_weight' } }]);
+    });
+
+    it('settings:get on a fresh DB returns null for the key', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+
+      await expect(
+        ipc.handlers.get('settings:get')!({}, { key: 'terminal_font_weight' }),
+      ).resolves.toEqual({ value: null });
+    });
+  });
+
+  describe('settings:set-terminal-bold-weight (AC4, AC8, AC11)', () => {
+    it('rejects invalid values with nothing changed', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 450 }),
+      ).rejects.toThrow();
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+      expect(events).toEqual([]);
+    });
+
+    it('with stored weight 500, rejects B=500 and B=400, accepts B=600 and B=900', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 500 })).rejects.toThrow();
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+
+      await expect(handler({}, { value: 600 })).resolves.toEqual({ value: 600, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(600);
+
+      await expect(handler({}, { value: 900 })).resolves.toEqual({ value: 900, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(900);
+    });
+
+    it('with stored weight 900, accepts B=900 and rejects B=800', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 900);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 800 })).rejects.toThrow();
+      expect(settings.get('terminal_bold_weight')).toBeNull();
+
+      await expect(handler({}, { value: 900 })).resolves.toEqual({ value: 900, changed: true });
+      expect(settings.get('terminal_bold_weight')).toBe(900);
+    });
+
+    it('with stored weight null, validates against 400: rejects B=400, accepts B=500', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+    });
+
+    it('with stored weight 450 (invalid), validates against the in-use weight 400: rejects B=400, accepts B=500', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 450);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+      await expect(handler({}, { value: 400 })).rejects.toThrow();
+      await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+    });
+
+    it.each([1000, 'bold'])(
+      'with stored weight %j (invalid, not a near miss), validates against the in-use weight 400: rejects B=400, accepts B=500',
+      async (storedWeight) => {
+        const ipc = fakeIpcMain();
+        const settings = realSettings();
+        settings.set('terminal_font_weight', storedWeight as never);
+        const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+        registerIpc(ipc as unknown as IpcMain, services, () => {});
+        const handler = ipc.handlers.get('settings:set-terminal-bold-weight')!;
+
+        await expect(handler({}, { value: 400 })).rejects.toThrow();
+        await expect(handler({}, { value: 500 })).resolves.toEqual({ value: 500, changed: true });
+        expect(settings.get('terminal_font_weight')).toBe(storedWeight);
+      },
+    );
+
+    it('never touches the stored font weight', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, () => {});
+      await ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 900 });
+      expect(settings.get('terminal_font_weight')).toBe(500);
+    });
+
+    it('writing the already-stored bold value returns changed: false with no write and no emit', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.setMany({ terminal_font_weight: 500, terminal_bold_weight: 700 });
+      const setSpy = vi.spyOn(settings, 'set');
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await expect(
+        ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 700 }),
+      ).resolves.toEqual({ value: 700, changed: false });
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(events).toEqual([]);
+    });
+
+    it('a change emits settings:changed { key: terminal_bold_weight } exactly once', async () => {
+      const ipc = fakeIpcMain();
+      const settings = realSettings();
+      settings.set('terminal_font_weight', 500);
+      const events: Array<{ channel: string; payload: unknown }> = [];
+      const services = { settings } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc as unknown as IpcMain, services, ((channel: string, payload: unknown) => {
+        events.push({ channel, payload });
+      }) as never);
+
+      await ipc.handlers.get('settings:set-terminal-bold-weight')!({}, { value: 900 });
+      expect(events).toEqual([{ channel: 'settings:changed', payload: { key: 'terminal_bold_weight' } }]);
+    });
   });
 
   it.each(['plan', 'bypassPermissions', '', undefined])('settings:set-claude-permission-mode rejects mode %j without changing anything', async (mode) => {
@@ -328,6 +829,7 @@ function envRig() {
     (ptyManager.spawn.mock.calls[n] as unknown as [number, number, ResolvedLaunch])[2];
   const setEnv = (id: number, env: Record<string, string>) => projects.updateConfig(id, { env });
   return {
+    db,
     dir,
     settings,
     projects,
@@ -342,6 +844,183 @@ function envRig() {
     pathA,
   };
 }
+
+describe('shells:set-default-cli — project default-agent boundary', () => {
+  const legacy: ProjectConfig = {
+    defaultCliName: 'Agent',
+    launchCmd: { first: { argv: ['legacy-first'], env: {} }, subsequent: { argv: ['legacy-subsequent'], env: {} } },
+    env: { KEEP: 'yes' }, cwdOverride: '/custom/cwd', model: 'opus', notes: 'keep',
+    linkedMetaprojectProjectId: 'linked',
+    cliProfiles: [{ name: 'Agent', argv: ['local-agent'], env: { KEEP: 'profile' } }],
+  };
+
+  it.each([
+    ['missing request', undefined], ['null request', null], ['array request', []], ['string request', 'request'],
+    ['missing id', { name: null }], ['string id', { projectId: '1', name: null }],
+    ['zero id', { projectId: 0, name: null }], ['negative id', { projectId: -1, name: null }],
+    ['fraction id', { projectId: 1.5, name: null }], ['unsafe id', { projectId: Number.MAX_SAFE_INTEGER + 1, name: null }],
+    ['NaN id', { projectId: NaN, name: null }], ['infinite id', { projectId: Infinity, name: null }],
+    ['missing name', { projectId: 1 }], ['empty name', { projectId: 1, name: '' }],
+    ['numeric name', { projectId: 1, name: 12 }], ['object name', { projectId: 1, name: {} }],
+  ])('rejects %s before any project access, write, event or PTY action', async (_label, request) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    const before = r.projects.get(r.a.id);
+    const get = vi.spyOn(r.projects, 'get');
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:set-default-cli', request)).rejects.toThrow(/project|name|request/i);
+    expect(get).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['missing project', 'missing profile'])('rejects %s without mutation or events', async (kind) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    const before = r.projects.get(r.a.id);
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:set-default-cli', {
+      projectId: kind === 'missing project' ? 99999 : r.a.id, name: 'missing',
+    })).rejects.toThrow(kind === 'missing project' ? /project/i : /profile/i);
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['Agent', null])('same-value explicit choice %j returns persisted replacement while preserving unrelated state', async (name) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, { ...legacy, defaultCliName: name });
+    r.projects.updateConfig(r.b.id, { defaultCliName: 'B', notes: 'other' });
+    const now = new Date('2026-09-01T10:00:00Z');
+    r.projects.setFirstLaunched(r.a.id, now);
+    r.shells.upsert({ projectId: r.a.id, shellIndex: 0, model: 'opus', launchArgv: ['running'], startedAt: 'now', lastActiveAt: 'now', pinned: true });
+    const beforeA = r.projects.get(r.a.id);
+    const beforeB = r.projects.get(r.b.id);
+    const beforeSettings = r.settings.getAll();
+    const beforeShells = r.shells.list();
+    const actualWrite = r.projects.updateConfig.bind(r.projects);
+    const write = vi.spyOn(r.projects, 'updateConfig').mockImplementation((id, patch) => {
+      expect(r.events).toEqual([]);
+      return actualWrite(id, patch);
+    });
+    const expected = { ...beforeA, config: { ...legacy, defaultCliName: name, launchCmd: null } };
+    await expect(r.call('shells:set-default-cli', {
+      projectId: r.a.id, name, env: { KEEP: 'overwrite' }, firstLaunchedAt: null, argv: ['untrusted'],
+    })).resolves.toStrictEqual({ project: expected });
+    expect(write.mock.calls).toEqual([[r.a.id, { defaultCliName: name, launchCmd: null }]]);
+    expect(r.projects.get(r.a.id)).toStrictEqual(expected);
+    expect(r.projects.get(r.b.id)).toStrictEqual(beforeB);
+    expect(r.settings.getAll()).toStrictEqual(beforeSettings);
+    expect(r.shells.list()).toStrictEqual(beforeShells);
+    expect(r.events).toEqual(['projects:changed']);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    expect(r.ptyManager.resize).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it.each(['first', 'subsequent'] as const)('named selection replaces a single legacy %s variant', async (variant) => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, { ...legacy, launchCmd: { [variant]: { argv: ['legacy'], env: {} } } });
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ ...legacy, launchCmd: null });
+    expect(r.events).toEqual(['projects:changed']);
+    r.db.close();
+  });
+
+  it('uses exact global catalog names, rejects normalized alternatives, and resets with no profiles', async () => {
+    const r = envRig();
+    const name = '  字體 Agent  ';
+    r.settings.set('default_cli_profiles', [{ name, argv: ['/not-installed/agent'] }]);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ defaultCliName: name, launchCmd: null });
+    r.events.length = 0;
+    await expect(r.call('shells:set-default-cli', { projectId: r.a.id, name: name.trim() })).rejects.toThrow(/profile/i);
+    expect(r.events).toEqual([]);
+    expect(r.projects.get(r.a.id)?.config.defaultCliName).toBe(name);
+    r.settings.set('default_cli_profiles', []);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: null });
+    expect(r.projects.get(r.a.id)?.config).toStrictEqual({ defaultCliName: null, launchCmd: null });
+    r.db.close();
+  });
+
+  it('real SQLite persistence failure leaves the confirmed config and emits no success event', async () => {
+    const r = envRig();
+    const before = r.projects.updateConfig(r.a.id, legacy);
+    r.db.exec("CREATE TRIGGER reject_default_update BEFORE UPDATE OF config_json ON projects BEGIN SELECT RAISE(ABORT, 'blocked write'); END");
+    await expect(r.call('shells:set-default-cli', { projectId: r.a.id, name: null })).rejects.toThrow(/blocked write/);
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it('profile-list reads preserve untouched variants and project-first deduplication', async () => {
+    const r = envRig();
+    const before = r.projects.updateConfig(r.a.id, legacy);
+    r.settings.set('default_cli_profiles', [{ name: 'Agent', argv: ['global-agent'] }, { name: 'Other', argv: ['other'] }]);
+    const write = vi.spyOn(r.projects, 'updateConfig');
+    await expect(r.call('shells:cli-profiles-list', { projectId: r.a.id })).resolves.toStrictEqual({
+      profiles: [{ ...legacy.cliProfiles?.[0], scope: 'project' }, { name: 'Other', argv: ['other'], scope: 'global' }],
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.events).toEqual([]);
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    r.db.close();
+  });
+
+  it('a live primary reattaches after saving; only a later automatic spawn uses the new default', async () => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, legacy);
+    r.ptyManager.isAlive.mockReturnValue(true);
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    await expect(r.call('shells:launch', { projectId: r.a.id })).resolves.toStrictEqual({ shellIndex: 0 });
+    expect(r.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.ptyManager.isAlive.mockReturnValue(false);
+    await r.call('shells:launch', { projectId: r.a.id });
+    expect(r.ptyManager.spawn).toHaveBeenCalledTimes(1);
+    expect(r.spawned(0).argv).toStrictEqual(['local-agent']);
+    expect(r.projects.get(r.a.id)?.config.launchCmd).toBeNull();
+    r.db.close();
+  });
+
+  it('explicit other-profile, inline command and plain-terminal launches ignore the saved default', async () => {
+    const r = envRig();
+    r.projects.updateConfig(r.a.id, {
+      ...legacy,
+      cliProfiles: [...(legacy.cliProfiles ?? []), { name: 'Other', argv: ['other-agent', 'explicit'] }],
+    });
+    await r.call('shells:set-default-cli', { projectId: r.a.id, name: 'Agent' });
+    const before = r.projects.get(r.a.id);
+    await r.call('shells:launch-cli', { projectId: r.a.id, profileName: 'Other' });
+    await r.call('shells:launch-cli', { projectId: r.a.id, argv: ['inline-agent', 'explicit'] });
+    await r.call('shells:launch-plain', { projectId: r.a.id });
+    expect(r.spawned(0).argv).toStrictEqual(['other-agent', 'explicit']);
+    expect(r.spawned(1).argv).toStrictEqual(['inline-agent', 'explicit']);
+    expect(r.spawned(2).argv).toStrictEqual(defaultShellArgv());
+    expect(r.spawned(0).cwd).toBe(r.pathA);
+    expect(r.spawned(2).cwd).toBe(r.pathA);
+    expect(r.projects.get(r.a.id)).toStrictEqual(before);
+    expect(r.ptyManager.kill).not.toHaveBeenCalled();
+    expect(r.ptyManager.write).not.toHaveBeenCalled();
+    r.db.close();
+  });
+});
 
 describe('projects:update-config — env validation (AC8, AC9)', () => {
   const seeded: ProjectConfig = {
@@ -570,6 +1249,93 @@ describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
   });
 });
 
+describe('app-wide env at every spawn site (AC9, AC10, AC16)', () => {
+  it('shells:launch (first) carries the app var with no project vars', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch (subsequent) carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.spawned(0).variant).toBe('subsequent');
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch no-session fallback carries the app var on the retry', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    rig.ptyManager.spawn.mockImplementationOnce(async () => {
+      const onExit = rig.ptyManager.on.mock.calls.filter((c) => c[0] === 'exit').at(-1)![1] as (
+        ev: unknown,
+      ) => void;
+      onExit({
+        projectId: rig.a.id,
+        shellIndex: 0,
+        code: 1,
+        uptimeMs: 100,
+        earlyOutput: 'No conversation found to continue',
+      });
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(2);
+    expect(rig.spawned(1).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-plain carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-cli profile carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.projects.updateConfig(rig.a.id, { cliProfiles: [{ name: 'prof', argv: ['node'] }] });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, profileName: 'prof' });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('shells:launch-cli inline argv carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    await rig.call('shells:launch-cli', { projectId: rig.a.id, argv: ['codex'] });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('tasks:run carries the app var', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'app' });
+  });
+
+  it('AC10 — a project value of the same name wins over the app value at one site', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'app' });
+    rig.setEnv(rig.a.id, { X: 'proj' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'proj' });
+  });
+
+  it('AC16 — changing app_env between two spawns changes only the second', async () => {
+    const rig = envRig();
+    rig.settings.set('app_env', { X: 'before' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    rig.settings.set('app_env', { X: 'after' });
+    await rig.call('shells:launch-plain', { projectId: rig.a.id });
+    expect(rig.spawned(0).env).toStrictEqual({ X: 'before' });
+    expect(rig.spawned(1).env).toStrictEqual({ X: 'after' });
+  });
+});
+
 describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC31–AC33)', () => {
   beforeEach(stubGitEnv);
   afterEach(() => { vi.unstubAllEnvs(); });
@@ -646,6 +1412,59 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
     expect(existsSync(marker)).toBe(true);
   });
 
+  it('git:status without .git is not a repo', async () => {
+    const { call } = gitRig();
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: false, branch: null, ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status on an empty .git folder is a repo with no branch and no files', async () => {
+    const { root, call } = gitRig();
+    mkdirSync(join(root, '.git'));
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, branch: null, ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status on a clean repo gives the branch and is not dirty', async () => {
+    const { root, call } = repoRig();
+    writeFileSync(join(root, 'a.ts'), 'a\n');
+    commitAll(root);
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, branch: 'main', ahead: 0, behind: 0, files: {}, dirty: false });
+  });
+
+  it('git:status gives exactly what plain git status gives, every untracked file and pathspec-magic names included', async () => {
+    const { root, call } = repoRig();
+    for (const name of ['*.ts', ':(exclude)x', 'a.ts']) writeFileSync(join(root, name), 'one\n');
+    commitAll(root);
+    for (const name of ['*.ts', ':(exclude)x']) writeFileSync(join(root, name), 'two\n');
+    mkdirSync(join(root, 'dir', 'sub'), { recursive: true });
+    writeFileSync(join(root, 'dir', 'sub', 'u1.txt'), 'u');
+    const plain = parseGitStatus(git(root, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '--branch', '--untracked-files=all'));
+    expect(plain.files).toEqual({ '*.ts': 'M', ':(exclude)x': 'M', 'dir/sub/u1.txt': '?' });
+    expect(await call('git:status', { projectId: 1 })).toEqual({ isRepo: true, ...plain, dirty: true });
+  });
+
+  it('git:status never runs a repo-local core.fsmonitor program', async () => {
+    const { base, root, call } = repoRig();
+    writeFileSync(join(root, 'a.txt'), 'a');
+    const { script, marker } = markerScript(base, 'fsmonitor');
+    git(root, 'config', 'core.fsmonitor', script);
+    await call('git:status', { projectId: 1 });
+    expect(existsSync(marker)).toBe(false);
+    spawnSync('git', ['status'], { cwd: root });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it.each([
+    ['git:status', {}],
+    ['git:panel-status', {}],
+    ['git:file-diff', { path: 'u.txt', untracked: true }],
+    ['git:diff-sides', { kind: 'untracked', path: 'u.txt' }],
+  ])('%s lets timers run while git is still running (does not block the main process)', async (channel, req) => {
+    const { base, root, call } = repoRig();
+    writeFileSync(join(root, 'u.txt'), 'u\n');
+    vi.stubEnv('PATH', `${slowCommandDir(base, 'git', 0.6)}:${process.env.PATH ?? ''}`);
+    expect(await finishOrder(() => call(channel, { projectId: 1, ...req }))).toEqual(['timer', 'work']);
+  });
+
   it.each(['git:panel-status', 'git:file-diff', 'git:diff-sides'])('%s rejects an unknown project', async (channel) => {
     const { call } = gitRig();
     await expect(call(channel, { projectId: 99, path: 'a', kind: 'unstaged' })).rejects.toThrow(/no project 99/);
@@ -693,5 +1512,95 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
   it('git:file-diff without .git returns an empty diff', async () => {
     const { call } = gitRig();
     await expect(call('git:file-diff', { projectId: 1, path: 'a.ts' })).resolves.toEqual({ diff: '' });
+  });
+});
+
+describe('shells:live-stats', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A rig with live shells for `pids` in project 1, and `ps` on PATH replaced by `script` (a sh body). */
+  function statsRig(pids: number[], script: string) {
+    const dir = mkdtempSync(join(tmpdir(), 'live-stats-'));
+    writeFileSync(join(dir, 'ps'), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(dir, 'ps'), 0o755);
+    vi.stubEnv('PATH', `${dir}:${process.env.PATH ?? ''}`);
+    const ptyManager = fakePtyManager();
+    const now = Date.now();
+    ptyManager.liveShells.mockImplementation(() =>
+      pids.map((pid, shellIndex) => ({ projectId: 1, shellIndex, pid, startedAt: now, lastDataAt: now })) as never);
+    const services = {
+      ptyManager,
+      projects: { list: () => [{ id: 1, name: 'proj' }] },
+      shells: { list: () => pids.map((_, shellIndex) => ({ projectId: 1, shellIndex, launchArgv: ['/bin/zsh'] })) },
+    } as unknown as Parameters<typeof registerIpc>[1];
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    return () => ipc.handlers.get('shells:live-stats')!({}, undefined) as Promise<{ shells: Array<Record<string, unknown>> }>;
+  }
+
+  it('asks ps once for every live pid and maps its CPU and RSS onto each shell', async () => {
+    const stats = statsRig([4242, 4343], `[ "$*" = "-o pid=,%cpu=,rss= -p 4242,4343" ] || exit 3\nprintf '  4242  12.5  20480\\n 4343 0.0 1024\\n'`);
+    const { shells } = await stats();
+    expect(shells).toEqual([
+      expect.objectContaining({ projectId: 1, shellIndex: 0, projectName: 'proj', pid: 4242, cpuPercent: 12.5, memMB: 20, launchName: 'Terminal', hanging: false }),
+      expect.objectContaining({ shellIndex: 1, pid: 4343, cpuPercent: 0, memMB: 1 }),
+    ]);
+  });
+
+  it('gives zero CPU and memory when ps exits non-zero', async () => {
+    const stats = statsRig([4242], `printf '4242 50.0 20480\\n'; exit 1`);
+    const { shells } = await stats();
+    expect(shells).toEqual([expect.objectContaining({ pid: 4242, cpuPercent: 0, memMB: 0 })]);
+  });
+
+  it('lets timers run while ps is still running (does not block the main process)', async () => {
+    const stats = statsRig([4242], `sleep 0.6\nprintf '4242 1.0 1024\\n'`);
+    expect(await finishOrder(stats)).toEqual(['timer', 'work']);
+  });
+});
+
+describe('roots:rescan', () => {
+  function rescanRig(liveProjectIds: number[] = []) {
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'rescan-db-')), 'db'));
+    runMigrations(db, migrationsDir);
+    const settings = new SettingsRepo(db);
+    settings.seedDefaults();
+    const roots = new RootsRepo(db);
+    const projects = new ProjectsRepo(db);
+    const ptyManager = fakePtyManager();
+    ptyManager.liveShells.mockImplementation(() =>
+      liveProjectIds.map((projectId) => ({ projectId, shellIndex: 0, pid: 1, startedAt: 0, lastDataAt: 0 })) as never);
+    const ipc = fakeIpcMain();
+    const services = { settings, roots, projects, ptyManager } as unknown as Parameters<typeof registerIpc>[1];
+    registerIpc(ipc as unknown as IpcMain, services, () => {});
+    const rootPath = mkdtempSync(join(tmpdir(), 'rescan-root-'));
+    const root = roots.add(rootPath);
+    const rescan = () => ipc.handlers.get('roots:rescan')!({}, { id: root.id });
+    return { projects, rootPath, rescan, liveProjectIds };
+  }
+
+  it('drops a project whose folder was removed from the root', async () => {
+    const { projects, rootPath, rescan } = rescanRig();
+    mkdirSync(join(rootPath, 'keep'));
+    mkdirSync(join(rootPath, 'gone'));
+    await rescan();
+    expect(projects.list().map((p) => p.name).sort()).toEqual(['gone', 'keep']);
+
+    rmSync(join(rootPath, 'gone'), { recursive: true });
+    await rescan();
+
+    expect(projects.list().map((p) => p.name)).toEqual(['keep']);
+  });
+
+  it('keeps a removed folder\'s project while it still has a live shell', async () => {
+    const { projects, rootPath, rescan, liveProjectIds } = rescanRig();
+    mkdirSync(join(rootPath, 'busy'));
+    await rescan();
+    liveProjectIds.push(projects.list()[0]!.id);
+
+    rmSync(join(rootPath, 'busy'), { recursive: true });
+    await rescan();
+
+    expect(projects.list().map((p) => p.name)).toEqual(['busy']);
   });
 });

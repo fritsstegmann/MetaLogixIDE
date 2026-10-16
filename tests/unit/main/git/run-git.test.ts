@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runGit, describeGitFailure, type SpawnSyncFn } from '@main/git/run-git';
-import { git, initRepo, markerScript, stubGitEnv } from './temp-repo';
+import { runGit, describeGitFailure, type ExecFileFn } from '@main/git/run-git';
+import type { ExecFileException } from 'node:child_process';
+import { finishOrder, git, initRepo, markerScript, stubGitEnv } from './temp-repo';
 
 const OPTS = { maxBuffer: 1024 * 1024, timeout: 10_000 };
 
@@ -11,48 +12,73 @@ beforeEach(stubGitEnv);
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('runGit argument and option mapping', () => {
-  function fakeSpawn(result: Partial<ReturnType<SpawnSyncFn>>) {
-    return vi.fn<SpawnSyncFn>(() => ({
-      pid: 1, output: [], stdout: Buffer.from(''), stderr: Buffer.from(''), status: 0, signal: null, ...result,
-    }));
+  interface FakeRun { error?: ExecFileException | null; stdout?: string; stderr?: string }
+
+  function fakeExec({ error = null, stdout = '', stderr = '' }: FakeRun = {}) {
+    const end = vi.fn();
+    const exec = vi.fn<ExecFileFn>((_cmd, _args, _opts, cb) => {
+      setTimeout(() => { cb(error, Buffer.from(stdout), Buffer.from(stderr)); }, 0);
+      return { stdin: { end } } as unknown as ReturnType<ExecFileFn>;
+    });
+    return Object.assign(exec, { stdinEnd: end });
   }
 
-  it('prepends core.fsmonitor=false and literal pathspecs before the caller args, and runs git in the repo', () => {
-    const spawn = fakeSpawn({ stdout: Buffer.from('out') });
-    runGit('/repo', ['status', '--porcelain=v1'], { maxBuffer: 123, timeout: 456 }, spawn);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [cmd, args, opts] = spawn.mock.calls[0]!;
+  const errorWith = (props: Partial<ExecFileException>): ExecFileException => Object.assign(new Error('Command failed: git x'), props);
+
+  it('prepends core.fsmonitor=false and literal pathspecs before the caller args, and runs git in the repo', async () => {
+    const exec = fakeExec({ stdout: 'out' });
+    await runGit('/repo', ['status', '--porcelain=v1'], { maxBuffer: 123, timeout: 456 }, exec);
+    expect(exec).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = exec.mock.calls[0]!;
     expect(cmd).toBe('git');
     expect(args).toEqual(['-c', 'core.fsmonitor=false', '--literal-pathspecs', 'status', '--porcelain=v1']);
-    expect(opts).toMatchObject({ cwd: '/repo', maxBuffer: 123, timeout: 456 });
+    expect(opts).toMatchObject({ cwd: '/repo', maxBuffer: 123, timeout: 456, encoding: 'buffer' });
     expect(opts.env?.GIT_OPTIONAL_LOCKS).toBe('0');
   });
 
-  it('returns stdout, stderr and status of a normal run', () => {
-    const spawn = fakeSpawn({ stdout: Buffer.from('hello'), stderr: Buffer.from('warn'), status: 0 });
-    const r = runGit('/repo', ['x'], OPTS, spawn);
+  it('closes git stdin so a command can never wait on input', async () => {
+    const exec = fakeExec();
+    await runGit('/repo', ['x'], OPTS, exec);
+    expect(exec.stdinEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns stdout, stderr and status of a normal run', async () => {
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ stdout: 'hello', stderr: 'warn' }));
     expect(r).toEqual({ stdout: Buffer.from('hello'), stderr: 'warn', status: 0, tooLarge: false, timedOut: false });
   });
 
-  it('maps ENOBUFS to tooLarge and drops the partial stdout', () => {
-    const error = Object.assign(new Error('spawnSync git ENOBUFS'), { code: 'ENOBUFS' });
-    const r = runGit('/repo', ['x'], OPTS, fakeSpawn({ error, status: null, stdout: Buffer.from('partial') }));
-    expect(r.tooLarge).toBe(true);
-    expect(r.timedOut).toBe(false);
-    expect(r.stdout.length).toBe(0);
+  it('gives the exit code and git stderr of a failing run, with its stdout', async () => {
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error: errorWith({ code: 128 }), stdout: 'some', stderr: 'fatal: bad\n' }));
+    expect(r).toEqual({ stdout: Buffer.from('some'), stderr: 'fatal: bad\n', status: 128, tooLarge: false, timedOut: false });
   });
 
-  it('maps ETIMEDOUT to timedOut and drops the partial stdout', () => {
-    const error = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
-    const r = runGit('/repo', ['x'], OPTS, fakeSpawn({ error, status: null, stdout: Buffer.from('partial') }));
-    expect(r.timedOut).toBe(true);
-    expect(r.tooLarge).toBe(false);
-    expect(r.stdout.length).toBe(0);
+  it('gives an empty stderr, not the generic failure message, when a failing git wrote nothing', async () => {
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error: errorWith({ code: 1 }) }));
+    expect(r).toMatchObject({ stderr: '', status: 1 });
   });
 
-  it('reports any other spawn error through stderr with a null status', () => {
-    const error = Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' });
-    const r = runGit('/repo', ['x'], OPTS, fakeSpawn({ error, status: null, stdout: null as unknown as Buffer, stderr: null as unknown as Buffer }));
+  it('maps an output overflow to tooLarge and drops the partial stdout', async () => {
+    const error = errorWith({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', message: 'stdout maxBuffer length exceeded' });
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error, stdout: 'partial' }));
+    expect(r).toEqual({ stdout: Buffer.alloc(0), stderr: '', status: null, tooLarge: true, timedOut: false });
+  });
+
+  it('maps a timeout kill to timedOut and drops the partial stdout', async () => {
+    const error = errorWith({ code: null, killed: true, signal: 'SIGTERM' });
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error, stdout: 'partial' }));
+    expect(r).toEqual({ stdout: Buffer.alloc(0), stderr: '', status: null, tooLarge: false, timedOut: true });
+  });
+
+  it('reports a git killed by someone else as a failure with a null status, not as a timeout', async () => {
+    const error = errorWith({ code: null, killed: false, signal: 'SIGKILL' });
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error, stdout: 'partial' }));
+    expect(r).toMatchObject({ status: null, tooLarge: false, timedOut: false });
+    expect(r.stderr).toContain('Command failed');
+  });
+
+  it('reports any other spawn error through stderr with a null status', async () => {
+    const error = errorWith({ code: 'ENOENT', message: 'spawn git ENOENT' });
+    const r = await runGit('/repo', ['x'], OPTS, fakeExec({ error }));
     expect(r).toMatchObject({ status: null, tooLarge: false, timedOut: false });
     expect(r.stderr).toContain('ENOENT');
     expect(r.stdout.length).toBe(0);
@@ -60,37 +86,43 @@ describe('runGit argument and option mapping', () => {
 });
 
 describe('runGit against a real repository', () => {
-  it('gives the exit status and stderr of a failing command', () => {
+  it('lets timers run while git is still running (does not block the event loop)', async () => {
     const { root: repo } = initRepo();
-    const r = runGit(repo, ['cat-file', 'blob', 'HEAD:nope'], OPTS);
+    git(repo, 'config', 'alias.slow', '!sleep 0.6');
+    expect(await finishOrder(() => runGit(repo, ['slow'], OPTS))).toEqual(['timer', 'work']);
+  });
+
+  it('gives the exit status and stderr of a failing command', async () => {
+    const { root: repo } = initRepo();
+    const r = await runGit(repo, ['cat-file', 'blob', 'HEAD:nope'], OPTS);
     expect(r.status).toBe(128);
     expect(r.stderr).toMatch(/nope|HEAD/);
     expect(r.tooLarge).toBe(false);
   });
 
-  it('maps a real output overflow to tooLarge with no partial stdout', () => {
+  it('maps a real output overflow to tooLarge with no partial stdout', async () => {
     const { root: repo } = initRepo();
     writeFileSync(join(repo, 'big.txt'), 'x'.repeat(200_000));
     git(repo, 'add', 'big.txt');
-    const r = runGit(repo, ['cat-file', 'blob', ':0:big.txt'], { maxBuffer: 10_000, timeout: 10_000 });
+    const r = await runGit(repo, ['cat-file', 'blob', ':0:big.txt'], { maxBuffer: 10_000, timeout: 10_000 });
     expect(r.tooLarge).toBe(true);
     expect(r.stdout.length).toBe(0);
   });
 
-  it('maps a real timeout to timedOut', () => {
+  it('maps a real timeout to timedOut', async () => {
     const { root: repo } = initRepo();
     git(repo, 'config', 'alias.slow', '!sleep 3');
-    const r = runGit(repo, ['slow'], { maxBuffer: 1024, timeout: 200 });
+    const r = await runGit(repo, ['slow'], { maxBuffer: 1024, timeout: 200 });
     expect(r.timedOut).toBe(true);
     expect(r.status).toBeNull();
   });
 
-  it('never runs a repo-local core.fsmonitor program on status (control run proves the marker works)', () => {
+  it('never runs a repo-local core.fsmonitor program on status (control run proves the marker works)', async () => {
     const { root: repo, base } = initRepo();
     writeFileSync(join(repo, 'a.txt'), 'a');
     const { script, marker } = markerScript(base, 'fsmonitor');
     git(repo, 'config', 'core.fsmonitor', script);
-    expect(runGit(repo, ['status', '--porcelain=v1'], OPTS).status).toBe(0);
+    expect((await runGit(repo, ['status', '--porcelain=v1'], OPTS)).status).toBe(0);
     expect(existsSync(marker)).toBe(false);
     spawnSync('git', ['status', '--porcelain=v1'], { cwd: repo });
     expect(existsSync(marker)).toBe(true);

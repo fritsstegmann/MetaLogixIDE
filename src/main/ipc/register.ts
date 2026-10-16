@@ -4,21 +4,33 @@ import log from 'electron-log/main';
 import type { Services } from '@main/services';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
+import { pruneMissingProjects } from '@main/domain/prune-missing';
 import { discoverTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import { resolveLaunch } from '@main/domain/launch';
+import { parseProjectDefaultAgent, setProjectDefaultAgent } from '@main/domain/project-default-agent';
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
-import { parseProjectEnv } from '@shared/project-env';
-import type { Project, ProjectConfig } from '@shared/types';
+import { parseProjectEnv, parseAppEnv } from '@shared/project-env';
+import type { Project, ProjectConfig, SettingsMap } from '@shared/types';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import { isClaudePermissionMode } from '@shared/claude-permission-mode';
 import { isFontSettingKey, parseFontFamilyPreference } from '@shared/font-settings';
+import { TERMINAL_FONT_SIZE_KEY, parseTerminalFontSize } from '@shared/terminal-font-size';
+import {
+  TERMINAL_FONT_WEIGHT_KEY,
+  TERMINAL_BOLD_WEIGHT_KEY,
+  parseTerminalFontWeight,
+  derivedBoldWeight,
+  isValidBoldWeight,
+  resolveTerminalWeights,
+} from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
 import { describeGitFailure, runGit } from '@main/git/run-git';
@@ -27,6 +39,7 @@ import { readDiffSides } from '@main/git/diff-sides';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
+const execFileAsync = promisify(execFile);
 
 /** Spawn env overlay for a non-template spawn site: `templateEnv` ⊕ the project's interpolated variables. */
 function projectSpawnEnv(
@@ -34,7 +47,8 @@ function projectSpawnEnv(
   project: Project,
   templateEnv: Record<string, string>,
 ): Record<string, string> {
-  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir }).env;
+  const appEnv = s.settings.get('app_env');
+  return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir, appEnv }).env;
 }
 
 /**
@@ -115,6 +129,10 @@ function assertProjectPathExists(project: { id: number; name: string; path: stri
   }
 }
 
+function hasLiveShell(s: Services, projectId: number): boolean {
+  return s.ptyManager.liveShells().some((shell) => shell.projectId === projectId);
+}
+
 export interface WindowHooks {
   createPopoutWindow: (projectId: number, shellIndex: number) => Promise<number>;
   returnPopoutWindow: (projectId: number, shellIndex: number) => boolean;
@@ -172,6 +190,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
         s.projects.updateConfig(p.id, { linkedMetaprojectProjectId: disc.metaprojectProjectId });
       }
     }
+    pruneMissingProjects({ projects: s.projects, hasLiveShell: (id) => hasLiveShell(s, id) }, root);
     return { discovered: n };
   },
 
@@ -506,16 +525,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     s.projects.updateConfig(projectId, { cliProfiles: remaining });
     return { ok: true } as const;
   },
-  'shells:set-default-cli': async (s, { projectId, name }) => {
-    const project = s.projects.get(projectId);
-    if (!project) throw new Error(`no project ${projectId}`);
-    // Clearing (name === null) also removes any low-level launchCmd
-    // override so the project falls all the way back to the global
-    // default — otherwise a stale launchCmd would trump defaultCliName.
-    const patch: Partial<typeof project.config> = { defaultCliName: name };
-    if (name === null) patch.launchCmd = null;
-    const updated = s.projects.updateConfig(projectId, patch);
-    return { project: updated };
+  'shells:set-default-cli': async (s, request) => {
+    const parsed = parseProjectDefaultAgent(request);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const result = setProjectDefaultAgent(s, parsed.value);
+    if (!result.ok) throw new Error(result.error);
+    return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
@@ -539,16 +554,15 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // One `ps` call for every alive pid — cheap on macOS/Linux (kernel-side
     // process table lookup, no fork per pid). Format: `%CPU RSS_KB`.
     const pids = live.map(l => String(l.pid)).join(',');
+    // Async so a `ps` slowed by agent load never stalls the main process; a non-zero exit rejects, giving no stats.
     let statsByPid: Record<number, { cpu: number; rssKb: number }> = {};
     try {
-      const r = spawnSync('ps', ['-o', 'pid=,%cpu=,rss=', '-p', pids], { encoding: 'utf8', timeout: 3000 });
-      if (r.status === 0) {
-        for (const line of r.stdout.trim().split('\n')) {
-          const cols = line.trim().split(/\s+/);
-          if (cols.length < 3) continue;
-          const pid = Number(cols[0]); const cpu = Number(cols[1]); const rss = Number(cols[2]);
-          if (Number.isFinite(pid)) statsByPid[pid] = { cpu: Number.isFinite(cpu) ? cpu : 0, rssKb: Number.isFinite(rss) ? rss : 0 };
-        }
+      const r = await execFileAsync('ps', ['-o', 'pid=,%cpu=,rss=', '-p', pids], { encoding: 'utf8', timeout: 3000 });
+      for (const line of r.stdout.trim().split('\n')) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length < 3) continue;
+        const pid = Number(cols[0]); const cpu = Number(cols[1]); const rss = Number(cols[2]);
+        if (Number.isFinite(pid)) statsByPid[pid] = { cpu: Number.isFinite(cpu) ? cpu : 0, rssKb: Number.isFinite(rss) ? rss : 0 };
       }
     } catch { statsByPid = {}; }
     const now = Date.now();
@@ -596,6 +610,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // Permission mode and font preferences have dedicated validated setters.
     if (key === 'claude_permission_mode') throw new Error('claude_permission_mode can only be changed via settings:set-claude-permission-mode');
     if (isFontSettingKey(key)) throw new Error(`${key} can only be changed via settings:set-font`);
+    if (key === TERMINAL_FONT_SIZE_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-size`);
+    if (key === TERMINAL_FONT_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-font-weight`);
+    if (key === TERMINAL_BOLD_WEIGHT_KEY) throw new Error(`${key} can only be changed via settings:set-terminal-bold-weight`);
+    if (key === 'app_env') throw new Error('app_env can only be changed via settings:set-app-env');
     s.settings.set(key, value as never);
     return { ok: true } as const;
   },
@@ -605,6 +623,56 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!parsed.ok) throw new Error(parsed.error);
     s.settings.set(request.key, parsed.value);
     return { value: parsed.value };
+  },
+  'settings:set-terminal-font-size': async (s, request) => {
+    const parsed = parseTerminalFontSize(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const stored = s.settings.get(TERMINAL_FONT_SIZE_KEY);
+    if (request.onlyIfUnset === true && stored !== null) {
+      return { value: stored, changed: false };
+    }
+    s.settings.set(TERMINAL_FONT_SIZE_KEY, parsed.value);
+    return { value: parsed.value, changed: true };
+  },
+  // Parses W, derives B = derivedBoldWeight(W) itself (never trusts a renderer-sent B), and
+  // writes only the keys whose stored value actually differs through one setMany transaction,
+  // so a write failure leaves neither key changed (AC8). changedKeys drives the per-key emit.
+  'settings:set-terminal-font-weight': async (s, request) => {
+    const parsed = parseTerminalFontWeight(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const weight = parsed.value;
+    const boldWeight = derivedBoldWeight(weight);
+    const entries: Partial<SettingsMap> = {};
+    const changedKeys: Array<keyof SettingsMap> = [];
+    if (s.settings.get(TERMINAL_FONT_WEIGHT_KEY) !== weight) {
+      entries[TERMINAL_FONT_WEIGHT_KEY] = weight;
+      changedKeys.push(TERMINAL_FONT_WEIGHT_KEY);
+    }
+    if (s.settings.get(TERMINAL_BOLD_WEIGHT_KEY) !== boldWeight) {
+      entries[TERMINAL_BOLD_WEIGHT_KEY] = boldWeight;
+      changedKeys.push(TERMINAL_BOLD_WEIGHT_KEY);
+    }
+    if (changedKeys.length > 0) s.settings.setMany(entries);
+    return { weight, boldWeight, changedKeys };
+  },
+  // Validates B against the font weight in use (resolveTerminalWeights on the stored pair, so a
+  // null or invalid stored weight counts as 400) and never writes the stored font weight itself.
+  'settings:set-terminal-bold-weight': async (s, request) => {
+    const parsed = parseTerminalFontWeight(request.value);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const bold = parsed.value;
+    const { weight } = resolveTerminalWeights(s.settings.get(TERMINAL_FONT_WEIGHT_KEY), s.settings.get(TERMINAL_BOLD_WEIGHT_KEY));
+    if (!isValidBoldWeight(weight, bold)) throw new Error(`terminal bold weight must be heavier than the font weight in use (${weight})`);
+    const stored = s.settings.get(TERMINAL_BOLD_WEIGHT_KEY);
+    if (stored === bold) return { value: bold, changed: false };
+    s.settings.set(TERMINAL_BOLD_WEIGHT_KEY, bold);
+    return { value: bold, changed: true };
+  },
+  'settings:set-app-env': async (s, { env }) => {
+    const parsed = parseAppEnv(env);
+    if (!parsed.ok) throw new Error(parsed.error);
+    s.settings.set('app_env', parsed.env);
+    return { env: parsed.env };
   },
   'settings:set-claude-permission-mode': async (s, { mode }) => {
     if (!isClaudePermissionMode(mode)) throw new Error(`invalid Claude permission mode (expected 'auto' or 'bypass')`);
@@ -985,11 +1053,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
       return { isRepo: false, branch: null, ahead: 0, behind: 0, files: {}, dirty: false };
     }
     // porcelain=v1 + --branch gives a stable machine-readable format with header.
-    const r = spawnSync('git', ['-C', p.path, 'status', '--porcelain=v1', '--branch', '--untracked-files=all'], { encoding: 'utf8', timeout: 5000 });
+    const r = await runGit(p.path, ['status', '--porcelain=v1', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
     if (r.status !== 0) {
       return { isRepo: true, branch: null, ahead: 0, behind: 0, files: {}, dirty: false };
     }
-    const parsed = parseGitStatus(r.stdout);
+    const parsed = parseGitStatus(r.stdout.toString('utf8'));
     return { isRepo: true, ...parsed, dirty: Object.keys(parsed.files).length > 0 };
   },
   'git:panel-status': async (s, { projectId }) => {
@@ -997,7 +1065,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!p) throw new Error(`no project ${projectId}`);
     const empty = { branch: null, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] };
     if (!existsSync(join(p.path, '.git'))) return { isRepo: false, ...empty };
-    const r = runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
+    const r = await runGit(p.path, ['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: 5000 });
     if (r.status !== 0 || r.tooLarge || r.timedOut) {
       const error = describeGitFailure(r, 'status');
       log.warn('[git:panel-status] git status failed', { projectId, status: r.status, error });
@@ -1289,6 +1357,10 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   // events that the fixed per-channel payload cannot express.
   const CUSTOM_EMIT_CHANNELS: Partial<Record<IpcChannelName, true>> = {
     'settings:set-font': true,
+    'settings:set-terminal-font-size': true,
+    'settings:set-terminal-font-weight': true,
+    'settings:set-terminal-bold-weight': true,
+    'settings:set-app-env': true,
     'settings:set-claude-permission-mode': true,
   };
 
@@ -1305,6 +1377,30 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
   ipcMain.handle('settings:set-font', async (_e, req: IpcRequest<'settings:set-font'>) => {
     const result = await handlers['settings:set-font'](services, req);
     sendEvent('settings:changed', { key: req.key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-font-size', async (_e, req: IpcRequest<'settings:set-terminal-font-size'>) => {
+    const result = await handlers['settings:set-terminal-font-size'](services, req);
+    if (result.changed) sendEvent('settings:changed', { key: TERMINAL_FONT_SIZE_KEY });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-font-weight', async (_e, req: IpcRequest<'settings:set-terminal-font-weight'>) => {
+    const result = await handlers['settings:set-terminal-font-weight'](services, req);
+    for (const key of result.changedKeys) sendEvent('settings:changed', { key });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-terminal-bold-weight', async (_e, req: IpcRequest<'settings:set-terminal-bold-weight'>) => {
+    const result = await handlers['settings:set-terminal-bold-weight'](services, req);
+    if (result.changed) sendEvent('settings:changed', { key: TERMINAL_BOLD_WEIGHT_KEY });
+    return result;
+  });
+
+  ipcMain.handle('settings:set-app-env', async (_e, req: IpcRequest<'settings:set-app-env'>) => {
+    const result = await handlers['settings:set-app-env'](services, req);
+    sendEvent('settings:changed', { key: 'app_env' });
     return result;
   });
 

@@ -63,23 +63,23 @@ function toContent(buf: Buffer): GitSideContent {
   return { text: buf.toString('utf8') };
 }
 
-function readBlob(root: string, spec: string, run: GitRunner): GitSideContent | 'missing' {
-  const r = run(root, ['cat-file', 'blob', spec], { maxBuffer: HIGHLIGHT_MAX_BYTES + 1, timeout: CONTENT_TIMEOUT_MS });
+async function readBlob(root: string, spec: string, run: GitRunner): Promise<GitSideContent | 'missing'> {
+  const r = await run(root, ['cat-file', 'blob', spec], { maxBuffer: HIGHLIGHT_MAX_BYTES + 1, timeout: CONTENT_TIMEOUT_MS });
   if (r.tooLarge) return skipped('too-large');
   if (r.timedOut) return skipped('unavailable');
   if (r.status !== 0) return 'missing';
   return toContent(r.stdout);
 }
 
-function readHeadSide(root: string, path: string, run: GitRunner): GitSideContent {
-  const side = readBlob(root, `HEAD:${path}`, run);
+async function readHeadSide(root: string, path: string, run: GitRunner): Promise<GitSideContent> {
+  const side = await readBlob(root, `HEAD:${path}`, run);
   return side === 'missing' ? skipped('absent') : side;
 }
 
-function readIndexSide(root: string, path: string, run: GitRunner): GitSideContent {
-  const side = readBlob(root, `:0:${path}`, run);
+async function readIndexSide(root: string, path: string, run: GitRunner): Promise<GitSideContent> {
+  const side = await readBlob(root, `:0:${path}`, run);
   if (side !== 'missing') return side;
-  const staged = run(root, ['ls-files', '--stage', '-z', '--', path], { maxBuffer: 64 * 1024, timeout: CONTENT_TIMEOUT_MS });
+  const staged = await run(root, ['ls-files', '--stage', '-z', '--', path], { maxBuffer: 64 * 1024, timeout: CONTENT_TIMEOUT_MS });
   // A path that is in the index but not at stage 0 is conflicted: it exists, but has no single version.
   if (staged.status !== 0 || staged.timedOut || staged.tooLarge || staged.stdout.length > 0) return skipped('unavailable');
   return skipped('absent');
@@ -101,25 +101,25 @@ function readWorktreeSide(root: string, path: string, fs: WorktreeFs): GitSideCo
   }
 }
 
-function readSides(root: string, kind: GitDiffKind, path: string, origPath: string | undefined, deps: DiffSidesDeps): { oldSide: GitSideContent; newSide: GitSideContent } {
-  if (kind === 'staged') return { oldSide: readHeadSide(root, origPath ?? path, deps.run), newSide: readIndexSide(root, path, deps.run) };
-  if (kind === 'unstaged') return { oldSide: readIndexSide(root, path, deps.run), newSide: readWorktreeSide(root, path, deps.fs) };
+async function readSides(root: string, kind: GitDiffKind, path: string, origPath: string | undefined, deps: DiffSidesDeps): Promise<{ oldSide: GitSideContent; newSide: GitSideContent }> {
+  if (kind === 'staged') return { oldSide: await readHeadSide(root, origPath ?? path, deps.run), newSide: await readIndexSide(root, path, deps.run) };
+  if (kind === 'unstaged') return { oldSide: await readIndexSide(root, path, deps.run), newSide: readWorktreeSide(root, path, deps.fs) };
   return { oldSide: skipped('absent'), newSide: readWorktreeSide(root, path, deps.fs) };
 }
 
 /**
  * Read the diff and both sides for `req`. Paths are validated before any git call or file read
- * (throws `PathRejectedError`); a diff over 1 MiB gives `too-large` and no content read; a diff whose
- * sha1 equals `ifDiffHashNot` gives `unchanged` and no content read. Throws `GitCommandError` when the
+ * (rejects with `PathRejectedError`); a diff over 1 MiB gives `too-large` and no content read; a diff whose
+ * sha1 equals `ifDiffHashNot` gives `unchanged` and no content read. Rejects with `GitCommandError` when the
  * diff itself cannot be read.
  */
-export function readDiffSides(root: string, req: DiffSidesRequest, deps: DiffSidesDeps = defaultDiffSidesDeps): DiffSidesResponse {
+export async function readDiffSides(root: string, req: DiffSidesRequest, deps: DiffSidesDeps = defaultDiffSidesDeps): Promise<DiffSidesResponse> {
   const path = toRepoRelativePath(root, req.path);
   const origPath = req.origPath === undefined ? undefined : toRepoRelativePath(root, req.origPath);
   if (req.kind !== 'staged') assertWorktreeContained(root, path, deps.realpath);
-  const { diff, tooLarge } = readFileDiff(root, { path, origPath, staged: req.kind === 'staged', untracked: req.kind === 'untracked' }, deps);
+  const { diff, tooLarge } = await readFileDiff(root, { path, origPath, staged: req.kind === 'staged', untracked: req.kind === 'untracked' }, deps);
   if (tooLarge) return { status: 'too-large' };
   const diffHash = createHash('sha1').update(diff).digest('hex');
   if (diffHash === req.ifDiffHashNot) return { status: 'unchanged' };
-  return { status: 'ok', diff, diffHash, ...readSides(root, req.kind, path, origPath, deps) };
+  return { status: 'ok', diff, diffHash, ...(await readSides(root, req.kind, path, origPath, deps)) };
 }

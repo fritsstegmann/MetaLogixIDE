@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 
 /**
  * Chrome cleanup: the frame around the terminal separates panes by tone and
@@ -78,6 +79,16 @@ test('active main tab wears the accent tint; inactive tabs are clear', async () 
     .evaluate((el) => getComputedStyle(el).backgroundColor);
   await expect.poll(() => fill('Shell')).not.toBe('rgba(0, 0, 0, 0)');
   expect(await fill('Files')).toBe('rgba(0, 0, 0, 0)');
+  expect(await fill(PROJECT_SETTINGS_COPY.tab)).toBe('rgba(0, 0, 0, 0)');
+  const settings = win.getByRole('button', { name: PROJECT_SETTINGS_COPY.tab, exact: true });
+  await settings.click();
+  await expect(win.getByTestId(PROJECT_SETTINGS_TESTIDS.view)).toBeVisible();
+  await expect(win.getByTestId('shell-tab')).toHaveCount(0);
+  await expect.poll(() => fill(PROJECT_SETTINGS_COPY.tab)).not.toBe('rgba(0, 0, 0, 0)');
+  await expect.poll(() => fill('Shell')).toBe('rgba(0, 0, 0, 0)');
+  await bar.getByRole('button', { name: 'Shell', exact: true }).click();
+  await expect(win.getByTestId('shell-tab')).toBeVisible();
+  await expect.poll(() => fill(PROJECT_SETTINGS_COPY.tab)).toBe('rgba(0, 0, 0, 0)');
 });
 
 test('root folders carry a hue glyph', async () => {

@@ -102,3 +102,15 @@ describe('rescanRoots', () => {
     expect(states).toEqual([true, false]);
   });
 });
+
+describe('buildAddMenuItems on Linux (AC6)', () => {
+  it('hints New project… as Ctrl+Shift+N with no Mac glyph', () => {
+    const items = buildAddMenuItems({ rescanning: false, onNewProject: vi.fn(), onAddRoot: vi.fn(), onRescan: vi.fn(), platform: 'other' });
+    expect(items[0]?.hint).toBe('Ctrl+Shift+N');
+  });
+
+  it('keeps ⌘⇧N when told mac explicitly (AC7)', () => {
+    const items = buildAddMenuItems({ rescanning: false, onNewProject: vi.fn(), onAddRoot: vi.fn(), onRescan: vi.fn(), platform: 'mac' });
+    expect(items[0]?.hint).toBe('⌘⇧N');
+  });
+});

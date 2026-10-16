@@ -66,3 +66,25 @@ export function makeConflict(root: string): void {
   commitAll(root);
   spawnSync('git', ['merge', 'other'], { cwd: root, env: { ...process.env, ...GIT_ENV } });
 }
+
+/** A folder holding an executable `name` that sleeps `seconds` then runs the real `name`; prepend it to PATH to slow every spawn of it. */
+export function slowCommandDir(base: string, name: string, seconds: number): string {
+  const real = execFileSync('/bin/sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
+  const dir = join(base, `slow-${name}`);
+  mkdirSync(dir);
+  writeFileSync(join(dir, name), `#!/bin/sh\nsleep ${seconds}\nexec '${real}' "$@"\n`);
+  chmodSync(join(dir, name), 0o755);
+  return dir;
+}
+
+/**
+ * Start `work` and a `ms` timer together and give the order they finished in. Work that blocks the
+ * event loop finishes first however long it takes, because the timer cannot fire until it returns.
+ */
+export async function finishOrder(work: () => unknown, ms = 50): Promise<string[]> {
+  const order: string[] = [];
+  const timer = new Promise<void>((resolve) => setTimeout(() => { order.push('timer'); resolve(); }, ms));
+  const run = Promise.resolve(work()).then(() => { order.push('work'); });
+  await Promise.all([timer, run]);
+  return order;
+}

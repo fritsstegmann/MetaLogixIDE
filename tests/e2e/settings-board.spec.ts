@@ -34,14 +34,16 @@ const SWATCHES: Record<PaletteId, Record<Theme, readonly string[]>> = {
 };
 
 const ROW_HINTS = {
-  Mode: 'System follows macOS.',
+  Mode: 'System follows your OS appearance.',
   'Window opacity': 'Below 100% your desktop shows through.',
+  // Literal copy, not read back from `FONT_COPY` (the contract under test): AC1.
+  'Terminal font size': 'Every terminal uses this size. ⌘= / ⌘- / ⌘0 also change it.',
   'Keep-alive cap': 'Shells kept running at once; the oldest is closed first.',
   'Root scan depth': 'Folder levels below a root that count as projects.',
   'Max watched paths': 'File-watcher limit across all roots.',
 } as const;
 const FONTS_HINT = 'Pick an installed font or type an exact family name.';
-const NAV = ['General', 'Root directories', 'Launch commands', 'Metaproject'] as const;
+const NAV = ['General', 'Root directories', 'Launch commands', 'Environment', 'Metaproject'] as const;
 const SECTIONS = ['Appearance', 'Fonts', 'Workspace', 'Notifications'] as const;
 const SWITCHES = [
   { testId: 'notify-needs-input-toggle', label: 'When Claude needs input', key: 'notify_claude_needs_input' },
@@ -256,7 +258,8 @@ test('AC1-AC3, AC8: dialog shell geometry, semantics and footer fill in every pa
     expectPx(p.height, 640, `${at} panel height`);
     expect(await style(panel, 'border-top-left-radius')).toBe('16px');
     const panelBg = await style(panel, 'background-color');
-    expect(panelBg, `${at} panel bg`).toBe(await resolveIn(panel, 'background-color', 'var(--panel-strong)'));
+    // Command palette D1T: the panel wears the shared translucent modal material.
+    expect(panelBg, `${at} panel bg`).toBe(await resolveIn(panel, 'background-color', 'var(--modal-panel)'));
     expect(panelBg).not.toBe('rgb(31, 33, 48)');
 
     const header = title.locator('xpath=..');
@@ -449,8 +452,9 @@ test('AC9-AC12: four section headings, control order, spacing, row layout and hi
       region('Appearance').getByRole('slider', { name: 'Window opacity' }),
     ]],
     ['Fonts', [
-      region('Fonts').getByRole('combobox', { name: 'Interface' }),
-      region('Fonts').getByRole('combobox', { name: 'Terminal' }),
+      region('Fonts').getByRole('combobox', { name: 'Interface', exact: true }),
+      region('Fonts').getByRole('combobox', { name: 'Terminal', exact: true }),
+      region('Fonts').getByRole('spinbutton', { name: 'Terminal font size', exact: true }),
     ]],
     ['Workspace', NUMBERS.map((n) => region('Workspace').getByRole('spinbutton', { name: n.label, exact: true }))],
     ['Notifications', SWITCHES.map((s) => region('Notifications').getByRole('switch', { name: new RegExp(s.label, 'i') }))],
@@ -686,7 +690,7 @@ test('AC19-AC24: font rows, option list and previews', async () => {
     const at = `${palette}/${theme}`;
     for (const name of ['Interface', 'Terminal']) {
       const label = region('Fonts').getByText(name, { exact: true });
-      const input = region('Fonts').getByRole('combobox', { name });
+      const input = region('Fonts').getByRole('combobox', { name, exact: true });
       const [l, i] = [await box(label), await box(input)];
       expectPx(l.width, 110, `${at} ${name} label column`);
       expectPx(i.x - l.x, 126, `${at} ${name} column gap`);
@@ -776,7 +780,7 @@ test('AC19-AC24: font rows, option list and previews', async () => {
   await expect(terminal).not.toContainText('⎇ main');
   await expect(terminal.getByRole('img', { name: 'private-use glyph sample' })).toHaveCount(1);
   for (const name of ['Interface', 'Terminal']) {
-    const family = await style(region('Fonts').getByRole('combobox', { name }), 'font-family');
+    const family = await style(region('Fonts').getByRole('combobox', { name, exact: true }), 'font-family');
     expect(await style(dialog().getByLabel(`${name} preview`), 'font-family')).toBe(family);
   }
 });

@@ -19,8 +19,8 @@ export interface LaunchCmd {
  * binary (resolved via PATH); the rest are its arguments. `env` overrides
  * are merged onto the inherited environment. Persisted per-project in
  * `ProjectConfig.cliProfiles`; global defaults live in the settings map
- * under `default_cli_profiles`, folded in when a project has none of its
- * own.
+ * under `default_cli_profiles`. Project entries shadow same-name global
+ * entries; the remaining global profiles are also offered.
  */
 export interface CliProfile {
   /** Human name shown in the menu (also the dedupe key). */
@@ -44,10 +44,9 @@ export interface ProjectConfig {
   linkedMetaprojectProjectId?: string | null;
   notes?: string;
   /**
-   * Named CLIs the "+ new shell" menu offers for this project. When empty
-   * or absent, the global `default_cli_profiles` are shown instead. Adding
-   * an entry here is how a project "remembers" a CLI the user spawned as a
-   * one-off (Custom Command… → Save to project).
+   * Named CLIs saved for this project. These shadow same-name global
+   * `default_cli_profiles`; other global profiles remain available.
+   * Custom Command… → Save to project remembers a one-off CLI here.
    */
   cliProfiles?: CliProfile[];
   /**
@@ -55,8 +54,8 @@ export interface ProjectConfig {
    * against project cliProfiles first, then the global default_cli_profiles
    * — so "OpenAI Codex" set here will pick up the global entry if the
    * project hasn't overridden it. Null / unset → falls back to
-   * `default_launch_cmd.first/subsequent` (the classic Claude default).
-   * Lets each folder pick its own agent without editing raw argv.
+   * `default_launch_cmd.first/subsequent`. Existing custom launch variants
+   * take precedence until an explicit default choice replaces them.
    */
   defaultCliName?: string | null;
 }
@@ -102,15 +101,21 @@ export type SettingsMap = {
   'ui_font_family':                string | null;
   /** Host-installed family used by integrated terminals; null keeps the built-in stack. */
   'terminal_font_family':          string | null;
+  /** Integrated-terminal font size in px (9..28); null = never saved (effective 14, legacy migration pending). Write via settings:set-terminal-font-size only. */
+  'terminal_font_size':            number | null;
+  /** Integrated-terminal normal-text weight (100..900, step 100). null = never saved (effective 400). Write via settings:set-terminal-font-weight only, which also sets terminal_bold_weight. */
+  'terminal_font_weight':          number | null;
+  /** Integrated-terminal bold weight (100..900, step 100), heavier than terminal_font_weight (or 900 at 900). null = never saved (effective 700). Write via settings:set-terminal-bold-weight only. */
+  'terminal_bold_weight':          number | null;
   'metaproject_base_url':          string;
   /** Last-used metaproject username. Password is NEVER persisted. */
   'metaproject_last_username':     string;
   /** 30..100 — percentage. 100 = fully opaque, applied to every window. */
   'window_opacity':                number;
   /**
-   * Global fallback CLI profiles. Used when a project doesn't set its own
-   * `cliProfiles`. The first entry is treated as the "primary" one that
-   * shellIndex 0 launches on project open.
+   * Global CLI profile catalog, merged with project profiles by name.
+   * Project entries shadow same-name global entries. Automatic primary launch
+   * uses a named default or launch-command settings, not catalog order.
    */
   'default_cli_profiles':          CliProfile[];
   /** Chosen Claude permission mode; `null` = not chosen yet (first-run modal). */
@@ -119,4 +124,6 @@ export type SettingsMap = {
   'notify_claude_needs_input':     boolean;
   /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
   'notify_claude_finished':        boolean;
+  /** App-wide env variables applied to every spawn; project variables override. Write via settings:set-app-env only. */
+  'app_env':                       Record<string, string>;
 };

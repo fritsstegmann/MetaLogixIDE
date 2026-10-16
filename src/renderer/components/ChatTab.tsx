@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { usePersistedState } from '@renderer/hooks/usePersistedState';
@@ -425,7 +426,7 @@ export function ChatTab({ projectId, metaprojectProjectId, compact = false, onDi
             onChange={setComposer}
             onSubmit={() => void send()}
             disabled={!activeChannel}
-            placeholder={activeChannel ? `Message #${activeChannel.name} — ⌘/Enter to send` : 'Pick a channel first'}
+            placeholder={activeChannel ? SHORTCUT_COPY.chatPlaceholder(activeChannel.name) : 'Pick a channel first'}
             users={users}
           />
         </div>
@@ -1083,7 +1084,7 @@ function MessageRow({ m, grouped, mine, channelId, projectIdForAttachments }: { 
               className="w-full resize-none bg-[--panel-strong] border border-[--border] rounded-md px-2 py-1 text-[13px] outline-none focus:ring-1 focus:ring-[--accent]/60"
             />
             <div className="flex items-center gap-2 mt-1 text-[10px] text-[--text-muted]">
-              <span>⌘/Enter to save · Esc to cancel</span>
+              <span>{SHORTCUT_COPY.chatEditHint}</span>
               <button className="ml-auto text-[color:var(--accent)] hover:brightness-110" onClick={() => void saveEdit()}>Save</button>
               <button className="text-[--text-muted] hover:text-[--text]" onClick={() => { setEditing(false); setDraft(m.message); }}>Cancel</button>
             </div>

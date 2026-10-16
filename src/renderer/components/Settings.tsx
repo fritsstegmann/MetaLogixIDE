@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
+import { ModalFrame } from '@renderer/components/ModalFrame';
 import { discoverLocalFonts } from '@renderer/fonts/local-font-access';
-import { GeneralPanel } from '@renderer/components/settings/GeneralPanel';
-import { RootsPanel } from '@renderer/components/settings/RootsPanel';
-import { LaunchPanel } from '@renderer/components/settings/LaunchPanel';
-import { MetaprojectPanel } from '@renderer/components/settings/MetaprojectPanel';
-import { SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
+import { SettingsSectionPanel } from '@renderer/components/settings/SettingsSectionPanel';
+import { SETTINGS_NAV_ITEMS, SectionButton, type SettingsSection } from '@renderer/components/settings/nav-icons';
 import { versionLabel } from '@renderer/components/settings/version-label';
 import { useAppVersion } from '@renderer/hooks/useAppVersion';
 import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
+import { APP_ENV_DRAFT_KEY, type EnvDrafts } from '@renderer/hooks/useEnvDrafts';
+import { APP_ENV_COPY } from '@renderer/project-env-copy';
 
 interface FontDiscoverySession {
   readonly fontDiscovery: FontDiscoveryState;
@@ -18,26 +18,35 @@ interface FontDiscoverySession {
 interface SettingsDialogProps extends FontDiscoverySession {
   readonly section: SettingsSection;
   readonly onSection: (section: SettingsSection) => void;
+  readonly envDrafts: EnvDrafts;
   readonly version: string | null;
   readonly onClose: () => void;
 }
 
-/** Renders application settings and owns installed-font discovery for one open session. */
+interface SettingsProps {
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly section: SettingsSection;
+  readonly onSection: (section: SettingsSection) => void;
+  readonly envDrafts: EnvDrafts;
+}
+
+/** Renders application settings and owns installed-font discovery for one open session. The caller owns the active `section` (so it can open a given one) and `envDrafts` (so the app-wide env draft outlives the dialog). */
 export function Settings({
   open,
   onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}): React.JSX.Element | null {
-  const [section, setSection] = useState<SettingsSection>('general');
+  section,
+  onSection,
+  envDrafts,
+}: SettingsProps): React.JSX.Element | null {
   const version = useAppVersion();
   const fonts = useFontDiscoverySession(open);
   if (!open) return null;
   return (
     <SettingsDialog
       section={section}
-      onSection={setSection}
+      onSection={onSection}
+      envDrafts={envDrafts}
       version={version}
       onClose={onClose}
       {...fonts}
@@ -75,12 +84,13 @@ function useFontDiscoverySession(open: boolean): FontDiscoverySession {
 
 // The global :focus-visible rule would square the corners and ring the whole panel when it takes initial focus.
 const PANEL_CLASS =
-  'modal-panel relative flex h-[640px] max-h-[92vh] w-[820px] max-w-[92vw] flex-col overflow-hidden rounded-2xl bg-[--panel-strong] shadow-2xl focus-visible:rounded-2xl focus-visible:outline-none';
+  'modal-panel modal-sheet relative flex h-[640px] max-h-[92vh] w-[820px] max-w-[92vw] flex-col overflow-hidden focus-visible:rounded-2xl focus-visible:outline-none';
 
-/** The open dialog: backdrop, focus-managed panel, header, nav, the active section and the footer. */
+/** The open dialog: frosted-glass frame, focus-managed panel, header, nav, the active section and the footer. */
 function SettingsDialog({
   section,
   onSection,
+  envDrafts,
   version,
   onClose,
   fontDiscovery,
@@ -90,10 +100,12 @@ function SettingsDialog({
   const panelRef = useRef<HTMLDivElement>(null);
   const onKeyDown = useDialogFocus(panelRef);
   return (
-    <div
-      className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
-      data-testid="settings-modal"
+    <ModalFrame
+      testId="settings-modal"
+      tier="modal"
+      motion="fade"
+      layerClassName="flex items-center justify-center"
+      onDismiss={onClose}
     >
       <div
         ref={panelRef}
@@ -102,27 +114,26 @@ function SettingsDialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={PANEL_CLASS}
-        onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <SettingsHeader titleId={titleId} onClose={onClose} />
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <SettingsNav section={section} onSection={onSection} version={version} />
-          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 pb-7 pt-1 sm:pl-3 sm:pr-7">
-            {section === 'general' && (
-              <GeneralPanel
-                fontDiscovery={fontDiscovery}
-                onLoadInstalledFonts={onLoadInstalledFonts}
-              />
-            )}
-            {section === 'roots' && <RootsPanel />}
-            {section === 'launch' && <LaunchPanel />}
-            {section === 'metaproject' && <MetaprojectPanel />}
-          </div>
+          <SettingsNav
+            section={section}
+            onSection={onSection}
+            envUnsaved={envDrafts.isDirty(APP_ENV_DRAFT_KEY)}
+            version={version}
+          />
+          <SettingsSectionPanel
+            section={section}
+            envDrafts={envDrafts}
+            fontDiscovery={fontDiscovery}
+            onLoadInstalledFonts={onLoadInstalledFonts}
+          />
         </div>
         <SettingsFooter onClose={onClose} />
       </div>
-    </div>
+    </ModalFrame>
   );
 }
 
@@ -156,7 +167,7 @@ function SettingsHeader({
       <button
         type="button"
         onClick={onClose}
-        className="no-drag flex h-9 w-9 items-center justify-center rounded-[10px] text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:rounded-[10px]"
+        className="no-drag flex h-9 w-9 items-center justify-center rounded-[10px] text-[--modal-text-muted] hover:bg-[--surface-hover] hover:text-[--text] focus-visible:rounded-[10px]"
         title="Close (Esc)"
         data-testid="settings-close"
         aria-label="Close settings"
@@ -170,17 +181,18 @@ function SettingsHeader({
 interface SettingsNavProps {
   readonly section: SettingsSection;
   readonly onSection: (section: SettingsSection) => void;
+  readonly envUnsaved: boolean;
   readonly version: string | null;
 }
 
-const NAV_ITEMS: readonly { readonly section: SettingsSection; readonly label: string }[] = [
-  { section: 'general', label: 'General' },
-  { section: 'roots', label: 'Root directories' },
-  { section: 'launch', label: 'Launch commands' },
-  { section: 'metaproject', label: 'Metaproject' },
-];
+const NAV_ITEMS = SETTINGS_NAV_ITEMS;
 
-function SettingsNav({ section, onSection, version }: SettingsNavProps): React.JSX.Element {
+function SettingsNav({
+  section,
+  onSection,
+  envUnsaved,
+  version,
+}: SettingsNavProps): React.JSX.Element {
   return (
     <nav
       aria-label="Settings sections"
@@ -192,11 +204,14 @@ function SettingsNav({ section, onSection, version }: SettingsNavProps): React.J
           section={item.section}
           active={section === item.section}
           onClick={() => onSection(item.section)}
+          unsavedLabel={
+            item.section === 'env' && envUnsaved ? APP_ENV_COPY.navUnsavedLabel : undefined
+          }
         >
           {item.label}
         </SectionButton>
       ))}
-      <div className="mt-auto hidden px-3 pt-3 text-[11.5px] text-[--text-muted] sm:block">
+      <div className="mt-auto hidden px-3 pt-3 text-[11.5px] text-[--modal-text-muted] sm:block">
         {versionLabel(version)}
       </div>
     </nav>

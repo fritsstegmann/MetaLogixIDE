@@ -34,6 +34,33 @@ runtime, not resumable terminals. Cleanup removes pinned and unpinned records
 but preserves projects and settings. Previous-run records cannot consume the
 keep-alive cap or block the first terminal after restart.
 
+### Main-process responsiveness
+
+The Electron main thread also pumps the window event loop. If it stays busy
+for about 2 s (macOS) or 5 s (GNOME), the OS reports the app as not
+responding. Work that runs on a timer or once per PTY chunk must therefore
+stay cheap and must never wait on a child process.
+
+- **PTY output is coalesced.** `PtyManager` buffers each shell's output and
+  emits one `data` event per shell every `OUTPUT_FLUSH_MS` (5 ms)
+  (`src/main/pty/manager.ts`). Each event becomes one `pty:data` send per
+  window. Pending output is flushed before the shell's `exit` event and on
+  kill, so no byte is lost or reordered.
+- **Scrollback append is O(chunk).** `RollingScrollback` keeps the raw
+  scrollback as a list of chunks with a running length and trims whole
+  chunks from the front. It joins the chunks and snaps the cut to a line
+  boundary only when `getScrollback` or `searchScrollback` reads it.
+- **Polled child processes are asynchronous.** `git:status`,
+  `git:panel-status`, `git:file-diff` and `git:diff-sides` run git through
+  the async `runGit` (`src/main/git/run-git.ts`). The `shells:live-stats`
+  sampler runs `ps` through async `execFile`. Async replies can arrive out
+  of order, so every git poller in the renderer (`useGitStatus`,
+  `usePanelStatus` in `GitPanel.tsx`, `useGitChanges`) uses
+  `createRequestGate`: it applies only the latest request's reply and
+  skips a poll tick while a request is in flight. Git commands that the user
+  starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
+  use `spawnSync`; this is a known gap, recorded as a follow-up.
+
 ## Components
 
 ### Coding-agent CLI profiles
@@ -59,14 +86,52 @@ Icon sources: [Pi favicon](https://pi.dev/favicon.svg) and
 Project profiles override global profiles (`src/main/domain/launch.ts:14-18`).
 
 Click a profile to open a new terminal tab.
-Use its star button to select it as the folder's automatic launch command.
-Clear the star to restore the global launch command.
+Use its star button to select the project's default agent.
+Clear the star to use the global launch commands.
 The existing shell launch, environment, tab, and popout paths apply to these agents.
 Pi and oh-my-pi use bare `pi` and `omp` commands on both first and subsequent launches.
 They do not receive Claude-specific permission flags or hooks.
 
 Upstream CLI references: [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
 and [oh-my-pi](https://github.com/can1357/oh-my-pi/blob/main/docs/cli-reference.md).
+
+### Project settings and default agent
+
+The **Project settings** tab sits immediately after **Env**.
+It shows the target project's name, path, and **Default agent** field.
+It shows a selection prompt only when neither an explicit target nor a selected project exists.
+The sidebar's **Project settings…** context action can target an inactive project without selecting it or starting its shell
+(`src/renderer/App.tsx`, `src/renderer/components/Sidebar.tsx`).
+
+The field uses the merged project and global CLI profile catalog.
+This includes **Pi** (`pi`) and **oh-my-pi** (`omp`).
+Project profiles shadow global profiles with the same name.
+**Use global default** selects no named profile.
+It uses the current global first-launch or subsequent-launch command, not a fixed profile
+(`src/main/domain/launch.ts:14-18,36-52`).
+
+Changes save immediately through `shells:set-default-cli`.
+The settings field and star control use the same validated operation.
+It updates only `defaultCliName` and `launchCmd` in the project's configuration.
+An explicit choice or reset clears both legacy custom launch-command variants.
+The field explains this replacement before the user acts.
+A separate replacement button applies the current choice when legacy commands still override it.
+Opening the tab does not write or migrate configuration
+(`src/main/domain/project-default-agent.ts`, `src/renderer/project-default-agent-store.ts`).
+
+The per-tab store captures the target project ID and retains the last confirmed choice.
+It disables overlapping saves and ignores results after the session disconnects.
+A failed save restores the confirmed display and shows an error.
+A missing saved profile remains visible as unavailable.
+Without a legacy custom override, automatic launch falls back to the global command.
+Saving an inactive project's settings does not replace the active project's state
+(`src/renderer/project-default-agent-store.ts:91-128`, `src/renderer/App.tsx:729-731`).
+
+Changing the default does not restart or replace a running terminal.
+The next new automatic primary launch uses the saved choice.
+Named profiles use their configured command on both first and subsequent launches.
+Explicit profile launches and plain terminals keep their existing behavior.
+The SQLite schema and IPC channel names do not change.
 
 ### IDE themes
 
@@ -92,7 +157,7 @@ Existing terminals refresh their foreground, cursor, selection, and ANSI colors
 when either document theme attribute changes.
 Mermaid diagrams render again on palette changes, including changes between
 palettes with the same light/dark appearance. Explicit diagram themes remain independent.
-The Command Palette also provides commands for all three palettes.
+The command palette also provides commands for all three palettes.
 
 Each palette card in Settings previews its own palette, whichever palette is
 active. The previews are literal colours in
@@ -138,7 +203,7 @@ appearances inherit it:
 |---|---|
 | `--surface-hover`, `--surface-active`, `--surface-field` | Hover, selected and input fills, mixed from `--text`. |
 | `--accent-soft`, `--accent-soft-text` | Selected tabs, nav items, the active project and soft primary buttons. |
-| `--surface-raised` | Floating lists over a dialog, such as the font list. It is the dialog surface mixed with white, so it is always lighter than the dialog. |
+| `--surface-raised` | Floating lists over a dialog, such as the font list. Inside a modal (`.modal-sheet`) it is the opaque modal panel colour mixed with white by `--modal-raised-lift` (8% dark, 30% light), so it is always lighter than the glass. |
 | `--switch-off` | The track of a switch that is off. |
 | `--hue-yellow`, `--hue-purple`, `--hue-cyan`, `--hue-pink`, `--hue-orange` | Semantic accents: dirty branch, Board icon, ahead/behind, task badge, Diff count. A palette's `--term-*` colour wins; otherwise the `-default` value for the appearance applies. |
 | `--hue-orange-text` | Small coloured text, such as the Diff count. |
@@ -172,6 +237,13 @@ rescan flows. With `autoFocus`, `ContextMenu` focuses its first enabled item,
 and moves with the arrow keys; `SidebarHeader` returns focus to "+" when the menu closes. Copy and
 test ids live in `src/renderer/sidebar-copy.ts`.
 
+Rescan (and the automatic rescan at startup) adds newly discovered folders and
+drops projects whose folder no longer exists
+(`src/main/domain/prune-missing.ts`). Deleting a project row cascades to its
+saved shells, recents and prompts, so pruning skips a root whose own folder is
+missing (an unmounted drive must not empty it) and any project that still has
+a live shell.
+
 Section headers (In use, Recents, Projects) align with the filter field and
 show a chevron on the right. The full list is titled "Projects" but stores its
 collapsed state under the legacy key "All projects", so existing state
@@ -192,6 +264,125 @@ and palettes. Root labels are abbreviated by `src/renderer/abbreviate-path.ts`:
 the macOS home becomes `~`, leading segments shrink to their first character,
 and the last segment stays whole (`~/P/P/acme`). The tooltip shows the full
 path.
+
+### Command palette
+
+One palette (`src/renderer/components/CommandPalette.tsx`) replaces the
+project switcher, the separate command palette and the file finder. It lists
+projects, the app's commands, one "Settings: <section>" entry per Settings
+section, and the project's files.
+
+The first character of the query selects the mode:
+
+| Prefix | Mode | Lists |
+|---|---|---|
+| none | all | projects, commands, Settings entries (never files) |
+| `#` | projects | projects only |
+| `>` | commands | commands and Settings entries |
+| `@` | files | files of the selected project |
+
+Shortcuts: ⌘K (Ctrl+K on Linux and Windows) toggles the palette with an empty
+query, ⌘⇧P opens it with `>`, and ⌘P opens it with `@`. See Keyboard shortcuts
+for the platform modifier and what changes while a terminal has focus. Pressing ⌘⇧P or ⌘P while it is open
+switches its mode. The status bar keeps one hint, a button that opens the
+palette. The palette opens above any other open modal; Esc closes only the
+palette.
+
+Groups keep a fixed order (projects, then the command categories Go, Project,
+View, Shell, Theme, App, then Settings); within a group, rows are ordered by
+match quality. At most 50 rows render (40 in file mode). Commands that need a
+selected project are hidden when there is none. Choosing a project uses the
+same pick path as the sidebar; choosing the current one closes the palette and
+focuses its terminal. A command runs after the palette closes, and a failure
+raises an error toast. Closing returns focus to where it was before the palette
+opened, unless a project or file pick, or a modal a command opened, has
+already placed it (`restoresOpenerOnClose` in `palette-run.ts`).
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/renderer/command-palette-contract.ts` | Types, copy, test ids, group order and row caps shared by the component, App, the unit tests and the E2E suite. |
+| Logic | `src/renderer/palette-keys.ts` | Maps a keydown and the platform to toggle, open with a seed, swallow (other mod-chords while open) or pass. |
+| Logic | `src/renderer/palette-commands.ts` | Builds the command list from App's actions, including the Settings entries and the two new-terminal commands. |
+| Logic | `src/renderer/palette-query.ts`, `palette-search.ts`, `palette-run.ts` | Prefix parsing, fuzzy search (fuse.js) into groups, rows and empty states, and safe command execution. Pure. |
+| Adapter | `src/renderer/hooks/usePaletteFiles.ts` | Loads the file list (`files:list-all`, 5000-file cap) on entering file mode and reuses it until the palette closes. |
+| Presentation | `src/renderer/components/CommandPalette.tsx`, `components/palette/*` | Input (combobox with `aria-activedescendant`), listbox, rows, footer with key hints and the prefix legend. |
+| Composition | `src/renderer/App.tsx` | Holds the open request (`{ seq, seed }`; a new `seq` re-seeds an open palette) and routes keys, project picks and file picks. |
+
+### Keyboard shortcuts
+
+The app uses one platform modifier. On macOS it is ⌘ and Ctrl does not count.
+On Linux and Windows it is Ctrl and Super does not count. Every app shortcut
+matches on that modifier only, and Alt chords never match.
+
+The renderer learns the platform from the preload, which exposes
+`process.platform` as `window.api.platform`. `shortcut-platform.ts` reads it
+once, at module load, so the first render already has the right labels. With
+no bridge (unit tests in node) it falls back to macOS.
+
+Labels come from one platform-neutral definition in `SHORTCUTS`. macOS shows
+glyphs in the order ⌃⌥⌘⇧ (`⌘⇧O`). Linux and Windows show text in the order
+Ctrl, Alt, Shift (`Ctrl+Shift+O`), with Enter shown as `Enter`. Sentences that
+contain a shortcut (placeholders, titles, tips, a toast) live in
+`shortcut-copy.ts`. The commit box keeps "⌘Enter to commit" on macOS.
+
+While a terminal has focus on Linux and Windows, xterm's custom key handler
+decides who gets each key:
+
+| Key | Goes to | Why |
+|---|---|---|
+| Unshifted Ctrl+letter, Ctrl+\ | Shell | readline and TUI keys (history, SIGINT, reverse search) |
+| Ctrl+F | App: terminal search | taken from the shell (readline forward-char) |
+| Ctrl+K | App: command palette | taken from the shell (readline kill-line); the terminal takes focus automatically, so the palette key must work there |
+| Ctrl+Shift+P/K/O/N/T/F, Ctrl+, Ctrl+/ Ctrl+= Ctrl+- Ctrl+0 | App | an explicit allow-list; xterm sends nothing and the event bubbles |
+| Ctrl+Shift+C | Copy | writes the sanitised selection; does nothing without a selection |
+| Ctrl+Shift+V | Paste | reads the clipboard and calls `term.paste`, which honours bracketed paste |
+| Anything else | xterm default | unchanged |
+
+So Ctrl+P, Ctrl+B and Ctrl+T do nothing in the app from a focused terminal;
+the palette (Ctrl+K or Ctrl+Shift+P) reaches those commands instead. The cheat
+sheet marks those rows on Linux. On macOS, ⌘F goes to the app and every other key keeps xterm's
+default handling.
+
+The native menu is built from `buildMenuTemplate(isMac)`. The menu bar is
+hidden on Linux, but its accelerators stay live, so on Linux and Windows the
+Reload and Minimize items have no accelerator (Ctrl+R and Ctrl+M are shell
+keys). Undo, Redo and Select All keep theirs.
+
+| Layer | File | Role |
+|---|---|---|
+| Contract | `src/renderer/shortcut-contract.ts` | Platform type, key-event shape, decision-function signatures and the `SHORTCUTS` registry. |
+| Adapter | `src/preload/index.ts`, `src/renderer/shortcut-platform.ts` | Expose and resolve the platform; context and `useShortcutPlatform()`. |
+| Logic | `src/renderer/shortcut-match.ts`, `app-keys.ts`, `terminal-keys.ts` | Modifier matching, app-wide shortcuts, terminal routing and the xterm handler. Pure. |
+| Logic | `src/renderer/shortcut-format.ts`, `shortcut-copy.ts` | Label formatting and sentence copy per platform. Pure. |
+| Logic | `src/main/menu-template.ts` | Per-platform native menu template. Pure. |
+
+### Modal material
+
+Every modal uses one frosted-glass material: a full-window scrim tinted from
+`--bg` with a light blur, and a translucent panel lifted toward white with a
+heavy, saturated blur. The tokens (`--modal-*`) and classes (`.modal-scrim`,
+`.modal-layer`, `.modal-sheet`, `.modal-sheet--compact`) live at the end of
+`src/renderer/styles.css`. Muted text inside a modal uses `--modal-text-muted`
+and the highlighted row uses `--text` on `--modal-row-active`, so text keeps
+4.5:1 contrast in every palette and appearance.
+
+`src/renderer/components/ModalFrame.tsx` renders the scrim and, as its
+sibling, a pointer-transparent layer that holds the panel. They must stay
+siblings: an element with `backdrop-filter` is a Backdrop Root, so a panel
+nested inside the blurred scrim could only blur the scrim's flat tint. The
+layer therefore carries no filter, opacity or transform. A modal's test id sits
+on the layer; the scrim carries `<test id>-scrim` and receives backdrop clicks.
+
+Stacking order: other modals (z 50/51) < palette (52/53) < toasts (60) <
+permission dialog (100/101). `src/renderer/modal-glass.ts` lists every modal
+surface with its tier, motion and radius. Mouse-opened modals (Settings, New
+project, Permission mode) opt into the existing fade; keyboard-summoned ones do
+not animate.
+
+When the OS asks for reduced transparency (`prefers-reduced-transparency`),
+the panel becomes opaque and neither layer is blurred; the scrim keeps its
+tint. No theme block may set `--modal-panel` or the two filter tokens, so this
+override always applies.
 
 ### Markdown preview pipeline
 
@@ -232,6 +423,15 @@ preference preserves the compatibility stack (`src/shared/font-settings.ts:1-10`
 | Presentation | `src/renderer/components/FontControl.tsx` | One combobox per preference: installed-family search, exact-name entry, System default, preview, and status. |
 | Style adapter | `src/renderer/fonts/use-apply-ui-font.ts` | Sets the UI font through one CSS custom property. |
 | Terminal adapter | `src/renderer/terminal-font-update.ts` | Updates xterm in place, waits for readiness, and synchronizes terminal geometry. |
+| Contract | `src/shared/terminal-font-size.ts` | Defines the terminal font size key, bounds (9-28, default 14), parser, clamp, zoom step, and legacy migration rule. |
+| IO | `src/main/ipc/register.ts` | `settings:set-terminal-font-size` validates the size, writes only when unset if asked, and broadcasts `settings:changed` only when the value changed. The generic setter rejects the key. |
+| Renderer state | `src/renderer/fonts/terminal-font-size-store.ts`, `terminal-font-size-context.tsx` | One store per window: loads or migrates the size, applies changes locally first, ignores stale refreshes, and reverts with a toast on a failed save. |
+| Presentation | `src/renderer/components/settings/TerminalFontSizeControl.tsx`, `font-size-draft.ts` | The Terminal font size stepper and its pure input rules. |
+| Contract | `src/shared/terminal-font-weight.ts` | Defines the font weight and bold weight keys, the nine weights, the defaults (400 and 700), the bold rule (`derivedBoldWeight`, `isValidBoldWeight`, `boldWeightChoices`), and `resolveTerminalWeights`, which turns the stored pair into the weights in use. |
+| IO | `src/main/ipc/register.ts` | `settings:set-terminal-font-weight` validates W, derives bold in main, writes both keys in one `setMany` transaction, and broadcasts once per changed key. `settings:set-terminal-bold-weight` accepts only a bold weight heavier than the font weight in use. The generic setter rejects both keys. |
+| Renderer state | `src/renderer/fonts/terminal-font-weight-store.ts`, `terminal-font-weight-context.tsx` | One store per window for the pair: resolves the stored values without writing, applies changes locally first, re-syncs on either key, and reverts with that setting's toast on a failed save. |
+| Presentation | `src/renderer/components/settings/TerminalFontWeightControl.tsx` | The Terminal font weight and Terminal bold weight selects. |
+| Terminal adapter | `src/renderer/terminal-font-weight-apply.ts` | Maps the pair to xterm's `fontWeight` and `fontWeightBold`. |
 
 The UI preference changes inherited application text. Explicit `.font-mono`
 and Markdown code rules keep their compatibility stack
@@ -244,6 +444,25 @@ font store. The updater changes `term.options.fontFamily`, waits for the
 selected family with a bounded timeout, fits the terminal, clears stale glyph
 state, repaints all rows, and reports the resulting dimensions to the PTY
 (`src/renderer/terminal-font-update.ts:108-139`).
+
+The terminal font size follows the same store-and-broadcast path through its
+own channel. `null` in the settings store means the size was never saved; the
+first window to load then migrates the legacy `metaide.shellFontSize` value
+with `onlyIfUnset`, so concurrent windows cannot overwrite each other. Each
+`ShellTab` reads the shared size through a ref, so a change sets
+`term.options.fontSize` and forces a geometry sync instead of recreating the
+terminal (`src/renderer/components/ShellTab.tsx:398-403`). A terminal waits
+for the loaded size before it opens, within the existing 2 s layout cap.
+
+The terminal font and bold weights use the same store-and-broadcast path
+with two channels, one per user action. Main is the only place that derives
+bold from the font weight, so the stored pair is never half-written; both
+main and the renderer resolve a missing or invalid stored value with the same
+shared function. A weight change sets `fontWeight` and `fontWeightBold` in
+one `term.options` assignment (`src/renderer/components/ShellTab.tsx:408`).
+xterm repaints in place and the WebGL renderer rebuilds its glyph atlas.
+Weight does not change cell size, so there is no geometry sync or PTY
+resize. A terminal also waits for the loaded weights before it opens.
 
 ### Split shell and motion
 
@@ -279,7 +498,7 @@ Rules:
   shared 1000ms watchdog covers all holds and restarts on every hold or
   mid-fold toggle. The left terminal is never remounted by a split open
   or close.
-- Keyboard toggles (⌘B, ⌘\, palette commands) stay instant.
+- Keyboard toggles (⌘B or Ctrl+B, ⌘\ or Ctrl+\, palette commands) stay instant.
 - With reduced motion, panes and menus fade (at least 150ms) and the
   layout changes in one step. The panes read the setting live because
   motion's `useReducedMotion` reads it once per mount.
@@ -301,7 +520,7 @@ JS realm, so a module-level instance gives one owner per window.
 | Logic | `src/renderer/terminal-focus.ts` | Classifies the active element, holds the focus rules, and builds the coordinator. DOM-free. |
 | Adapter | `src/renderer/hooks/useWindowTerminalFocus.ts` | Creates the window's one `terminalFocus` coordinator. Owns the `window` `focus` and `blur` listeners and passes the overlay flag in a layout effect. This is defensive: it keeps the flag current before any later task, such as an awaited IPC reply, issues a request. React 18 already flushes passive effects at the end of a click or key commit, so the existing tests pass with either effect. |
 | Presentation | `src/renderer/components/ShellTab.tsx` | Registers its terminal, and reports when it opens, when it is used, and when it unmounts. |
-| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, forwards `shell:focus-request`, popout open and scrollback-search jumps to `requestFocus`, and project switches (sidebar, switcher, new-project dialog) to `requestProjectFocus`. |
+| Presentation | `src/renderer/App.tsx` | Computes the overlay flag, marks the left pane and the popout terminal as `primary`, forwards `shell:focus-request`, popout open and scrollback-search jumps to `requestFocus`, and project switches (sidebar, command palette, new-project dialog) to `requestProjectFocus`. |
 
 Rules:
 
@@ -407,7 +626,7 @@ to every window. Renderers never read terminal text for it.
 | Logic | `src/renderer/claude-state.ts` | Pure snapshot and delta reducers, and the worst state of a shell, a project or all shells. |
 | Presentation | `src/renderer/hooks/useClaudeStates.ts` | One store per window. Fetches the snapshot on first use, applies deltas, and fetches again on `alive-shells:changed`. |
 | Presentation | `src/renderer/components/StatusDot.tsx` | The dot: colour from `data-claude-state`, `title` and `aria-label` from the state label. |
-| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the active Project Switcher row. |
+| Style | `src/renderer/styles.css` | `--claude-idle`, `--claude-busy` and `--claude-blocked` per theme, and the 1 px white ring on the highlighted project row of the command palette. |
 
 Rules:
 
@@ -432,58 +651,104 @@ Rules:
   of the project's live shells. The "In use" header shows the worst state
   of all live shells. An inactive shell tab is grey when idle.
 
-### Project environment variables
+### Project and app-wide environment variables
 
-Each project can store environment variables. Every shell the app starts
-for the project gets them: the primary launch (first, subsequent and the
+Each project can store environment variables. The app can also store
+app-wide environment variables, which apply to every project. Every shell
+the app starts gets both: the primary launch (first, subsequent and the
 no-session fallback), plain shells, CLI profiles, custom commands and task
-runs. The user edits them in the project's Env tab, next to Shell and
-Files. The sidebar context menu item "Environment variables…" selects the
-project and opens that tab.
+runs. A project variable overrides the app-wide variable with the same name.
+
+The user edits project variables in the project's Env tab, next to Shell
+and Files. The sidebar context menu item "Environment variables…" selects
+the project and opens that tab. The user edits app-wide variables in
+Settings → Environment, after "Launch commands".
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Contract | `src/shared/project-env.ts` | Name and value rules (`envNameProblem`, `envValueProblem`) and `parseProjectEnv`, used by the editor and the IPC handler. |
-| Logic | `src/main/domain/spawn-env.ts` | `resolveSpawnEnv`: the environment overlay for one spawn, and the lookup for `${env.NAME}` in launch argv. Never reads `process.env`. |
-| Logic | `src/main/domain/launch.ts` | `resolveLaunch` takes the inherited environment and uses `resolveSpawnEnv` for the primary launch. |
-| IO | `src/main/ipc/register.ts` | `projectSpawnEnv` for the plain shell, CLI and task sites. `validatedConfigPatch` checks `projects:update-config` before it writes. That channel emits `projects:changed`. |
+| Contract | `src/shared/project-env.ts` | Name and value rules (`envNameProblem`, `envValueProblem`) and `parseEnvMap`, used by the editors and the IPC handlers. `parseProjectEnv` and `parseAppEnv` apply the same rules; only the wording of the rejection message differs. |
+| Contract | `src/shared/types.ts` → `SettingsMap['app_env']` | The stored app-wide map, in the `settings` table. Default `{}`. |
+| Logic | `src/main/domain/spawn-env.ts` | `resolveSpawnEnv`: the environment overlay for one spawn, and the lookup for `${env.NAME}` in launch argv. Takes the stored app-wide map as the required `appEnv` input. Never reads `process.env` or the settings. |
+| Logic | `src/main/domain/launch.ts` | `resolveLaunch` takes the inherited environment, reads `app_env` from the settings and uses `resolveSpawnEnv` for the primary launch. |
+| IO | `src/main/ipc/register.ts` | `projectSpawnEnv` reads `app_env` for the plain shell, CLI and task sites. `validatedConfigPatch` checks `projects:update-config` before it writes. That channel emits `projects:changed`. `settings:set-app-env` runs `parseAppEnv` before it writes, and emits `settings:changed { key: 'app_env' }` only after a successful write. The generic `settings:set` rejects the `app_env` key. |
 | Logic | `src/renderer/project-env-rows.ts` | The editor's row model: rows from the stored map, per-row problems, `canSave` and rows back to a map. |
 | Logic | `src/renderer/project-env-rows.ts` → `isDraftDirty` | Decides if a draft differs from the stored map: the ordered non-blank rows against the ordered stored entries. |
-| Presentation | `src/renderer/hooks/useEnvDrafts.ts` | Holds unsaved drafts per project, in memory only. A draft lasts until Save, Discard or app close. |
-| Presentation | `src/renderer/components/ProjectEnvTab.tsx` | The Env tab body. Reads the project fresh through `projects:list` when it mounts, edits the draft, and saves only `{ env }`. Save stays disabled until the stored values have loaded. |
-| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `diff`, `env`) and `isMainTab`, the validator for the persisted tab. |
-| Contract | `src/renderer/project-env-copy.ts` | Every string and test id of the editor. |
+| Presentation | `src/renderer/hooks/useEnvDrafts.ts` | Holds unsaved drafts per project and one app-wide draft (`APP_ENV_DRAFT_KEY`), in memory only. A draft lasts until Save, Discard or app close. `App` owns the drafts, so the app-wide draft survives closing Settings. |
+| Logic | `src/renderer/env-reveal.ts` | `createRevealTimers`: one timer for each revealed row. A revealed value masks again after `REVEAL_TIMEOUT_MS` (39 000 ms). It calls `setTimeout` and `clearTimeout` at call time, so a test clock can replace them. |
+| Logic | `src/renderer/env-clipboard.ts` | `copyEnvValue`: writes the raw value through `navigator.clipboard` and shows a toast. The toast never contains the value or the name. |
+| Logic | `src/renderer/app-env-inherited.ts` | `inheritedRows`: the app-wide rows in stored order, each marked `overridden` when the project's saved map has the same name. |
+| Presentation | `src/renderer/hooks/useRevealState.ts` | Reveal state for one mounted editor. Unmount masks every value. `clearAll` masks every value on demand. |
+| Presentation | `src/renderer/hooks/useAppEnv.ts` | `useAppEnv` reads `app_env` through `settings:get` and reads it again on `settings:changed { key: 'app_env' }`. `saveAppEnv` calls `settings:set-app-env`. |
+| Presentation | `src/renderer/components/env/EnvEditor.tsx` | The editable body that both editors share: notices, rows, Add, Save and Discard. `saveEnvRows` saves, drops the draft and then masks every value. A failed save keeps the draft and the reveal state. |
+| Presentation | `src/renderer/components/env/EnvValueField.tsx` | The masked value input with its reveal and copy buttons. |
+| Presentation | `src/renderer/components/env/InheritedEnvList.tsx` | The read-only "From app settings" list in the project Env tab. |
+| Presentation | `src/renderer/components/ProjectEnvTab.tsx` | The Env tab body. Reads the project fresh through `projects:list` when it mounts, edits the draft, and saves only `{ env }`. Save stays disabled until the stored values have loaded. Shows the inherited list below Save and Discard. |
+| Presentation | `src/renderer/components/settings/EnvironmentPanel.tsx` | Settings → Environment: `useAppEnv`, `saveAppEnv` and the shared editor. |
+| Contract | `src/renderer/main-tab.ts` | `MainTab` (`shell`, `files`, `diff`, `env`, `settings`) and `isMainTab`, the validator for the persisted tab. |
+| Contract | `src/renderer/project-env-copy.ts` | Every string and test id of both editors (`ENV_COPY`, `ENV_TESTIDS`, `APP_ENV_COPY`, `APP_ENV_TESTIDS`). |
 
 Rules:
 
 - Precedence, lowest to highest: the app's inherited environment, the
-  template env (the launch command, CLI profile or custom command env),
-  the project variables, and the Claude hook variables. `PtyManager`
-  layers the inherited environment underneath and the launch decorator
-  layers the hook variables on top.
+  app-wide variables, the template env (the launch command, CLI profile or
+  custom command env), the project variables, and the Claude hook
+  variables. `PtyManager` layers the inherited environment underneath and
+  the launch decorator layers the hook variables on top. A project cannot
+  unset an app-wide variable. It can override it, also with the empty
+  string.
+- App-wide variables use the same name and value rules as project
+  variables. Stored app-wide entries that break the rules are skipped at
+  spawn.
+- App-wide values can use `${HOME}`, `${PROJECT_PATH}`, `${PROJECT_NAME}`
+  and `${env.NAME}`. The path tokens resolve for the project being spawned.
+  In an app-wide value, `${env.NAME}` reads the inherited environment only,
+  so an app-wide variable cannot read another app-wide variable.
 - A valid name matches `^[A-Za-z_][A-Za-z0-9_]*$`, has at most 255
   characters, does not start with `METAIDE_` (any case) and is not
   `__proto__`, which a plain object would drop on save. A value must
   not contain a NUL character. An empty value sets the variable to the
   empty string. Stored entries that break these rules are skipped at spawn.
 - Project values can use `${HOME}`, `${PROJECT_PATH}`, `${PROJECT_NAME}`
-  and `${env.NAME}`. `${env.NAME}` reads the inherited environment with the
-  template env on top, in one pass. A project variable cannot read another
-  project variable. An unset name gives the empty string.
+  and `${env.NAME}`. `${env.NAME}` reads the inherited environment, then the
+  interpolated app-wide variables, then the template env, in one pass. A
+  project variable cannot read another project variable. An unset name
+  gives the empty string.
 - `${env.NAME}` in launch argv reads the final environment: inherited,
-  then template env, then project variables. On a name clash, argv sees
-  the project value. Template env values reach argv after interpolation,
+  then app-wide variables, then template env, then project variables. On a
+  name clash, argv sees the project value. Template env values reach argv after interpolation,
   so `X=${HOME}/t` gives argv the expanded path, not the literal token.
 - Template env values are interpolated as before this feature, against
   the stored project map and the template env, without the inherited
-  environment.
+  environment and without the app-wide variables
+  (`src/main/domain/launch.ts:59-62`). A template env value that uses
+  `${env.NAME}` therefore cannot read an app-wide variable, although the
+  template env ranks above the app-wide variables.
 - CLI profile and custom command env is passed as it is, without
   interpolation.
 - Saving replaces the whole map, so a removed row is gone. Shells that
   already run keep their environment. Changes apply to the next spawn.
 - Unsaved edits stay as a draft for each project when the user switches
   tab or project. The Env tab label shows `•` while a draft differs from
-  the stored values. Discard drops the draft.
+  the stored values. Discard drops the draft. The app-wide draft follows
+  the same rules. It survives a Settings section change and closing
+  Settings. The Environment nav item shows `•` while the draft differs.
+- Both editors mask every value by default, as a password field does.
+  Names are not masked. Each row has a reveal button and a copy button.
+  A revealed value masks again after 39 seconds. Each row has its own
+  timer. Removing a row masks that row. Discard, a save that succeeds, a
+  change to the stored map while no draft is open, leaving the editor,
+  selecting another project and closing Settings mask every value. In the
+  project Env tab, a change to the saved app-wide map also masks every
+  value, including the inherited rows. Reveal state is not stored.
+- Masking only hides values on screen. Values are stored as plain text in
+  the local SQLite database, and the renderer holds them in memory.
+- Copy writes the raw value, with `${…}` tokens not expanded. Copy works
+  while the value is masked and does not reveal it. The copy button is
+  disabled while the value is empty.
+- The project Env tab lists the saved app-wide variables read-only, below
+  Save and Discard. A row whose name the project's saved map also defines
+  shows "Overridden by this project". The list updates when
+  `settings:changed { key: 'app_env' }` arrives.
 - The Env tab does not count as viewing a shell for notifications.
   Switching from Env back to Shell does not focus the terminal, the same
   as switching from Files. The sidebar handler sets the tab before it
@@ -504,7 +769,7 @@ Staging and committing stay in the sidebar Git panel.
 |---|---|---|
 | Contract | `src/shared/ipc-contract.ts` | `GitChangeEntry`, `GitDiffKind`, `GitSideContent`, and the `git:panel-status`, `git:file-diff` and `git:diff-sides` channels. |
 | Logic | `src/shared/parse-git-panel-status.ts` | Parses `git status --porcelain=v1 -z` into staged, unstaged and untracked lists. Renames and copies carry `origPath`. A conflicted file goes into both lists. |
-| IO | `src/main/git/run-git.ts` | `runGit`: the only place that starts git for these channels. It adds the safety arguments and turns an output overflow or a timeout into a flag. It never returns partial output. |
+| IO | `src/main/git/run-git.ts` | `runGit`: the only place that starts git for these channels and for `git:status`. It runs git asynchronously through `execFile`, so a slow git never blocks the main thread. It adds the safety arguments and turns an output overflow or a timeout into a flag. It never returns partial output. |
 | Logic | `src/main/git/repo-path.ts` | `toRepoRelativePath` (lexical containment) and `assertWorktreeContained` (containment by real path of the parent folder). |
 | IO | `src/main/git/file-diff.ts` | `readFileDiff`: the unified diff of one entry, capped at 1 MiB (`GIT_DIFF_MAX_BYTES`). Used by the Git panel and by `readDiffSides`. |
 | IO | `src/main/git/diff-sides.ts` | `readDiffSides`: the diff plus the full old and new content of the file, each capped at 256 KiB (`HIGHLIGHT_MAX_BYTES`), for highlighting. |
@@ -575,7 +840,7 @@ links outside a diagram open through the `app:open-external` IPC channel.
    (`src/renderer/fonts/font-settings-context.tsx:39-68`).
 4. The UI adapter updates the root CSS property, or each terminal updater
    changes its existing xterm instance (`src/renderer/fonts/use-apply-ui-font.ts:12-28`,
-   `src/renderer/components/ShellTab.tsx:337-349`).
+   `src/renderer/components/ShellTab.tsx:411-416`).
 5. A terminal font change completes with fit, repaint, and PTY resize. It
    does not recreate the PTY or replay scrollback
    (`src/renderer/terminal-font-update.ts:68-105`).
@@ -607,18 +872,31 @@ links outside a diagram open through the `app:open-external` IPC channel.
    Otherwise the main window is restored and focused, and
    `shell:focus-request` is sent only while the shell is still alive.
 
-### Project environment variables at spawn
+### Project and app-wide environment variables at spawn
+
+The user saves Settings → Environment:
+
+1. `settings:set-app-env` runs `parseAppEnv` on `env`. An invalid map is
+   rejected before any write, with an error that names the key and never
+   the value.
+2. The handler writes `app_env` to the `settings` table and emits
+   `settings:changed { key: 'app_env' }`. `useAppEnv` reads the map again.
+
+The user saves the project Env tab, and a shell starts:
 
 1. The user saves the Env tab. `projects:update-config` runs
    `parseProjectEnv` on `env`. An invalid map is rejected before any write,
    with an error that names the key and never the value.
 2. `ProjectsRepo.updateConfig` merges the patch shallowly, so `env`
    replaces the stored map. The handler emits `projects:changed`.
-3. A spawn site builds its template env and calls `resolveSpawnEnv` with
-   the project, the template env and `process.env`.
-4. `resolveSpawnEnv` interpolates the valid project variables against the
-   inherited environment with the template env on top. It returns the
-   template env with the project variables on top.
+3. A spawn site builds its template env, reads `app_env` from the settings
+   and calls `resolveSpawnEnv` with the project, the template env, the
+   app-wide map and `process.env`.
+4. `resolveSpawnEnv` interpolates the valid app-wide variables against the
+   inherited environment. It interpolates the valid project variables
+   against the inherited environment, then the app-wide variables, then
+   the template env. It returns the app-wide variables, then the template
+   env, then the project variables on top.
 5. `PtyManager.spawn` starts the PTY with `process.env` underneath that
    overlay. For a Claude shell, the launch decorator adds the hook
    variables last.
@@ -691,8 +969,10 @@ clone. Two rules apply to `git:panel-status`, `git:file-diff` and
   content is read with `git cat-file blob`, which runs no textconv or
   filter.
 
-Known gaps, recorded as follow-ups: the app-wide `git:status` poll still
-runs a repository's `core.fsmonitor`. A repository's `filter.<name>.clean`
+The app-wide `git:status` poll also runs through `runGit`, so the same
+rules apply to it.
+
+Known gaps, recorded as follow-ups: a repository's `filter.<name>.clean`
 programs can still run during status, because git cannot turn them off
 for one command. `files:read` checks containment with a plain
 `startsWith` on the project path.

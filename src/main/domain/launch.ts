@@ -11,7 +11,7 @@ export interface ResolvedLaunch { argv: string[]; env: Record<string, string>; c
  * overrides shadow same-name globals, matching the merge semantics the
  * "+ new shell" menu uses. Returns null when the name doesn't resolve.
  */
-export function findCliProfile(project: Project, settings: SettingsRepo, name: string): CliProfile | null {
+export function findCliProfile(project: Project, settings: Pick<SettingsRepo, 'get'>, name: string): CliProfile | null {
   const projectHit = (project.config.cliProfiles ?? []).find((p) => p.name === name);
   if (projectHit) return projectHit;
   const globalHit  = settings.get('default_cli_profiles').find((p) => p.name === name);
@@ -20,10 +20,12 @@ export function findCliProfile(project: Project, settings: SettingsRepo, name: s
 
 /**
  * Resolves the primary launch for a project. Template env values keep their
- * legacy interpolation (raw project env ⊕ template env, no inherited env);
- * the project's own variables are layered on top by `resolveSpawnEnv`, and
- * template argv `${env.NAME}` resolves against that final environment.
- * `inherited` is the main process env at spawn time.
+ * legacy interpolation (raw project env ⊕ template env, no inherited or
+ * app-wide env); app-wide and the project's own variables are layered on top
+ * by `resolveSpawnEnv`, and template argv `${env.NAME}` resolves against that
+ * final environment. `inherited` is the main process env at spawn time.
+ * Untouched custom variants precede named profiles and global commands;
+ * an explicit default choice clears both custom variants before resolution.
  */
 export function resolveLaunch(
   project: Project,
@@ -33,12 +35,6 @@ export function resolveLaunch(
 ): ResolvedLaunch {
   const variant: LaunchVariant = project.firstLaunchedAt ? 'subsequent' : 'first';
 
-  // Resolution order:
-  //   1. Explicit per-project launchCmd (raw argv override, low-level)
-  //   2. Per-project defaultCliName → matching CLI profile (new — lets a
-  //      folder auto-launch OpenAI codex / Gemini / Aider instead of the
-  //      global Claude default)
-  //   3. Global default_launch_cmd.first/subsequent (classic Claude)
   let template: LaunchCmd;
   if (project.config.launchCmd?.[variant]) {
     template = project.config.launchCmd[variant]!;
@@ -60,7 +56,8 @@ export function resolveLaunch(
     ...paths,
     env: { ...(project.config.env ?? {}), ...(template.env ?? {}) },
   });
-  const { env, lookup } = resolveSpawnEnv({ project, templateEnv, inherited, homeDir });
+  const appEnv = settings.get('app_env');
+  const { env, lookup } = resolveSpawnEnv({ project, templateEnv, inherited, homeDir, appEnv });
 
   return {
     argv: interpolateArgv(template.argv, { ...paths, env: lookup }),
