@@ -211,7 +211,8 @@ appearances inherit it:
 | `--badge-ink` | Unused since badges became soft tints; kept for a later token cleanup. |
 
 The side panels (projects, chat, git) paint no tint of their own; they sit
-directly on `--surface-chrome`.
+directly on `--surface-chrome`. On macOS the chat column is the exception: it
+paints the solid sheet colour (see "macOS frosted chrome").
 
 **Title bar.** The main and popout title bars are 44px tall. The main title
 bar centres `TitleGroup` (`src/renderer/components/TitleGroup.tsx`): the
@@ -219,7 +220,7 @@ selected project's name and its branch in `--hue-pink`, or "MetaLogix IDE"
 when no project is selected. The branch uses the status bar's rule
 (`git.branch`, or `HEAD` when detached). The group sits in a box inset 130px
 from both edges, so it stays centred on the window and clear of the traffic
-lights and the buttons. On macOS, `src/main/index.ts` sets
+lights and the buttons. On macOS, `platformChrome` in `src/main/window-chrome.ts` sets
 `trafficLightPosition: { x: 12, y: 14 }` for both window types, which centres
 the lights on the 44px bar. The title-bar buttons are 32px with 3px right
 padding, so the last glyph ends 12px from the edge and mirrors the lights.
@@ -264,6 +265,76 @@ and palettes. Root labels are abbreviated by `src/renderer/abbreviate-path.ts`:
 the macOS home becomes `~`, leading segments shrink to their first character,
 and the last segment stays whole (`~/P/P/acme`). The tooltip shows the full
 path.
+
+### macOS frosted chrome
+
+On macOS the window sits on the native `sidebar` vibrancy material, and the
+chrome lets that material show through. The working area stays solid unless
+the user turns on the Frosted terminal setting. Windows and Linux are
+unchanged.
+
+**Layers.** All mac styling lives in `src/renderer/frosted-chrome.css`,
+imported after `styles.css`. Every selector starts with
+`:root[data-platform="mac"]`, so no rule can match off macOS;
+`frosted-chrome-css.test.ts` enforces this. `styles.css` is not changed by
+this layer. On macOS:
+
+| Layer | Paint |
+|---|---|
+| `html`, `body` | Transparent. `--bg` is not redeclared, so tokens derived from it (the modal scrim) keep their values. |
+| Chrome root (`[data-chrome-root]`) | `--surface-chrome`: the opaque `--chrome-solid` at `--chrome-glass-alpha` (0.805 to 0.87 per palette and theme). |
+| Main and popout sheet, chat column (`[data-view="chat"]`) | `--sheet-solid`, alpha 1. |
+| Sheet while a shell shows (`[data-sheet-content="shell"]`), setting ON | `--surface-terminal`: `--sheet-solid` at `--terminal-live-alpha`. |
+| Split-shell cards | `--surface-pane`: `--pane-solid`, at the terminal alpha when the setting is ON. |
+| Raw `--panel`, `--panel-strong`, `--chat-surface` | Same colour, alpha 1, so menus, popovers and inputs are never more translucent than before. |
+
+Hover, selected and active fills (`--surface-hover`, `--surface-active`,
+`--accent-soft`) on the chrome are opaque chips mixed into `--chrome-solid`, so
+text on a selected row keeps its contrast. The sheet and the chat column
+restore the palette values from `*-base` tokens captured on `:root`.
+
+**Glass invariant.** Palette blocks set only the solid colours, the alphas and
+the label lifts. `--surface-chrome`, `--surface-terminal` and `--surface-pane`
+each have exactly two declarations: the base rule and the Reduce transparency
+override. A count test enforces this, as for the modal glass. The setting
+switches one root token, `--terminal-live-alpha`, so the count stays at two.
+
+**Reduce transparency.** `@media (prefers-reduced-transparency: reduce)` maps
+the three glass surfaces to their solid sources. It reads only the media
+query, never the stored setting, so the stored value is never changed.
+
+**Contrast envelope.** The material colour is unknown, so floors are proven
+over the black-to-white range (`REFERENCE_MATERIALS`):
+`frosted-chrome-contrast.test.ts` runs the cascade of both stylesheets and
+flattens each surface over 18 greys. Text needs 4.5:1, icons and indicators
+3:1. The visible effect, `(1 − total alpha) × 255` per channel, must be at
+least 32, which caps the total alpha at 0.8745. The terminal alpha multiplies
+the chrome alpha, so `--terminal-glass-alpha` is small (0 to 0.18). Muted and
+label text on the chrome and on the frosted terminal may be lifted
+(`--chrome-text-muted`, `--terminal-text-muted`, `--chrome-chip-text`) to keep
+the floor. In catppuccin light, the chrome uses a darker `--hue-cyan` for the
+ahead count; `--term-cyan` is unchanged. Colours that were already below their
+floor at `main@26eed37` are pinned in the test as known debt; the test fails
+if the list grows or if a pinned pair starts to pass. ANSI colours are not
+tested.
+
+**Root flags.** `src/renderer/root-flags.ts` sets `data-platform="mac"` (darwin
+only) and `data-frost-terminal` on `<html>`. `main.tsx` calls it before React
+renders, because the CSP forbids an inline script. Attribute names live in
+`src/renderer/frosted-chrome-contract.ts`.
+
+**Frosted terminal setting.** `frost_terminal` (default `false`) is written only
+through `settings:set-frost-terminal`, which rejects a non-boolean value; the
+generic `settings:set` refuses the key. The handler emits `settings:changed`,
+and `useFrostTerminalAttribute` re-reads the value in every window. For the
+first paint, main adds `frostTerminal=1|0` to the renderer URL
+(`rendererQuery` in `src/main/window-chrome.ts`, key in
+`src/shared/frost-terminal.ts`); off darwin it always sends `0`. The switch sits
+in Settings > General below Window opacity and is rendered only on macOS.
+`win.setOpacity` (window opacity) multiplies on top of all of this.
+
+**Focus.** Main and popout windows use `visualEffectState: 'followWindow'`, so
+the material goes flat when the window is not focused, as in Finder.
 
 ### Command palette
 
@@ -1076,7 +1147,9 @@ the whole side falls back to escaped plain text.
   `--bg`, painted by both `html` and `body`, over the window's vibrancy
   material. `capturePage` cannot see that material, so the palette checks
   contrast against `--bg` painted twice over black and over white
-  (`REFERENCE_MATERIALS`, `BG_LAYERS` in `paletteContract.ts`).
+  (`REFERENCE_MATERIALS`, `BG_LAYERS` in `paletteContract.ts`). On macOS the
+  sheet is opaque, so a diagram lands on `--sheet-solid`
+  (`MAC_PREVIEW_SURFACE`).
 - **KaTeX runs untrusted.** `renderMath.ts:5-10` sets `trust: false`,
   `maxSize: 20` and `maxExpand: 1000`.
 - **Own math plugin.** No maintained plugin supports `markdown-it` 14 and all
