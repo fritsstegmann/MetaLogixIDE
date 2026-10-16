@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { resolveColour } from './helpers/mermaid-palette';
 import { effectiveColours, backgroundLuminance, paintedOver, textContrast, type Theme } from './helpers/contrast';
+import { isMacPlatform } from './helpers/chrome-colour';
+import { FROST_COPY } from '../../src/renderer/frosted-chrome-contract';
 
 /**
  * Settings General board restyle (docs/specs/2026-10-06-settings-board-restyle.md).
@@ -341,9 +343,23 @@ test('AC4: focus moves to the panel, Tab is contained, and returns to the opener
   await expect(dialog().getByRole('listbox')).toHaveCount(0);
   await expect(dialog()).toBeVisible();
   await expect(input).toBeFocused();
-  // Shift+Tab: backwards to the opacity slider (Tab would open the Terminal list, whose Escape is its own).
+  // Shift+Tab: backwards to the opacity slider (Tab would open the Terminal
+  // list, whose Escape is its own). On macOS (docs/specs/macos-frosted-chrome.md
+  // D9), GeneralPanel renders the Frosted terminal switch directly below
+  // Window opacity, so the tab order there is
+  // Window opacity -> Frosted terminal -> Interface, one stop longer than
+  // off mac.
   await win.keyboard.press('Shift+Tab');
   expect(await insidePanel()).toBe(true);
+  if (await isMacPlatform(win)) {
+    const frostToggle = dialog().getByRole('switch', { name: FROST_COPY.label });
+    // Positive control: the row is actually there to land on, not absent
+    // (which would make the next assertion fail for an unrelated reason).
+    await expect(frostToggle, 'the Frosted terminal row is rendered on mac (AC13)').toBeVisible();
+    await expect(frostToggle).toBeFocused();
+    await win.keyboard.press('Shift+Tab');
+    expect(await insidePanel()).toBe(true);
+  }
   await expect(dialog().getByRole('slider', { name: 'Window opacity' })).toBeFocused();
   await win.keyboard.press('Escape');
   await expect(win.getByTestId('settings-modal')).toBeHidden();
