@@ -101,14 +101,12 @@
 }
 
 /* Where frosting lowers the styles.css focus outline below its 26eed37 contrast, the chrome draws it in solid accent. */
-:root[data-platform="mac"]
-  [data-chrome-root]
-  :is(
-    button:focus-visible,
-    a:focus-visible,
-    [role="button"]:focus-visible,
-    [tabindex]:not([tabindex="-1"]):focus-visible
-  ) {
+/* The mac prefix sits in :where() so each selector keeps its styles.css specificity and an
+ * element's own `focus-visible:outline-none` still wins. */
+:where(:root[data-platform="mac"] [data-chrome-root]) button:focus-visible,
+:where(:root[data-platform="mac"] [data-chrome-root]) a:focus-visible,
+:where(:root[data-platform="mac"] [data-chrome-root]) [role="button"]:focus-visible,
+:where(:root[data-platform="mac"] [data-chrome-root]) [tabindex]:not([tabindex="-1"]):focus-visible {
   outline-color: var(--focus-outline, color-mix(in oklab, var(--accent) 70%, transparent));
 }
 

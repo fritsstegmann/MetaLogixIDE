@@ -323,9 +323,9 @@ the floor.
 Every coloured text and indicator on the chrome is listed in the test's
 `CHROME_PAINT` inventory (D17). Each entry is held to 4.5:1 (text) or 3:1
 (indicator) in every palette and theme, with the setting OFF and ON and with
-Reduce transparency on and off. A source scan fails if a chrome component
-gains a colour class that is neither in the inventory nor listed with a
-reason. To reach the floor, each palette block sets lifted hues that only the
+Reduce transparency on and off. A source scan fails if a component already
+in the inventory gains a colour class that is neither listed nor explained. A
+new chrome component is not scanned until it is added to the inventory. To reach the floor, each palette block sets lifted hues that only the
 chrome root reads. In dark themes they are lighter, in light themes darker:
 
 - `--chrome-hue-pink`, `--chrome-hue-cyan`, `--chrome-hue-yellow` and
@@ -343,6 +343,8 @@ colour as fallback, such as `var(--git-added,#34d399)` or
 fallback renders, so nothing changes there. The keyboard focus outline reads
 `--focus-outline`. It becomes solid accent only where frosting had lowered it
 below its 26eed37 contrast: catppuccin dark, and rose-pine dark and light.
+The mac prefix of that rule sits in `:where()`, so it keeps the styles.css
+specificity and an element's own `focus-visible:outline-none` still wins.
 
 Two groups are pinned in the test as known debt:
 

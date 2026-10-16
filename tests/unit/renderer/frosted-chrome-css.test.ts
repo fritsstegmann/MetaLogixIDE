@@ -129,7 +129,8 @@ describe('frosted-chrome.css', () => {
 
   it(`gates every selector on ${GATE} (AC25a)`, () => {
     for (const rule of RULES)
-      for (const s of rule.selectors) expect(s.startsWith(GATE), s).toBe(true);
+      // A zero-specificity `:where(<gate> …)` prefix still gates the selector on mac.
+      for (const s of rule.selectors) expect(s.startsWith(GATE) || s.startsWith(`:where(${GATE}`), s).toBe(true);
   });
 
   it('uses only the light colour-scheme and Reduce transparency media queries', () => {

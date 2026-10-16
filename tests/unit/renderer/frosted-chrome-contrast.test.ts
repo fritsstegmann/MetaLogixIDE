@@ -1653,8 +1653,30 @@ describe('chrome colour inventory (D17)', () => {
         .replace(/\s*([(),])\s*/g, '$1')
         .trim();
     expect(squash(mac?.[1] ?? '')).toBe(
-      squash(`:root[data-platform="mac"] [data-chrome-root] :is(${base.join(',')})`),
+      squash(base.map((sel) => `:where(:root[data-platform="mac"] [data-chrome-root]) ${sel}`).join(',')),
     );
+  });
+
+  it('the mac focus rule adds no specificity over the styles.css focus rule', () => {
+    // The styles.css rule loses to an element's own `focus-visible:outline-none` (0,2,0). The mac
+    // prefix sits in :where(), so each mac selector keeps exactly its styles.css weight and an
+    // outline-none element stays outline-free on mac too.
+    const rule = (css: string) =>
+      /([^{}]*:focus-visible[^{}]*)\{[^}]*outline[^}]*\}/.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''));
+    const weight = (sel: string): Spec =>
+      sel
+        .replace(/:where\([^)]*\)/g, '')
+        .trim()
+        .split(/\s+/)
+        .map(specificity)
+        .reduce<Spec>((a, b) => addSpec(a, b), [0, 0, 0]);
+    const base = splitTop((rule(STYLES)?.[1] ?? '').trim(), ',');
+    const mac = splitTop((rule(FROSTED)?.[1] ?? '').trim(), ',');
+    expect(mac).toHaveLength(base.length);
+    mac.forEach((sel, i) => {
+      expect(sel, sel).not.toMatch(/:is\(/);
+      expect(weight(sel), sel).toEqual(weight(base[i] ?? ''));
+    });
   });
 
   const SOURCES = [...new Set(CHROME_PAINT.map((p) => p.src))].filter((s) => !s.endsWith('.ts'));
