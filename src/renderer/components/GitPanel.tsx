@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { isCommitShortcut } from '@renderer/app-keys';
@@ -7,6 +7,7 @@ import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { gitStatusTextClass } from '@renderer/git-status-style';
 import { unstagePaths } from '@renderer/git-unstage-paths';
 import { DIFF_COPY } from '@renderer/diff-tab-copy';
+import { createRequestGate } from '@renderer/diff/diff-load-state';
 import type { GitChangeEntry } from '@shared/ipc-contract';
 
 type FileEntry = GitChangeEntry;
@@ -22,6 +23,43 @@ interface Status {
 }
 
 /**
+ * The Git panel's `git:panel-status` for `projectId`: fetched on mount and on project change, then
+ * polled every 3s so external `git` commands (from the shell) show up. `status` is null while there
+ * is no project, before the first answer, or after a failed request; `refresh` refetches now. Only
+ * the latest request's response (or failure) is applied, so a slow answer for a previous project or
+ * an older poll never overwrites newer lists; a poll tick is skipped while a request is in flight.
+ */
+export function usePanelStatus(projectId: number | null): { status: Status | null; refresh: () => Promise<void> } {
+  const [status, setStatus] = useState<Status | null>(null);
+  const gateRef = useRef(createRequestGate());
+
+  const load = useCallback(async (fromPoll: boolean) => {
+    const gate = gateRef.current;
+    if (projectId == null) { gate.invalidate(); setStatus(null); return; }
+    if (fromPoll && gate.inFlight) return;
+    const seq = gate.begin();
+    try {
+      const s = await api.invoke('git:panel-status', { projectId });
+      if (gate.isLatest(seq)) setStatus(s);
+    } catch {
+      if (gate.isLatest(seq)) setStatus(null);
+    } finally {
+      gate.settle(seq);
+    }
+  }, [projectId]);
+
+  const refresh = useCallback(() => load(false), [load]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const id = window.setInterval(() => { void load(true); }, 3000);
+    return () => window.clearInterval(id);
+  }, [load]);
+
+  return { status, refresh };
+}
+
+/**
  * Compact git surface: staged / unstaged / untracked lists with per-row
  * stage-unstage buttons, a commit message input, and Commit / Push / Pull.
  * Deliberately narrow scope — this is not a diff viewer or history browser;
@@ -29,24 +67,9 @@ interface Status {
  */
 export function GitPanel({ projectId }: { projectId: number | null }) {
   const platform = useShortcutPlatform();
-  const [status, setStatus] = useState<Status | null>(null);
+  const { status, refresh } = usePanelStatus(projectId);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    if (projectId == null) { setStatus(null); return; }
-    try {
-      const s = await api.invoke('git:panel-status', { projectId });
-      setStatus(s);
-    } catch { setStatus(null); }
-  }, [projectId]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
-  // Poll every 3s so external `git` commands (from the shell) show up.
-  useEffect(() => {
-    const id = window.setInterval(refresh, 3000);
-    return () => window.clearInterval(id);
-  }, [refresh]);
 
   const untrackedAsEntries = useMemo<FileEntry[]>(
     () => (status?.untracked ?? []).map((path) => ({ path, status: '?' as const })),

@@ -25,14 +25,14 @@ function diffArgs(req: FileDiffRequest, path: string, origPath: string | undefin
 
 /**
  * Diff `req.path` in the repo at `root`: staged is HEAD vs index (with `origPath` for a rename),
- * unstaged is index vs worktree, untracked is `/dev/null` vs worktree. Throws `PathRejectedError` for a
- * path outside the project before running git, and `GitCommandError` on a timeout or a failed run.
+ * unstaged is index vs worktree, untracked is `/dev/null` vs worktree. Rejects with `PathRejectedError`
+ * for a path outside the project before running git, and `GitCommandError` on a timeout or a failed run.
  */
-export function readFileDiff(root: string, req: FileDiffRequest, deps: FileDiffDeps = defaultFileDiffDeps): FileDiffResult {
+export async function readFileDiff(root: string, req: FileDiffRequest, deps: FileDiffDeps = defaultFileDiffDeps): Promise<FileDiffResult> {
   const path = toRepoRelativePath(root, req.path);
   const origPath = req.origPath === undefined ? undefined : toRepoRelativePath(root, req.origPath);
   if (req.untracked) assertWorktreeContained(root, path, deps.realpath);
-  const r = deps.run(root, diffArgs(req, path, origPath), { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: GIT_DIFF_TIMEOUT_MS });
+  const r = await deps.run(root, diffArgs(req, path, origPath), { maxBuffer: GIT_DIFF_MAX_BYTES, timeout: GIT_DIFF_TIMEOUT_MS });
   if (r.tooLarge) return { diff: '', tooLarge: true };
   // `--no-index` exits 1 both when the sides differ (always, against /dev/null) and when it cannot read the file.
   const ok = r.status === 0 || (req.untracked === true && r.status === 1 && r.stdout.length > 0);
