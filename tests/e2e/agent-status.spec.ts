@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test';
-import headless from '@xterm/headless';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_DOT } from '../../src/shared/agent-state';
@@ -28,6 +27,7 @@ import {
   postRawHook,
   installNotificationSpy,
   notifications,
+  type Api,
 } from './helpers/claude-harness';
 
 async function paletteDot(win: Page, project: string) {
@@ -38,29 +38,6 @@ async function paletteDot(win: Page, project: string) {
     .getByRole('option')
     .filter({ has: win.getByText(project, { exact: true }) })
     .getByTestId(AGENT_DOT.testId);
-}
-
-/** Replays a PTY snapshot at its recorded geometry for failure-only screen evidence. */
-async function replayBottomRows(output: string, cols: number, rows: number): Promise<string[]> {
-  const terminal = new headless.Terminal({
-    cols,
-    rows,
-    scrollback: 5000,
-    allowProposedApi: true,
-  });
-  try {
-    await new Promise<void>((resolve) => terminal.write(output, resolve));
-    const buffer = terminal.buffer.active;
-    const visible = Math.min(8, terminal.rows);
-    return Array.from(
-      { length: visible },
-      (_, index) =>
-        buffer.getLine(buffer.baseY + terminal.rows - visible + index)?.translateToString(true) ??
-        '',
-    );
-  } finally {
-    terminal.dispose();
-  }
 }
 
 test('AC1/AC4/AC12/AC13: undecorated app-launched Claude follows its screen through five states, not contradictory hooks', async () => {
@@ -514,13 +491,31 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     // The global busy rollup above can come from OMP alone. Prove Claude's
     // *current* live screen still says working after remount/project change,
     // immediately before OMP ends, to isolate this shell transition.
-    try {
-      await expectShellState(h.win, alpha, 0, 'busy');
-    } catch (error) {
-      try {
-        const screen = await h.win.evaluate(
-          async ({ projectId }) =>
-            (
+    await expectShellState(h.win, alpha, 0, 'busy');
+    // Reproduce the CI PTY geometry through the real IPC/PTY boundary. The
+    // mock redraws its working screen on SIGWINCH, just like a live TUI.
+    const resized: unknown = await h.win.evaluate(
+      (projectId: number) =>
+        (window as unknown as { api: Api }).api.invoke('shells:resize', {
+          projectId,
+          shellIndex: 0,
+          cols: 9,
+          rows: 11,
+        }),
+      alpha,
+    );
+    expect(resized).toEqual({ ok: true });
+    // Force a real idle → working redraw at the narrow size so a cached
+    // pre-resize busy value cannot make the assertion below vacuous.
+    await sendLine(h.win, alpha, 0, '/status-ready');
+    await expectShellState(h.win, alpha, 0, 'idle');
+    await expectAgentDot(popout.getByTestId(AGENT_DOT.testId).first(), 'omp', 'busy');
+    await sendLine(h.win, alpha, 0, '/status-work');
+    await expect
+      .poll(
+        async () => {
+          const output = await h.win.evaluate(async (projectId: number) => {
+            const { output } = await (
               window as unknown as {
                 api: {
                   invoke: (
@@ -529,41 +524,15 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
                   ) => Promise<{ output: string }>;
                 };
               }
-            ).api.invoke('shells:snapshot', { projectId, shellIndex: 0 }),
-          { projectId: alpha },
-        );
-        const log = join(h.home, 'status-geometry.log');
-        const events = existsSync(log) ? readFileSync(log, 'utf8') : '';
-        const workPid = events.match(/pid=(\d+) draw work /)?.[1];
-        const ownEvents = events.split('\n').filter((line) => line.startsWith(`pid=${workPid} `));
-        const sizes = [...ownEvents.join('\n').matchAll(/cols=(\d+) rows=(\d+)/g)];
-        const lastSize = sizes.at(-1);
-        const bottom = await replayBottomRows(
-          screen.output,
-          Number(lastSize?.[1] ?? 80),
-          Number(lastSize?.[2] ?? 24),
-        );
-        console.log(
-          'Claude screen failure',
-          JSON.stringify({
-            state:
-              (await statusSnapshot(h.win)).find(
-                (shell) => shell.projectId === alpha && shell.shellIndex === 0,
-              ) ?? 'missing',
-            bottom,
-            geometry: lastSize?.[0] ?? 'unrecorded (fallback 80x24)',
-            events: ownEvents,
-            snapshotEnd: screen.output.slice(-1200),
-          }),
-        );
-      } catch (diagnosticError) {
-        console.error(
-          'Claude screen diagnostic failed; original assertion follows',
-          diagnosticError,
-        );
-      }
-      throw error;
-    }
+            ).api.invoke('shells:snapshot', { projectId, shellIndex: 0 });
+            return output;
+          }, alpha);
+          return output.slice(-80);
+        },
+        { message: 'Claude PTY redraws its working screen at nine columns' },
+      )
+      .toContain('✻ Thinking…\r\nEsc to interrupt');
+    await expectShellState(h.win, alpha, 0, 'busy');
     await sendLine(h.win, alpha, omp, '/end');
     await expectAgentDot(popout.getByTestId(AGENT_DOT.testId).first(), 'omp', 'idle', 500);
     await expectShellState(h.win, alpha, 0, 'busy');
@@ -572,6 +541,9 @@ test('AC8/AC9/AC10/AC13: mixed Claude and OMP preserve per-shell names, generic 
     await sendLine(h.win, alpha, 0, '/status-ready');
     await expectAggregate(rowDot(h.win, 'alpha'), 'idle');
     await expectAggregate(inUseDot(h.win), 'idle');
+    // The app-owned PTY reports its actual size, not merely a resize ack.
+    await sendLine(h.win, alpha, 0, '/size');
+    await waitForShell(h.win, alpha, 0, 'size: 9x11');
   } finally {
     await h.close();
   }
