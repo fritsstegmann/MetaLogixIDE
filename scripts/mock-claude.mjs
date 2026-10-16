@@ -165,13 +165,31 @@ let currentStatus = null;
 /** Minimal stable Claude-like bottom screen; no hook is emitted by any /status-* command. */
 function statusScreen(kind) {
   currentStatus = kind;
+  const rows = Math.max(6, process.stdout.rows || 24);
+  if (kind === 'modernWork' || kind === 'titleWork') {
+    process.stdout.write(
+      `\x1b]0;◐ Claude Code\x07\x1b[2J\x1b[H` +
+      (kind === 'modernWork' ? `\x1b[${Math.max(1, rows - 10)};1H✢ Reading files… (3s · ↓ 120 tokens)` : '') +
+      `\x1b[${rows};1H❯ `,
+    );
+    return;
+  }
+  if (kind === 'modernApproval') {
+    process.stdout.write(
+      `\x1b]0;◐ Claude Code\x07\x1b[2J\x1b[H\x1b[${rows - 3};1H────────` +
+      `\x1b[${rows - 2};1HSelect permission mode` +
+      `\x1b[${rows - 1};1H❯ 1. Default` +
+      `\x1b[${rows};1HEnter to select · ↑↓ to navigate · Esc to cancel`,
+    );
+    return;
+  }
+  process.stdout.write('\x1b]0;✳ Claude Code\x07');
   const lines = {
     ready: ['Claude Code', '> '],
     work: ['Claude Code', '✻ Thinking…', 'Esc to interrupt'],
     approval: ['Claude Code', 'Allow Bash command?', '❯ Yes', '  No', 'Esc to cancel'],
     question: ['Claude Code', 'Do you want to continue?', '❯ Yes', '  No', 'Esc to cancel'],
   }[kind];
-  const rows = Math.max(6, process.stdout.rows || 24);
   process.stdout.write(`\x1b[2J\x1b[H\x1b[${rows - lines.length + 1};1H${lines.join('\n')}`);
 }
 
@@ -198,6 +216,12 @@ process.stdin.on('data', (chunk) => {
   if (!line.startsWith('/status-') || line === '/status-history') currentStatus = null;
   if (line === '/status-ready') {
     statusScreen('ready');
+  } else if (line === '/status-title-work') {
+    statusScreen('titleWork');
+  } else if (line === '/status-modern-work') {
+    statusScreen('modernWork');
+  } else if (line === '/status-modern-approval') {
+    statusScreen('modernApproval');
   } else if (line === '/status-work' || line === '/status-resume') {
     statusScreen('work');
   } else if (line === '/status-approval') {

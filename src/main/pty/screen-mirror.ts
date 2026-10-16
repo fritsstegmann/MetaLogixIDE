@@ -18,6 +18,7 @@ export const MIRROR_SCROLLBACK_LINES = 5000;
 export class ScreenMirror {
   private readonly term: Terminal;
   private readonly serializer = new SerializeAddon();
+  private title = '';
   private readonly pending = new Set<(value: string) => void>();
   private readonly pendingRows = new Set<() => void>();
   private disposed = false;
@@ -30,6 +31,9 @@ export class ScreenMirror {
       allowProposedApi: true,
     });
     this.term.loadAddon(this.serializer);
+    this.term.onTitleChange((title) => {
+      this.title = title;
+    });
   }
 
   /** Queue PTY output for parsing; returns without parsing it. */
@@ -59,17 +63,17 @@ export class ScreenMirror {
       });
     });
   }
-  /** Reads at most eight physical bottom viewport rows, joining only xterm-wrapped lines. */
-  liveBottomRows(): Promise<string[]> {
-    if (this.disposed) return Promise.resolve([]);
-    return new Promise<string[]>((resolve) => {
+  /** Reads a bounded live viewport sample and OSC 0/2 title after queued output parses. */
+  liveStatus(): Promise<{ rows: string[]; title: string }> {
+    if (this.disposed) return Promise.resolve({ rows: [], title: '' });
+    return new Promise<{ rows: string[]; title: string }>((resolve) => {
       const done = (): void => {
         if (this.disposed) {
-          resolve([]);
+          resolve({ rows: [], title: '' });
           return;
         }
         const buffer = this.term.buffer.active;
-        const start = buffer.baseY + Math.max(0, this.term.rows - 8);
+        const start = buffer.baseY + Math.max(0, this.term.rows - 12);
         const rows: string[] = [];
         for (let i = start; i < buffer.baseY + this.term.rows; i++) {
           const line = buffer.getLine(i);
@@ -78,7 +82,7 @@ export class ScreenMirror {
             rows[rows.length - 1] = (rows.at(-1) ?? '') + text;
           else rows.push(text);
         }
-        resolve(rows);
+        resolve({ rows, title: this.title });
       };
       this.pendingRows.add(done);
       this.term.write('', () => {
@@ -87,7 +91,6 @@ export class ScreenMirror {
       });
     });
   }
-
   /** Release the headless terminal and settle any in-flight snapshot with ''. */
   dispose(): void {
     if (this.disposed) return;

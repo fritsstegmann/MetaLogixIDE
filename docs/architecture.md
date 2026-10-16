@@ -770,18 +770,19 @@ Rules:
 ### Claude and OMP status dots
 
 The main process derives one status for each live agent shell. Claude status
-comes from current bottom terminal rows after xterm parses PTY output. OMP
-status comes from lifecycle events in the app-owned extension. Neither
-Claude hooks nor a renderer's scroll position control status dots.
+comes from the current terminal title and bounded bottom viewport after xterm
+parses PTY output. OMP status comes from lifecycle events in the app-owned
+extension. Neither Claude hooks nor a renderer's scroll position control
+status dots.
 
 | Layer | File | Responsibility |
 |---|---|---|
 | Contract | `src/shared/agent-state.ts`, `src/shared/omp-report.ts` | Define agent identity, three states, accessible labels and a versioned OMP report. |
-| Adapter | `src/main/pty/{manager,screen-mirror}.ts` | Preserve original launch identity and PTY generation. Sample the active terminal's bottom eight physical rows and join xterm-wrapped fragments. |
+| Adapter | `src/main/pty/{manager,screen-mirror}.ts` | Preserve original launch identity and PTY generation. Sample the active terminal's bottom twelve physical rows, join xterm-wrapped fragments, and capture OSC 0/2 title changes. |
 | Adapter | `src/main/agent-status/foreground-posix.ts` | Check process ancestry and the foreground process group for a manually started Claude on macOS or Linux. |
 | Adapter | `src/main/agent-status/omp-receiver.ts` | Receive bounded reports on loopback. Authenticate the current OMP spawn and reject stale reports. |
 | Adapter | `src/main/agent-status/omp-launch.ts`, `resources/omp-status-extension.js` | Add an explicit app-owned extension to direct OMP launches. Report root-session lifecycle without prompt or tool arguments. |
-| Service | `src/main/agent-status/{claude-screen,omp-session,state-tracker}.ts` | Classify current Claude screen rows, apply ordered OMP events, and publish changed shell states. |
+| Service | `src/main/agent-status/{claude-screen,omp-session,state-tracker}.ts` | Classify Claude's current title, working rows, and live confirmation forms; apply ordered OMP events and publish changed shell states. |
 | Composition | `src/main/agent-status/install.ts`, `src/main/index.ts` | Start the receiver before any launch, subscribe to PTY lifecycle, and sample Claude status every 250 ms. |
 | Transport | `src/main/ipc/register.ts`, `src/shared/ipc-contract.ts` | Send `agent-state:list` snapshots, including recognized idle agents, and `agent-state:changed` deltas to all windows. |
 | Renderer | `src/renderer/agent-state.ts`, `src/renderer/hooks/useAgentStates.ts` | Keep the current shell map, apply snapshots and deltas, and compute project/global severity. |
@@ -794,9 +795,10 @@ Rules:
   hooks. A manually started Claude requires foreground process evidence on
   macOS or Linux. Without that evidence, including on Windows, its dot
   remains idle.
-- Claude shows busy only for recognized working rows and blocked only for
-  a live known approval or question. Unknown or stale text remains idle.
-  The sampler never reads scrollback or a user-scrolled viewport.
+- Claude shows busy for a working OSC title or recognized live activity,
+  including a spinner above the persistent input box. A known current approval
+  or confirmation form takes precedence and shows blocked. Unknown or stale
+  text remains idle. The sampler never reads scrollback or a user-scrolled viewport.
 - A direct app-launched OMP loads `resources/omp-status-extension.js` with
   `-e` alongside user extensions. It clears an inherited `OMPCODE=1`
   nesting flag for this app-owned root shell. If the receiver or extension
@@ -1300,9 +1302,9 @@ the whole side falls back to escaped plain text.
   was verified by hand, not by the suite.
 - **Status authority differs from notification authority.** Claude
   notifications use authenticated `Notification`, `Stop` and
-  `UserPromptSubmit` hooks. Status dots use only the current live bottom
-  screen of a recognized Claude PTY. A plain terminal's text cannot
-  establish Claude identity. OMP dots use authenticated lifecycle reports
+  `UserPromptSubmit` hooks. Status dots use the live terminal title and
+  bounded current screen of a recognized Claude PTY. A plain terminal's text
+  cannot establish Claude identity. OMP dots use authenticated lifecycle reports
   from the app-owned extension. A reporter heartbeat repairs a missed
   transition; its lease returns stale busy or blocked status to idle.
 - **A `Stop` with background tasks is not the end of the work.** Claude
