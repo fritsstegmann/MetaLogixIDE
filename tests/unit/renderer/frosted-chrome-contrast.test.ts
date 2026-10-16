@@ -1,15 +1,22 @@
 /**
- * Contrast oracle for the macOS frosted chrome (spec macos-frosted-chrome AC1, AC2, AC4, AC5, AC9 to AC11,
- * AC14 to AC16, AC19, AC23, AC25, AC31, D13). A small cascade engine reads the real `styles.css` and
- * `frosted-chrome.css`, resolves every custom property on a modelled element tree (html, body, chrome root,
- * sheet, split card, chat column) for each palette × theme combination, with the frosted-terminal setting
- * OFF and ON and Reduce transparency off and on, then flattens the painted layers over a grey sweep of the
- * black-to-white material envelope (`REFERENCE_MATERIALS`). Custom properties resolve where they are
- * declared, as in CSS, so a token captured on `:root` keeps the root value inside a region that overrides
- * its source. Baselines are literals computed at 26eed37 and checked against the engine run without the
- * mac attribute, so a drift in either stylesheet fails here. Every coloured text and indicator on the chrome
- * is inventoried in `CHROME_PAINT` and held to its floor (D16, D17); a source scan of the chrome components
- * proves the inventory complete, and modals and overlays are proven to keep their pre-lift tokens.
+ * Contrast oracle for the macOS frosted chrome and its frosted-glass levels (spec macos-frosted-chrome AC1,
+ * AC2, AC4, AC5, AC9 to AC11, AC14 to AC16, AC19, AC23, AC25, AC31, D13; spec macos-frosted-glass-settings
+ * AC7, AC10 to AC17, AC21, AC23, AC25, AC31 to AC33, D8, D14, D16 to D18, D20). A small cascade engine reads
+ * the real `styles.css`, `frosted-chrome.css` and `frosted-glass-levels.css`, resolves every custom property
+ * on a modelled element tree (html, body, chrome root, sheet, split card, chat column, modal and overlay
+ * layers) for each palette × theme combination at every chrome level × terminal level × Reduce transparency
+ * state, then flattens the painted layers over a grey sweep of the black-to-white material envelope
+ * (`REFERENCE_MATERIALS`). Custom properties resolve where they are declared, as in CSS, so a token captured
+ * on `:root` keeps the root value inside a region that overrides its source. Frosted chrome OFF removes
+ * `data-platform="mac"`, so it is the pre-#38 `BASE` state; the stored level attributes are kept on the root
+ * here to prove the stylesheets ignore them. Baselines are literals computed at 26eed37 and checked against
+ * the engine run without the mac attribute, and `fixtures/frost-6929753.json` records every token this engine
+ * resolves at main@6929753, so Subtle is proven equal to that release. Every coloured text and indicator on
+ * the chrome is inventoried in `CHROME_PAINT` and held to its floor (D16, D17); a source scan of the chrome
+ * components proves the inventory complete. AC21: no per-material case is needed, because every vibrancy
+ * material paints some sRGB colour, each composite channel is affine in the matching backdrop channel, so a
+ * composite's luminance is monotonic in each backdrop channel and its range is bounded by the black and white
+ * composites the envelope samples; the grey sweep between them covers the non-monotonic contrast in between.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -20,17 +27,22 @@ import {
   REFERENCE_MATERIALS,
 } from '@renderer/markdown/mermaid/paletteContract';
 import { FROST_ATTR, MAC_PLATFORM, type SheetContent } from '@renderer/frosted-chrome-contract';
+import {
+  CHROME_FROST_LEVELS,
+  TERMINAL_FROST_LEVELS,
+  type ChromeFrostLevel,
+  type TerminalFrostLevel,
+} from '@shared/frosted-glass';
 import { gitStatusTextClass } from '@renderer/git-status-style';
-import { ROOT_HUE_TOKENS } from '@renderer/root-hue';
+import { ROOT_HUE_TOKENS, rootHueColour } from '@renderer/root-hue';
 import { MODAL_CLASSES } from '@renderer/modal-glass';
 import tailwindColors from 'tailwindcss/colors';
 import { hex, luminance, ratio, type Colour } from './helpers/modal-composite';
 
-const STYLES = readFileSync(resolve(__dirname, '../../../src/renderer/styles.css'), 'utf8');
-const FROSTED = readFileSync(
-  resolve(__dirname, '../../../src/renderer/frosted-chrome.css'),
-  'utf8',
-);
+const RENDERER = resolve(__dirname, '../../../src/renderer');
+const STYLES = readFileSync(resolve(RENDERER, 'styles.css'), 'utf8');
+const FROSTED = readFileSync(resolve(RENDERER, 'frosted-chrome.css'), 'utf8');
+const LEVELS = readFileSync(resolve(RENDERER, 'frosted-glass-levels.css'), 'utf8');
 
 type Spec = readonly [number, number, number];
 
@@ -328,6 +340,7 @@ function evalColour(expr: string, scope: Scope): Colour {
   if (e === 'transparent') return { c: [0, 0, 0], a: 0 };
   if (e === 'white') return { c: [1, 1, 1], a: 1 };
   if (/^#[0-9a-f]{6}$/i.test(e)) return { c: hex(e), a: 1 };
+  if (/^#[0-9a-f]{3}$/i.test(e)) return { c: hex(e.replace(/[0-9a-f]/gi, '$&$&')), a: 1 };
   const fn = /^(rgba?|color-mix)\(([\s\S]*)\)$/.exec(e);
   if (fn?.[1] === 'color-mix') {
     const [space, a, b] = splitTop(fn[2] ?? '', ',');
@@ -362,17 +375,40 @@ const COMBOS: readonly Combo[] = (['default', 'catppuccin', 'rose-pine'] as cons
     })),
 );
 
+/** Root state: `mac` is darwin with Frosted chrome ON (`data-platform="mac"`); the levels are the stored settings. */
 interface State {
   readonly mac: boolean;
-  readonly frost: boolean;
+  readonly chromeLevel: ChromeFrostLevel;
+  readonly terminalLevel: TerminalFrostLevel;
   readonly reduceTransparency: boolean;
 }
 
-const OFF: State = { mac: true, frost: false, reduceTransparency: false };
-const ON: State = { mac: true, frost: true, reduceTransparency: false };
-const BASE: State = { mac: false, frost: false, reduceTransparency: false };
+const at = (
+  chromeLevel: ChromeFrostLevel,
+  terminalLevel: TerminalFrostLevel,
+  reduceTransparency = false,
+): State => ({ mac: true, chromeLevel, terminalLevel, reduceTransparency });
 
-const RULES = [...parseRules(STYLES, 0), ...parseRules(FROSTED, 100_000)];
+const BASE: State = { mac: false, chromeLevel: 'subtle', terminalLevel: 'off', reduceTransparency: false };
+/** #38 with the Frosted terminal setting OFF and ON: chrome Subtle with terminal Off and Subtle. */
+const OFF = at('subtle', 'off');
+const ON = at('subtle', 'subtle');
+const FROSTED_TERMINAL = TERMINAL_FROST_LEVELS.filter((l) => l !== 'off');
+
+/** Every mac root state, labelled: chrome level × terminal level × Reduce transparency. */
+const MAC_STATES: readonly (readonly [string, State])[] = [false, true].flatMap((rt) =>
+  CHROME_FROST_LEVELS.flatMap((cl) =>
+    TERMINAL_FROST_LEVELS.map(
+      (tl) => [`chrome ${cl}, terminal ${tl}${rt ? ', Reduce transparency' : ''}`, at(cl, tl, rt)] as const,
+    ),
+  ),
+);
+
+const RULES = [
+  ...parseRules(STYLES, 0),
+  ...parseRules(FROSTED, 100_000),
+  ...parseRules(LEVELS, 200_000),
+];
 
 type Region = 'chrome' | 'sheet' | 'card' | 'chat' | 'modal' | 'overlay';
 
@@ -388,7 +424,8 @@ function htmlEl(combo: Combo, state: State): El {
   const attrs: Record<string, string> = { 'data-palette': combo.palette };
   if (!combo.theme.startsWith('system')) attrs['data-theme'] = combo.theme;
   if (state.mac) attrs[FROST_ATTR.platform] = MAC_PLATFORM;
-  if (state.frost) attrs[FROST_ATTR.frostTerminal] = '';
+  if (state.chromeLevel !== 'subtle') attrs[FROST_ATTR.chromeFrost] = state.chromeLevel;
+  if (state.terminalLevel !== 'off') attrs[FROST_ATTR.terminalFrost] = state.terminalLevel;
   return { tag: 'html', root: true, attrs };
 }
 
@@ -564,7 +601,8 @@ const SOURCE: Readonly<Record<string, string>> = {
  * D13: indicator tokens already below 3:1 on the opaque baseline surfaces at 26eed37, on every surface and
  * under Reduce transparency. Only pairs that still fail on the mac stack are pinned: the selected-row
  * `--agent-blocked` extension passes there now (the opaque chip, and the D17 chrome lift in rose-pine light).
- * Each pin still fails on the terminal surfaces, which D17 does not lift.
+ * Each pin still fails on at least one of its surfaces at every chrome and terminal level, which the pin tests
+ * re-check: the level lifts stop at each floor they need and never reach a pinned pair.
  */
 const D13_DEBT: readonly Pin[] = [
   ['default', 'light', '--agent-idle', 'any'],
@@ -593,13 +631,18 @@ const CHROME_INDICATORS = [
   '--agent-idle',
   '--agent-busy',
   '--agent-blocked',
-  '--accent',
+  '--accent-mark',
   '--hue-yellow',
   '--hue-pink',
   '--hue-cyan',
 ] as const;
+/** The colour an indicator token paints: accent glyphs on the chrome read `--accent-mark`, which falls back to `--accent` (D18). */
+function indicator(t: Tree, name: string): Colour {
+  return evalColour(name === '--accent-mark' ? 'var(--accent-mark, var(--accent))' : `var(${name})`, t.scope);
+}
+
 const ROW_DOTS = ['--agent-idle', '--agent-busy', '--agent-blocked'] as const;
-const TAB_INDICATORS = ['--agent-idle', '--agent-busy', '--agent-blocked', '--accent'] as const;
+const TAB_INDICATORS = ['--agent-idle', '--agent-busy', '--agent-blocked', '--accent-mark'] as const;
 
 const GIT_HUES = { M: 'amber', A: 'emerald', D: 'rose', '?': 'sky' } as const;
 type GitLetter = keyof typeof GIT_HUES;
@@ -631,450 +674,79 @@ function chromeLabels(t: Tree): [string, Colour, Colour[]][] {
 
 const baseKey = (c: Combo): `${Palette}/${Resolved}` => `${c.palette}/${c.resolved}`;
 
-describe('baseline at 26eed37 (engine without the mac attribute equals the recorded literals)', () => {
-  it.each(COMBOS)('$label', (c) => {
-    const b = BASELINE[baseKey(c)];
-    expect(compositeAlpha(tree(c, BASE, 'chrome'))).toBeCloseTo(b.chromeAlpha, 3);
-    expect(compositeAlpha(tree(c, BASE, 'sheet'))).toBeCloseTo(b.sheetAlpha, 3);
-    expect(compositeAlpha(tree(c, BASE, 'card'))).toBeCloseTo(b.cardAlpha, 3);
-    expect(visibleEffect(tree(c, BASE, 'chrome'))).toBeCloseTo(b.chromeEffect, 1);
-    const sheet = tree(c, BASE, 'sheet');
-    const card = tree(c, BASE, 'card');
-    expect(minRatio(token(sheet, '--term-fg'), composites(sheet))).toBeCloseTo(b.termFgSheet, 1);
-    expect(minRatio(token(card, '--term-fg'), composites(card))).toBeCloseTo(b.termFgCard, 1);
-  });
-
-  it('the envelope is the full black-to-white range for both themes (AC19: the inactive material lies inside it)', () => {
-    expect(REFERENCE_MATERIALS.dark).toEqual(['#000000', '#ffffff']);
-    expect(REFERENCE_MATERIALS.light).toEqual(['#000000', '#ffffff']);
-    expect(ENVELOPE[0]?.c).toEqual(hex(ENVELOPE_LO));
-    expect(ENVELOPE[ENVELOPE.length - 1]?.c).toEqual(hex(ENVELOPE_HI));
-  });
-});
-
-describe.each(COMBOS)('$label frosted chrome (AC1, AC2, AC14 to AC16, AC19)', (c) => {
-  const b = BASELINE[baseKey(c)];
-  const chrome = tree(c, OFF, 'chrome');
-
-  it(`chrome composite alpha is below the baseline ${b.chromeAlpha} (AC1)`, () => {
-    expect(compositeAlpha(chrome)).toBeLessThan(compositeAlpha(tree(c, BASE, 'chrome')));
-  });
-
-  it(`chrome shows at least ${VISIBLE_FLOOR}/255 of the material (baseline ${b.chromeEffect}) (AC2)`, () => {
-    expect(visibleEffect(chrome)).toBeGreaterThanOrEqual(VISIBLE_FLOOR);
-  });
-
-  it.each(['--text', '--text-muted'])(
-    `%s clears ${CONTRAST_TEXT}:1 on chrome across the envelope (AC14, AC15)`,
-    (name) => {
-      expect(minRatio(token(chrome, name), composites(chrome))).toBeGreaterThanOrEqual(
-        CONTRAST_TEXT,
-      );
-    },
-  );
-
-  it(`the active chip label (--accent-soft-text on --accent-soft) clears ${CONTRAST_TEXT}:1 (AC15)`, () => {
-    expect(
-      minRatio(token(chrome, '--accent-soft-text'), chip(chrome, '--accent-soft')),
-    ).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-  });
-
-  it.each(['--accent-soft', '--surface-hover'])(
-    `--text clears ${CONTRAST_TEXT}:1 on a %s row over chrome (AC14)`,
-    (fill) => {
-      expect(minRatio(token(chrome, '--text'), chip(chrome, fill))).toBeGreaterThanOrEqual(
-        CONTRAST_TEXT,
-      );
-    },
-  );
-
-  it.each(CHROME_INDICATORS.map((n) => [n]))(
-    `%s clears ${CONTRAST_GRAPHIC}:1 on chrome unless pinned (AC16)`,
-    (name) => {
-      if (exempt(c, 'chrome', name)) return;
-      expect(minRatio(token(chrome, name), composites(chrome))).toBeGreaterThanOrEqual(
-        CONTRAST_GRAPHIC,
-      );
-    },
-  );
-
-  it.each(ROW_DOTS.map((n) => [n]))(
-    `%s clears ${CONTRAST_GRAPHIC}:1 on the selected row unless pinned (AC16)`,
-    (name) => {
-      if (exempt(c, 'selected-row', name)) return;
-      expect(minRatio(token(chrome, name), chip(chrome, '--accent-soft'))).toBeGreaterThanOrEqual(
-        CONTRAST_GRAPHIC,
-      );
-    },
-  );
-
-  it.each(chromeLabels(chrome).map(([label], i) => [label, i] as const))(
-    `the %s clears ${CONTRAST_TEXT}:1 across the envelope (AC15, D16)`,
-    (_, i) => {
-      const [, fg, under] = chromeLabels(chrome)[i] as [string, Colour, Colour[]];
-      expect(minRatio(fg, under)).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-    },
-  );
-
-  it('activity-bar icons (--text-muted) clear the graphic floor (AC16)', () => {
-    expect(minRatio(token(chrome, '--text-muted'), composites(chrome))).toBeGreaterThanOrEqual(
-      CONTRAST_GRAPHIC,
-    );
-  });
-});
-
-describe.each(COMBOS)('$label working area with frosted terminal OFF (AC4, AC5)', (c) => {
-  const b = BASELINE[baseKey(c)];
-
-  it.each([
-    ['main sheet on Shell', 'sheet', 'shell'],
-    ['main sheet on Files/Diff/Env/Settings', 'sheet', 'other'],
-    ['split card', 'card', 'shell'],
-  ] as const)('%s is at least as opaque as the baseline (AC4)', (_, region, content) => {
-    const base = compositeAlpha(tree(c, BASE, region, content));
-    expect(compositeAlpha(tree(c, OFF, region, content))).toBeGreaterThanOrEqual(base - 1e-9);
-  });
-
-  it(`chat column is at least as opaque as the baseline chrome it sat on, ${b.chromeAlpha} (AC4)`, () => {
-    expect(compositeAlpha(tree(c, OFF, 'chat'))).toBeGreaterThanOrEqual(
-      compositeAlpha(tree(c, BASE, 'chat')) - 1e-9,
-    );
-  });
-
-  it.each([
-    ['sheet', b.termFgSheet],
-    ['card', b.termFgCard],
-  ] as const)(
-    `--term-fg on the %s keeps at least the baseline contrast %s (AC5)`,
-    (region, recorded) => {
-      const mac = tree(c, OFF, region);
-      const base = tree(c, BASE, region);
-      const baseline = minRatio(token(base, '--term-fg'), composites(base));
-      expect(baseline).toBeCloseTo(recorded, 1);
-      expect(minRatio(token(mac, '--term-fg'), composites(mac))).toBeGreaterThanOrEqual(baseline);
-    },
-  );
-});
-
-describe.each(COMBOS)('$label frosted terminal ON (AC9 to AC11)', (c) => {
-  const sheet = tree(c, ON, 'sheet', 'shell');
-  const card = tree(c, ON, 'card', 'shell');
-
-  it.each([
-    ['sheet', sheet, 'sheet'],
-    ['split card', card, 'card'],
-  ] as const)(
-    'the %s is less opaque than OFF and shows at least 32/255 of the material (AC9)',
-    (_, t, region) => {
-      expect(compositeAlpha(t)).toBeLessThan(compositeAlpha(tree(c, OFF, region, 'shell')));
-      expect(visibleEffect(t)).toBeGreaterThanOrEqual(VISIBLE_FLOOR);
-    },
-  );
-
-  it.each([
-    ['main sheet on Files/Diff/Env/Settings', 'sheet', 'other'],
-    ['chat column', 'chat', 'shell'],
-  ] as const)('the %s keeps its OFF alpha, at least the baseline (AC10)', (_, region, content) => {
-    const on = compositeAlpha(tree(c, ON, region, content));
-    expect(on).toBe(compositeAlpha(tree(c, OFF, region, content)));
-    expect(on).toBeGreaterThanOrEqual(compositeAlpha(tree(c, BASE, region, content)) - 1e-9);
-  });
-
-  it.each([
-    ['--term-fg', 'sheet'],
-    ['--term-fg', 'card'],
-    ['--text', 'sheet'],
-    ['--text-muted', 'sheet'],
-    ['--text-muted', 'card'],
-  ] as const)(`%s clears ${CONTRAST_TEXT}:1 on the frosted %s (AC11)`, (name, region) => {
-    const t = region === 'sheet' ? sheet : card;
-    expect(minRatio(token(t, name), composites(t))).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-  });
-
-  it(`--text clears ${CONTRAST_TEXT}:1 on the active shell tab (--surface-active) (AC11)`, () => {
-    expect(
-      minRatio(token(sheet, '--text'), chip(sheet, '--surface-active')),
-    ).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-  });
-
-  it.each(['sheet', 'card'] as const)(
-    `the cursor clears ${CONTRAST_GRAPHIC}:1 on the %s unless pinned (AC11)`,
-    (region) => {
-      if (exempt(c, 'terminal', '--term-cursor')) return;
-      const t = region === 'sheet' ? sheet : card;
-      expect(minRatio(token(t, '--term-cursor'), composites(t))).toBeGreaterThanOrEqual(
-        CONTRAST_GRAPHIC,
-      );
-    },
-  );
-
-  it.each(TAB_INDICATORS.map((n) => [n]))(
-    `tab-strip indicator %s clears ${CONTRAST_GRAPHIC}:1 unless pinned (AC11)`,
-    (name) => {
-      if (exempt(c, 'terminal', name)) return;
-      expect(minRatio(token(sheet, name), composites(sheet))).toBeGreaterThanOrEqual(
-        CONTRAST_GRAPHIC,
-      );
-    },
-  );
-});
-
-describe.each(COMBOS)('$label Reduce transparency (AC12, AC21, AC23)', (c) => {
-  describe.each([
-    ['OFF', { ...OFF, reduceTransparency: true }],
-    ['ON', { ...ON, reduceTransparency: true }],
-  ] as const)('setting %s', (_, state) => {
-    it.each(['chrome', 'sheet', 'card', 'chat'] as const)(
-      'the %s composites to alpha 1',
-      (region) => {
-        expect(compositeAlpha(tree(c, state, region))).toBeCloseTo(1, 9);
-      },
-    );
-
-    const textChecks: (readonly [Region, string])[] = [
-      ['chrome', '--text'],
-      ['chrome', '--text-muted'],
-      ['sheet', '--term-fg'],
-      ['sheet', '--text'],
-      ['card', '--term-fg'],
-    ];
-    if (state.frost) textChecks.push(['sheet', '--text-muted']);
-    it.each(textChecks)(`on the solid %s, %s clears ${CONTRAST_TEXT}:1`, (region, name) => {
-      const t = tree(c, state, region);
-      expect(minRatio(token(t, name), composites(t))).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-    });
-
-    it(`every chrome text label clears ${CONTRAST_TEXT}:1 on the solid chrome (AC15, D16)`, () => {
-      for (const [label, fg, under] of chromeLabels(tree(c, state, 'chrome')))
-        expect(minRatio(fg, under), label).toBeGreaterThanOrEqual(CONTRAST_TEXT);
-    });
-
-    it(`the cursor clears ${CONTRAST_GRAPHIC}:1 on the solid sheet unless pinned`, () => {
-      if (exempt(c, 'terminal', '--term-cursor')) return;
-      const t = tree(c, state, 'sheet');
-      expect(minRatio(token(t, '--term-cursor'), composites(t))).toBeGreaterThanOrEqual(
-        CONTRAST_GRAPHIC,
-      );
-    });
-
-    it.each(CHROME_INDICATORS.map((n) => [n]))(
-      `%s clears ${CONTRAST_GRAPHIC}:1 on the solid chrome unless pinned`,
-      (name) => {
-        if (exempt(c, 'chrome', name)) return;
-        const t = tree(c, state, 'chrome');
-        expect(minRatio(token(t, name), composites(t))).toBeGreaterThanOrEqual(CONTRAST_GRAPHIC);
-      },
-    );
-  });
-
-  it('Reduce transparency leaves the frosted-terminal attribute out of the decision: ON equals OFF (AC12)', () => {
-    for (const region of ['chrome', 'sheet', 'card', 'chat'] as const) {
-      const off = composites(tree(c, { ...OFF, reduceTransparency: true }, region));
-      const on = composites(tree(c, { ...ON, reduceTransparency: true }, region));
-      expect(on).toEqual(off);
-    }
-  });
-});
-
-const WORKING_TOKENS = [
-  '--text-muted',
-  '--accent-soft-text',
-  '--accent-soft',
-  '--surface-hover',
-  '--surface-active',
-  '--hue-cyan',
-  '--hue-pink',
-  '--hue-orange-soft',
-  '--hue-yellow',
-  '--hue-purple',
-  '--danger',
-  '--agent-idle',
-  '--agent-busy',
-  '--agent-blocked',
-  '--surface-field',
-] as const;
-
-/** The styles.css keyboard focus outline colour. */
-const FOCUS_OUTLINE_BASE = 'color-mix(in oklab, var(--accent) 70%, transparent)';
-
-/** Chrome-only tokens with no :root value: the classes that read them fall back to the off-mac colour, which the working area must get. */
-const FALLBACK_TOKENS = [
-  ['var(--accent-label, var(--accent))', 'var(--accent)'],
-  ['var(--git-ahead-chip, rgb(52 211 153 / 0.1))', 'rgb(52 211 153 / 0.1)'],
-  ['var(--git-behind-chip, rgb(251 113 133 / 0.1))', 'rgb(251 113 133 / 0.1)'],
-  [`var(--focus-outline, ${FOCUS_OUTLINE_BASE})`, FOCUS_OUTLINE_BASE],
-] as const;
-
-describe.each(COMBOS)('$label working-area tokens stay the palette values (AC10)', (c) => {
-  it.each([
-    ['main sheet on Files/Diff/Env/Settings', 'sheet', 'other', [OFF, ON]],
-    ['main sheet on Shell with the setting OFF', 'sheet', 'shell', [OFF]],
-    ['chat column', 'chat', 'shell', [OFF, ON]],
-    ['modal and command-palette layer (AC24, AC30)', 'modal', 'shell', [OFF, ON]],
-    ['popover, context menu and toast overlay (AC31)', 'overlay', 'shell', [OFF, ON]],
-  ] as const)(
-    'the %s resolves the chrome-lifted tokens back to :root',
-    (_, region, content, states) => {
-      for (const state of states) {
-        const root = tree(c, state, 'chrome');
-        const rootScope: Tree = { scope: lookupRoot(root.scope), layers: [] };
-        const t = tree(c, state, region, content);
-        for (const name of WORKING_TOKENS)
-          expect(token(t, name), name).toEqual(token(rootScope, name));
-        for (const s of GIT_LETTERS)
-          expect(evalColour(gitLetterExpr(s), t.scope).c, `git ${s}`).toEqual(
-            hex(tailwindColors[GIT_HUES[s]][400]),
-          );
-        for (const [read, fallback] of FALLBACK_TOKENS)
-          expect(evalColour(read, t.scope), read).toEqual(evalColour(fallback, rootScope.scope));
-      }
-    },
-  );
-});
-
-function lookupRoot(scope: Scope): Scope {
-  let s = scope;
-  while (s.parent) s = s.parent;
-  return s;
+interface Fixture {
+  readonly commit: string;
+  readonly exprs: readonly string[];
+  readonly values: readonly string[];
+  readonly entries: Readonly<Record<string, readonly number[]>>;
 }
 
-describe.each(COMBOS)('$label menus, popovers and inputs (AC31)', (c) => {
-  it.each(['--panel', '--panel-strong', '--chat-surface'])(
-    '%s keeps the baseline rgb at alpha 1 in chrome and sheet',
-    (name) => {
-      const base = token(tree(c, BASE, 'chrome'), name);
-      for (const region of ['chrome', 'sheet'] as const) {
-        const mac = token(tree(c, OFF, region), name);
-        expect(mac.a).toBe(1);
-        mac.c.forEach((v, i) => expect(v).toBeCloseTo(base.c[i] ?? -1, 6));
-      }
-    },
-  );
-});
+/** Every token, composite alpha and envelope-end composite the engine resolved at main@6929753, per combo × #38 state × region. */
+const FIXTURE = JSON.parse(
+  readFileSync(resolve(__dirname, 'fixtures/frost-6929753.json'), 'utf8'),
+) as Fixture;
+type RecordedState = 'off' | 'on' | 'off-rt' | 'on-rt';
+const RECORDED_REGIONS = [
+  ['chrome', 'shell'],
+  ['sheet', 'shell'],
+  ['sheet', 'other'],
+  ['card', 'shell'],
+  ['chat', 'shell'],
+  ['modal', 'shell'],
+  ['overlay', 'shell'],
+] as const satisfies readonly (readonly [Region, SheetContent])[];
 
-describe.each(COMBOS)('$label non-mac is untouched (AC25)', (c) => {
-  it.each(['chrome', 'sheet', 'card', 'chat'] as const)(
-    'without data-platform="mac" the %s matches styles.css alone, with the setting ON or OFF',
-    (region) => {
-      const stylesOnly = parseRules(STYLES, 0);
-      const env: Env = { light: c.theme === 'system-light', reduceTransparency: false };
-      for (const frost of [false, true]) {
-        const path = regionPath(
-          c,
-          { mac: false, frost, reduceTransparency: false },
-          region,
-          'shell',
-        );
-        path.forEach((_, i) => {
-          expect(cascade(RULES, path.slice(0, i + 1), env)).toEqual(
-            cascade(stylesOnly, path.slice(0, i + 1), env),
-          );
-        });
-      }
-    },
-  );
-});
+const fixed = (x: Colour): string => [...x.c, x.a].map((v) => v.toFixed(6)).join(' ');
 
-describe('pinned exemptions (D13)', () => {
-  it('pins exactly the D13 list', () => {
-    expect(D13_DEBT.map((p) => p.join(' '))).toEqual([
-      'default light --agent-idle any',
-      'catppuccin light --agent-idle any',
-      'catppuccin light --agent-busy any',
-      'catppuccin light --term-yellow any',
-      'catppuccin light --term-cursor any',
-      'rose-pine light --agent-busy any',
-      'rose-pine light --term-yellow any',
-      'rose-pine light --term-cyan any',
-    ]);
-  });
-
-  const PAINTED: Readonly<Record<string, string>> = {
-    '--term-yellow': '--hue-yellow',
-    '--term-cyan': '--hue-cyan',
-  };
-
-  /** Worst contrast of the pinned token over the surfaces the pin covers, in `state`. */
-  function worst([palette, resolved, name, surface]: Pin, state: State): number {
-    const combo = COMBOS.find((c) => c.palette === palette && c.theme === resolved) as Combo;
-    const painted = PAINTED[name] ?? name;
-    const chrome = tree(combo, state, 'chrome');
-    const sheet = tree(combo, state.mac ? { ...state, frost: true } : state, 'sheet');
-    const under: Record<Surface, () => number> = {
-      chrome: () => minRatio(token(chrome, painted), composites(chrome)),
-      'selected-row': () => minRatio(token(chrome, painted), chip(chrome, '--accent-soft')),
-      terminal: () => minRatio(token(sheet, painted), composites(sheet)),
-    };
-    const surfaces: readonly Surface[] =
-      surface === 'any' ? ['chrome', 'selected-row', 'terminal'] : [surface];
-    return Math.min(...surfaces.map((s) => under[s]()));
+/** One recorded expression resolved the way the fixture recorder resolved it: a colour, else a number, else unresolved. */
+function resolvedValue(t: Tree, cs: readonly Colour[], expr: string): string | null {
+  if (expr === '@alpha') return compositeAlpha(t).toFixed(6);
+  if (expr === '@black') return fixed(cs[0] as Colour);
+  if (expr === '@white') return fixed(cs[cs.length - 1] as Colour);
+  try {
+    return fixed(evalColour(expr, t.scope));
+  } catch {
+    try {
+      return evalNumber(expr, t.scope).toFixed(6);
+    } catch {
+      return null;
+    }
   }
+}
 
-  it.each(D13_DEBT.map((p) => [p.join(' '), p] as const))(
-    '%s still fails 3:1 at baseline',
-    (_, pin) => {
-      expect(worst(pin, BASE)).toBeLessThan(CONTRAST_GRAPHIC);
-    },
-  );
+/** The region's value for every recorded expression, keyed by expression. */
+function snapshot(t: Tree): Map<string, string | null> {
+  const cs = composites(t);
+  return new Map(FIXTURE.exprs.map((e) => [e, resolvedValue(t, cs, e)]));
+}
 
-  it.each(D13_DEBT.map((p) => [p.join(' '), p] as const))(
-    '%s still fails on the frosted mac stack (else unpin it)',
-    (_, pin) => {
-      expect(worst(pin, OFF)).toBeLessThan(CONTRAST_GRAPHIC);
-    },
-  );
-});
-
-describe('catppuccin light chrome cyan (AC16 ruling: darker on mac chrome only)', () => {
-  const combos = COMBOS.filter((c) => c.palette === 'catppuccin' && c.resolved === 'light');
-
-  it.each(combos)('$label chrome glyphs read a darker --hue-cyan than the palette', (c) => {
-    const chrome = token(tree(c, OFF, 'chrome'), '--hue-cyan');
-    const palette = token(tree(c, BASE, 'chrome'), '--hue-cyan');
-    expect(chrome.c).not.toEqual(palette.c);
-    expect(ratio(chrome, { c: [1, 1, 1], a: 1 })).toBeGreaterThan(
-      ratio(palette, { c: [1, 1, 1], a: 1 }),
-    );
+/** Expressions whose value in `state` differs from the main@6929753 recording of `recorded`, as `region expr: now != then`. */
+function fixtureMismatches(c: Combo, recorded: RecordedState, state: State): string[] {
+  return RECORDED_REGIONS.flatMap(([region, content]) => {
+    const key = `${c.label}|${recorded}|${region}|${content}`;
+    const then = FIXTURE.entries[key];
+    if (!then) return [`${key} not recorded`];
+    const now = snapshot(tree(c, state, region, content));
+    return FIXTURE.exprs.flatMap((e, i) => {
+      const was = (then[i] ?? -1) < 0 ? null : (FIXTURE.values[then[i] as number] ?? null);
+      return now.get(e) === was ? [] : [`${region}/${content} ${e}: ${now.get(e)} != ${was}`];
+    });
   });
+}
 
-  it.each(combos)('$label --term-cyan keeps its palette value everywhere', (c) => {
-    const palette = token(tree(c, BASE, 'chrome'), '--term-cyan');
-    for (const state of [OFF, ON])
-      for (const region of ['chrome', 'sheet', 'card', 'chat'] as const)
-        expect(token(tree(c, state, region), '--term-cyan')).toEqual(palette);
-  });
-});
+/** One floor check: what is measured, the measured value, and the floor it must reach. */
+type Check = readonly [string, number, number];
 
-describe('chrome text label lifts (D16: macOS chrome only, lighter in dark themes, darker in light themes)', () => {
-  it.each(GIT_LETTERS)(
-    'git status %s reads a --git-* token whose fallback is its Tailwind -400 hue, so off mac nothing changes',
-    (s) => {
-      const m = GIT_TOKEN.exec(gitStatusTextClass(s));
-      expect(m?.[1]).toMatch(/^--git-/);
-      expect(m?.[2]).toBe(tailwindColors[GIT_HUES[s]][400]);
-    },
-  );
+function failing(checks: readonly Check[]): string[] {
+  return checks
+    .filter(([, value, floor]) => !(value >= floor))
+    .map(([label, value, floor]) => `${label}: ${value.toFixed(3)} < ${floor}`);
+}
 
-  it.each(COMBOS)(
-    '$label chrome --hue-pink and the deleted letter move toward the theme pole',
-    (c) => {
-      const chrome = tree(c, OFF, 'chrome');
-      const toPole = (lifted: Colour, palette: Colour) =>
-        c.resolved === 'dark'
-          ? luminance(lifted) > luminance(palette)
-          : luminance(lifted) < luminance(palette);
-      expect(
-        toPole(token(chrome, '--hue-pink'), token(tree(c, BASE, 'chrome'), '--hue-pink')),
-      ).toBe(true);
-      expect(
-        toPole(evalColour(gitLetterExpr('D'), chrome.scope), {
-          c: hex(tailwindColors.rose[400]),
-          a: 1,
-        }),
-      ).toBe(true);
-    },
-  );
-});
+const STEP = 8;
+const EPS = 1e-9;
+/** The styles.css keyboard focus outline colour. */
+const FOCUS_OUTLINE_BASE = 'color-mix(in oklab, var(--accent) 70%, transparent)';
 
 type PaintKind = 'text' | 'graphic';
 
@@ -1180,7 +852,7 @@ const CHROME_PAINT: readonly ChromePaint[] = [
     ),
   ),
   ...ROOT_HUE_TOKENS.map((h) =>
-    paint('graphic', 'RootFolderGlyph.tsx', `root folder glyph ${h}`, `var(${h})`, []),
+    paint('graphic', 'RootFolderGlyph.tsx', `root folder glyph ${h}`, rootHueColour(h), []),
   ),
   paint('text', 'Sidebar.tsx', 'section title', 'var(--text)', ['text-[--text]']),
   paint('text', 'Sidebar.tsx', 'section title, muted', 'var(--text-muted)', [
@@ -1198,16 +870,16 @@ const CHROME_PAINT: readonly ChromePaint[] = [
     'graphic',
     'Sidebar.tsx',
     'selected project placeholder dot',
-    'var(--accent)',
-    ['bg-[color:var(--accent)]'],
+    'var(--accent-mark, var(--accent))',
+    ['bg-[color:var(--accent-mark,var(--accent))]'],
     [SELECTED_ROW],
   ),
   paint(
     'graphic',
     'Sidebar.tsx',
     'project row focus ring',
-    'var(--accent)',
-    ['focus-visible:ring-[--accent]'],
+    'var(--accent-mark, var(--accent))',
+    ['focus-visible:ring-[color:var(--accent-mark,var(--accent))]'],
     [BARE, HOVER_ROW, SELECTED_ROW],
   ),
   paint(
@@ -1394,8 +1066,8 @@ const CHROME_PAINT: readonly ChromePaint[] = [
     'graphic',
     'TasksPanel.tsx',
     'Tasks run glyph',
-    'var(--accent)',
-    ['text-[color:var(--accent)]'],
+    'var(--accent-mark, var(--accent))',
+    ['text-[color:var(--accent-mark,var(--accent))]'],
     [BARE, RAISED],
   ),
   paint('text', 'StatusBar.tsx', 'status-bar text', 'var(--text-muted)', ['text-[--text-muted]']),
@@ -1407,7 +1079,9 @@ const CHROME_PAINT: readonly ChromePaint[] = [
     ['text-[--text]', 'hover:text-[--text]', 'hover:bg-[--surface-hover]'],
     [BARE, HOVER_ROW],
   ),
-  paint('graphic', 'StatusBar.tsx', 'status-bar project dot', 'var(--accent)', ['bg-[--accent]']),
+  paint('graphic', 'StatusBar.tsx', 'status-bar project dot', 'var(--accent-mark, var(--accent))', [
+    'bg-[color:var(--accent-mark,var(--accent))]',
+  ]),
   paint('graphic', 'StatusBar.tsx', 'status-bar dirty dot', 'var(--hue-yellow)', []),
   paint('text', 'StatusBar.tsx', 'status-bar branch icon and behind count', 'var(--hue-pink)', [
     'text-[--hue-pink]',
@@ -1542,7 +1216,6 @@ const NOT_CHROME_PAINT: Readonly<Record<string, string>> = {
     'also the Commit and Rename buttons: --accent-text on a solid --accent fill, material-independent',
   'text-[--accent-text]': 'text on a solid --accent fill, material-independent',
 };
-
 const COMPONENTS = resolve(__dirname, '../../../src/renderer/components');
 const APP = readFileSync(resolve(__dirname, '../../../src/renderer/App.tsx'), 'utf8');
 
@@ -1602,48 +1275,547 @@ function paintMin(t: Tree, p: ChromePaint): number {
   );
 }
 
-const floorOf = (p: ChromePaint): number => (p.kind === 'text' ? CONTRAST_TEXT : CONTRAST_GRAPHIC);
-const MAC_STATES = [
-  ['OFF', OFF],
-  ['ON', ON],
-  ['Reduce transparency, OFF', { ...OFF, reduceTransparency: true }],
-  ['Reduce transparency, ON', { ...ON, reduceTransparency: true }],
-] as const;
 
-describe.each(COMBOS)('$label every chrome colour (D17)', (c) => {
-  describe.each(MAC_STATES)('setting %s', (_, state) => {
-    const chrome = tree(c, state, 'chrome');
-    it.each(
-      CHROME_PAINT.filter((p) => !(p.element in D17_PINS)).map((p) => [p.element, p] as const),
-    )('%s clears its floor across the envelope', (_, p) => {
-      expect(paintMin(chrome, p)).toBeGreaterThanOrEqual(floorOf(p));
+const floorOf = (p: ChromePaint): number => (p.kind === 'text' ? CONTRAST_TEXT : CONTRAST_GRAPHIC);
+
+/** Every #38 chrome floor in `state`: surface text, chips, rows, indicators, labels, the full D17 inventory and the focus outline. */
+function chromeChecks(c: Combo, state: State): Check[] {
+  const t = tree(c, state, 'chrome');
+  const env = composites(t);
+  const checks: Check[] = [
+    ['--text on chrome', minRatio(token(t, '--text'), env), CONTRAST_TEXT],
+    ['--text-muted on chrome', minRatio(token(t, '--text-muted'), env), CONTRAST_TEXT],
+    ['active chip label', minRatio(token(t, '--accent-soft-text'), chip(t, '--accent-soft')), CONTRAST_TEXT],
+    ['--text on --accent-soft row', minRatio(token(t, '--text'), chip(t, '--accent-soft')), CONTRAST_TEXT],
+    ['--text on --surface-hover row', minRatio(token(t, '--text'), chip(t, '--surface-hover')), CONTRAST_TEXT],
+  ];
+  if (!state.reduceTransparency) checks.push(['visible effect', visibleEffect(t), VISIBLE_FLOOR]);
+  for (const name of CHROME_INDICATORS)
+    if (!exempt(c, 'chrome', name))
+      checks.push([`${name} on chrome`, minRatio(indicator(t, name), env), CONTRAST_GRAPHIC]);
+  for (const name of ROW_DOTS)
+    if (!exempt(c, 'selected-row', name))
+      checks.push([`${name} on the selected row`, minRatio(token(t, name), chip(t, '--accent-soft')), CONTRAST_GRAPHIC]);
+  for (const [label, fg, under] of chromeLabels(t)) checks.push([label, minRatio(fg, under), CONTRAST_TEXT]);
+  for (const p of CHROME_PAINT)
+    if (!(p.element in D17_PINS)) checks.push([p.element, paintMin(t, p), floorOf(p)]);
+  const outline = paintMin(t, FOCUS_OUTLINE);
+  checks.push(['focus outline vs 26eed37', outline, paintMin(tree(c, BASE, 'chrome'), FOCUS_OUTLINE)]);
+  if (lookup('--focus-outline', t.scope) && token(t, '--focus-outline').a === 1)
+    checks.push(['lifted focus outline', outline, CONTRAST_GRAPHIC]);
+  return checks;
+}
+
+/** Every #38 terminal floor (AC9, AC11) on the sheet and split card in `state`, terminal frosted. */
+function terminalChecks(c: Combo, state: State): Check[] {
+  const sheet = tree(c, state, 'sheet', 'shell');
+  const card = tree(c, state, 'card', 'shell');
+  const checks: Check[] = [
+    ['--term-fg on sheet', minRatio(token(sheet, '--term-fg'), composites(sheet)), CONTRAST_TEXT],
+    ['--term-fg on card', minRatio(token(card, '--term-fg'), composites(card)), CONTRAST_TEXT],
+    ['--text on sheet', minRatio(token(sheet, '--text'), composites(sheet)), CONTRAST_TEXT],
+    ['--text-muted on sheet', minRatio(token(sheet, '--text-muted'), composites(sheet)), CONTRAST_TEXT],
+    ['--text-muted on card', minRatio(token(card, '--text-muted'), composites(card)), CONTRAST_TEXT],
+    ['--text on the active shell tab', minRatio(token(sheet, '--text'), chip(sheet, '--surface-active')), CONTRAST_TEXT],
+  ];
+  if (!state.reduceTransparency)
+    checks.push(['sheet visible effect', visibleEffect(sheet), VISIBLE_FLOOR], ['card visible effect', visibleEffect(card), VISIBLE_FLOOR]);
+  if (!exempt(c, 'terminal', '--term-cursor'))
+    checks.push(
+      ['cursor on sheet', minRatio(token(sheet, '--term-cursor'), composites(sheet)), CONTRAST_GRAPHIC],
+      ['cursor on card', minRatio(token(card, '--term-cursor'), composites(card)), CONTRAST_GRAPHIC],
+    );
+  for (const name of TAB_INDICATORS)
+    if (!exempt(c, 'terminal', name))
+      checks.push([`tab-strip ${name}`, minRatio(indicator(sheet, name), composites(sheet)), CONTRAST_GRAPHIC]);
+  return checks;
+}
+
+const BASE_TERM_FG = (c: Combo, region: 'sheet' | 'card'): number => {
+  const t = tree(c, BASE, region);
+  return minRatio(token(t, '--term-fg'), composites(t));
+};
+
+describe('baseline at 26eed37 (engine without the mac attribute equals the recorded literals)', () => {
+  it.each(COMBOS)('$label', (c) => {
+    const b = BASELINE[baseKey(c)];
+    expect(compositeAlpha(tree(c, BASE, 'chrome'))).toBeCloseTo(b.chromeAlpha, 3);
+    expect(compositeAlpha(tree(c, BASE, 'sheet'))).toBeCloseTo(b.sheetAlpha, 3);
+    expect(compositeAlpha(tree(c, BASE, 'card'))).toBeCloseTo(b.cardAlpha, 3);
+    expect(visibleEffect(tree(c, BASE, 'chrome'))).toBeCloseTo(b.chromeEffect, 1);
+    expect(BASE_TERM_FG(c, 'sheet')).toBeCloseTo(b.termFgSheet, 1);
+    expect(BASE_TERM_FG(c, 'card')).toBeCloseTo(b.termFgCard, 1);
+  });
+
+  it('the envelope is the full black-to-white range for both themes (AC19: the inactive material lies inside it)', () => {
+    expect(REFERENCE_MATERIALS.dark).toEqual(['#000000', '#ffffff']);
+    expect(REFERENCE_MATERIALS.light).toEqual(['#000000', '#ffffff']);
+    expect(ENVELOPE[0]?.c).toEqual(hex(ENVELOPE_LO));
+    expect(ENVELOPE[ENVELOPE.length - 1]?.c).toEqual(hex(ENVELOPE_HI));
+  });
+});
+
+describe('Subtle equals main@6929753 (glass-settings AC10)', () => {
+  it('the fixture was recorded from main@6929753 for every combination, #38 state and region', () => {
+    expect(FIXTURE.commit).toBe('6929753');
+    expect(Object.keys(FIXTURE.entries)).toHaveLength(COMBOS.length * 4 * RECORDED_REGIONS.length);
+    expect(FIXTURE.exprs.length).toBeGreaterThan(100);
+  });
+
+  describe.each(COMBOS)('$label', (c) => {
+    it.each([
+      ['chrome Subtle, terminal Off equals #38 setting OFF', 'off', OFF],
+      ['chrome Subtle, terminal Subtle equals #38 setting ON', 'on', ON],
+      ['under Reduce transparency, terminal Off equals #38 OFF', 'off-rt', at('subtle', 'off', true)],
+      ['under Reduce transparency, terminal Subtle equals #38 ON', 'on-rt', at('subtle', 'subtle', true)],
+    ] as const)('%s', (_, recorded, state) => {
+      expect(fixtureMismatches(c, recorded, state)).toEqual([]);
     });
   });
 });
 
-describe.each(COMBOS)(
-  '$label keyboard focus outline on chrome (D17, lead ruling: lifted only where frosting made it worse)',
-  (c) => {
-    const baseline = paintMin(tree(c, BASE, 'chrome'), FOCUS_OUTLINE);
-    it.each(MAC_STATES)(
-      `setting %s: at least the 26eed37 contrast, and ${CONTRAST_GRAPHIC}:1 wherever it is lifted`,
-      (_, state) => {
-        const t = tree(c, state, 'chrome');
-        const mac = paintMin(t, FOCUS_OUTLINE);
-        expect(mac).toBeGreaterThanOrEqual(baseline);
-        if (lookup('--focus-outline', t.scope) && token(t, '--focus-outline').a === 1)
-          expect(mac).toBeGreaterThanOrEqual(CONTRAST_GRAPHIC);
+describe.each(COMBOS)('$label Frosted chrome OFF and non-mac render pre-#38 (glass-settings AC7, AC25)', (c) => {
+  const stylesOnly = parseRules(STYLES, 0);
+  it.each([false, true])('with Reduce transparency %s, at every stored level, every region matches styles.css alone', (rt) => {
+    const env: Env = { light: c.theme === 'system-light', reduceTransparency: rt };
+    const drift: string[] = [];
+    for (const cl of CHROME_FROST_LEVELS)
+      for (const tl of TERMINAL_FROST_LEVELS)
+        for (const region of ['chrome', 'sheet', 'card', 'chat', 'modal', 'overlay'] as const) {
+            const state: State = { mac: false, chromeLevel: cl, terminalLevel: tl, reduceTransparency: rt };
+            const path = regionPath(c, state, region, 'shell');
+            path.forEach((_, i) => {
+              const got = JSON.stringify([...cascade(RULES, path.slice(0, i + 1), env)]);
+              const want = JSON.stringify([...cascade(stylesOnly, path.slice(0, i + 1), env)]);
+              if (got !== want) drift.push(`${cl}/${tl} ${region}[${i}]`);
+            });
+          }
+    expect(drift).toEqual([]);
+  });
+
+  it('every inventoried chrome paint and the focus outline resolve to BASE at every stored level', () => {
+    const base = tree(c, BASE, 'chrome');
+    for (const cl of CHROME_FROST_LEVELS)
+      for (const tl of TERMINAL_FROST_LEVELS) {
+        const t = tree(c, { ...BASE, chromeLevel: cl, terminalLevel: tl }, 'chrome');
+        for (const p of [...CHROME_PAINT, FOCUS_OUTLINE])
+          expect(evalColour(p.fg, t.scope), `${cl}/${tl} ${p.element}`).toEqual(evalColour(p.fg, base.scope));
+      }
+  });
+});
+
+describe.each(COMBOS)('$label chrome frost levels (glass-settings AC11)', (c) => {
+  const alpha = (cl: ChromeFrostLevel): number => compositeAlpha(tree(c, at(cl, 'off'), 'chrome'));
+
+  it(`chrome alpha strictly decreases Subtle > Medium > Strong, each step at least ${STEP}/255 of visible effect`, () => {
+    expect((alpha('subtle') - alpha('medium')) * 255).toBeGreaterThanOrEqual(STEP - EPS);
+    expect((alpha('medium') - alpha('strong')) * 255).toBeGreaterThanOrEqual(STEP - EPS);
+  });
+
+  it.each(CHROME_FROST_LEVELS)('chrome %s is below the 26eed37 baseline (#38 AC1)', (cl) => {
+    expect(alpha(cl)).toBeLessThan(compositeAlpha(tree(c, BASE, 'chrome')));
+  });
+});
+
+describe.each(COMBOS)('$label every chrome floor at every level (glass-settings AC12, D17)', (c) => {
+  it.each(MAC_STATES)('%s', (_, state) => {
+    expect(failing(chromeChecks(c, state))).toEqual([]);
+  });
+});
+
+/** D8, D20 (clarified): adjacent terminal levels collapsed to one total at chrome Subtle, sheet and split card alike. */
+const COLLAPSES: readonly string[] = [
+  'default/dark subtle=medium',
+  'default/dark medium=strong',
+  'default/light subtle=medium',
+  'default/light medium=strong',
+  'catppuccin/dark medium=strong',
+  'catppuccin/light subtle=medium',
+  'catppuccin/light medium=strong',
+  'rose-pine/dark medium=strong',
+  'rose-pine/light subtle=medium',
+  'rose-pine/light medium=strong',
+];
+
+describe.each(COMBOS)('$label terminal frost levels (glass-settings AC14 to AC16, D8, D16, D20)', (c) => {
+  const total = (cl: ChromeFrostLevel, tl: TerminalFrostLevel, region: 'sheet' | 'card'): number =>
+    compositeAlpha(tree(c, at(cl, tl), region, 'shell'));
+
+  describe.each(CHROME_FROST_LEVELS)('chrome %s', (cl) => {
+    const chromeAlpha = compositeAlpha(tree(c, at(cl, 'off'), 'chrome'));
+
+    it.each(['sheet', 'card'] as const)('terminal Off composites the %s to alpha 1 over the chrome (AC14)', (region) => {
+      expect(total(cl, 'off', region)).toBeCloseTo(1, 9);
+    });
+
+    it.each(['sheet', 'card'] as const)('terminal Off keeps --term-fg on the %s at least at its 26eed37 contrast (#38 AC5)', (region) => {
+      const t = tree(c, at(cl, 'off'), region);
+      expect(minRatio(token(t, '--term-fg'), composites(t))).toBeGreaterThanOrEqual(BASE_TERM_FG(c, region));
+    });
+
+    it.each(['sheet', 'card'] as const)(
+      `the %s total is Off > Subtle >= Medium >= Strong >= the chrome alpha, adjacent levels ${STEP}/255 apart or a pinned collapse`,
+      (region) => {
+        const totals = TERMINAL_FROST_LEVELS.map((tl) => total(cl, tl, region));
+        expect(totals[0]).toBeGreaterThan((totals[1] as number) + EPS);
+        const collapsed: string[] = [];
+        const tooClose: string[] = [];
+        for (let i = 1; i < 3; i++) {
+          const gap = ((totals[i] as number) - (totals[i + 1] as number)) * 255;
+          const pair = `${baseKey(c)} ${TERMINAL_FROST_LEVELS[i]}=${TERMINAL_FROST_LEVELS[i + 1]}`;
+          if (Math.abs(gap) < EPS) collapsed.push(pair);
+          else if (gap < STEP - EPS) tooClose.push(`${pair}: ${gap.toFixed(2)}/255`);
+        }
+        for (const t of totals) expect(t).toBeGreaterThanOrEqual(chromeAlpha - EPS);
+        expect(tooClose).toEqual([]);
+        const pinned = cl === 'subtle' ? COLLAPSES.filter((p) => p.startsWith(`${baseKey(c)} `)) : [];
+        expect(collapsed).toEqual(pinned);
       },
     );
-  },
-);
+
+    it.each(FROSTED_TERMINAL.flatMap((tl) => [false, true].map((rt) => [tl, rt] as const)))(
+      'terminal %s (Reduce transparency %s) meets every #38 terminal floor on the sheet and card (AC15, AC9, AC11)',
+      (tl, rt) => {
+        expect(failing(terminalChecks(c, at(cl, tl, rt)))).toEqual([]);
+      },
+    );
+  });
+});
+
+/** Root tokens that carry the terminal level itself (its alphas, the terminal surfaces and the D14 `--term-fg`); every painted value must still match. */
+const TERMINAL_MECHANISM = /^var\(--(?:terminal-|surface-terminal\)|surface-pane\)|term-fg\))/;
+
+describe.each(COMBOS)('$label terminal frost covers only the terminal group (glass-settings AC17, #38 AC4, AC10)', (c) => {
+  const OUTSIDE = [
+    ['chrome', 'shell'],
+    ['sheet', 'other'],
+    ['chat', 'shell'],
+    ['modal', 'shell'],
+    ['overlay', 'shell'],
+  ] as const;
+
+  it.each(CHROME_FROST_LEVELS)('chrome %s: every terminal level leaves the chrome, Files/Diff/Env/Settings sheet, chat, modals and overlays as terminal Off', (cl) => {
+    const drift: string[] = [];
+    for (const [region, content] of OUTSIDE) {
+      const off = snapshot(tree(c, at(cl, 'off'), region, content));
+      for (const tl of FROSTED_TERMINAL) {
+        const now = snapshot(tree(c, at(cl, tl), region, content));
+        for (const [e, v] of now)
+          if (!TERMINAL_MECHANISM.test(e) && v !== off.get(e)) drift.push(`${tl} ${region}/${content} ${e}`);
+      }
+    }
+    expect(drift).toEqual([]);
+  });
+
+  it.each(MAC_STATES)('%s: the working area is at least as opaque as the 26eed37 baseline', (_, state) => {
+    const regions: (readonly [Region, SheetContent])[] = [['sheet', 'other'], ['chat', 'shell']];
+    if (state.terminalLevel === 'off') regions.push(['sheet', 'shell'], ['card', 'shell']);
+    for (const [region, content] of regions)
+      expect(compositeAlpha(tree(c, state, region, content)), `${region}/${content}`).toBeGreaterThanOrEqual(
+        compositeAlpha(tree(c, BASE, region, content)) - EPS,
+      );
+  });
+});
+
+describe.each(COMBOS)('$label Reduce transparency (glass-settings AC23, #38 AC12, AC21)', (c) => {
+  it.each(CHROME_FROST_LEVELS.flatMap((cl) => TERMINAL_FROST_LEVELS.map((tl) => [cl, tl] as const)))(
+    'chrome %s, terminal %s: every chrome and terminal surface composites to alpha 1, exactly as at Subtle with terminal Off',
+    (cl, tl) => {
+      for (const region of ['chrome', 'sheet', 'card', 'chat'] as const) {
+        const t = tree(c, at(cl, tl, true), region);
+        expect(compositeAlpha(t), region).toBeCloseTo(1, 9);
+        expect(composites(t), region).toEqual(composites(tree(c, at('subtle', 'off', true), region)));
+      }
+    },
+  );
+});
+
+const WORKING_TOKENS = [
+  '--text',
+  '--text-muted',
+  '--accent-soft-text',
+  '--accent-soft',
+  '--surface-hover',
+  '--surface-active',
+  '--hue-cyan',
+  '--hue-pink',
+  '--hue-orange-soft',
+  '--hue-yellow',
+  '--hue-purple',
+  '--danger',
+  '--agent-idle',
+  '--agent-busy',
+  '--agent-blocked',
+  '--surface-field',
+] as const;
+
+/** Chrome-only tokens with no :root value: the classes that read them fall back to the off-mac colour, which the working area must get. */
+const FALLBACK_TOKENS = [
+  ['var(--accent-label, var(--accent))', 'var(--accent)'],
+  ['var(--accent-mark, var(--accent))', 'var(--accent)'],
+  ['var(--git-ahead-chip, rgb(52 211 153 / 0.1))', 'rgb(52 211 153 / 0.1)'],
+  ['var(--git-behind-chip, rgb(251 113 133 / 0.1))', 'rgb(251 113 133 / 0.1)'],
+  [`var(--focus-outline, ${FOCUS_OUTLINE_BASE})`, FOCUS_OUTLINE_BASE],
+] as const;
+
+function lookupRoot(scope: Scope): Scope {
+  let s = scope;
+  while (s.parent) s = s.parent;
+  return s;
+}
+
+describe.each(COMBOS)('$label working-area tokens stay the palette values at every level (#38 AC10, AC24, AC30, AC31; glass-settings AC32)', (c) => {
+  it.each(MAC_STATES)('%s', (_, state) => {
+    const regions: (readonly [Region, SheetContent])[] = [
+      ['sheet', 'other'],
+      ['chat', 'shell'],
+      ['modal', 'shell'],
+      ['overlay', 'shell'],
+    ];
+    if (state.terminalLevel === 'off') regions.push(['sheet', 'shell']);
+    const rootScope: Tree = { scope: lookupRoot(tree(c, state, 'chrome').scope), layers: [] };
+    for (const [region, content] of regions) {
+      const t = tree(c, state, region, content);
+      const where = `${region}/${content}`;
+      for (const name of WORKING_TOKENS) expect(token(t, name), `${where} ${name}`).toEqual(token(rootScope, name));
+      for (const s of GIT_LETTERS)
+        expect(evalColour(gitLetterExpr(s), t.scope).c, `${where} git ${s}`).toEqual(hex(tailwindColors[GIT_HUES[s]][400]));
+      for (const [read, fallback] of FALLBACK_TOKENS)
+        expect(evalColour(read, t.scope), `${where} ${read}`).toEqual(evalColour(fallback, rootScope.scope));
+    }
+  });
+});
+
+/** Where the oracle needed `--text` darker (D17 on the chrome; D24 on the frosted Shell sheet and its split cards), as `palette/resolved level`. */
+const CHROME_TEXT_LIFTS: readonly string[] = [
+  'catppuccin/light medium',
+  'catppuccin/light strong',
+  'rose-pine/light strong',
+];
+const SHEET_TEXT_LIFTS: readonly string[] = [
+  'catppuccin/light strong',
+  'rose-pine/light strong',
+];
+
+describe.each(COMBOS)('$label --text lifts (glass-settings AC32, D17, D24)', (c) => {
+  const palette = token(tree(c, BASE, 'chrome'), '--text');
+  const expectLift = (fg: Colour, lifted: boolean, where: string): void => {
+    if (lifted) expect(luminance(fg), `${where} darker`).toBeLessThan(luminance(palette));
+    else expect(fg, where).toEqual(palette);
+  };
+
+  it.each(MAC_STATES)('%s', (_, state) => {
+    const key = `${baseKey(c)} ${state.chromeLevel}`;
+    expectLift(token(tree(c, state, 'chrome'), '--text'), CHROME_TEXT_LIFTS.includes(key), 'chrome');
+    for (const region of ['sheet', 'card'] as const)
+      expectLift(
+        token(tree(c, state, region, 'shell'), '--text'),
+        state.terminalLevel !== 'off' && SHEET_TEXT_LIFTS.includes(key),
+        `${region} on Shell`,
+      );
+  });
+
+  it('only light catppuccin and rose-pine, and never chrome Subtle, are lifted', () => {
+    for (const k of [...CHROME_TEXT_LIFTS, ...SHEET_TEXT_LIFTS])
+      expect(k).toMatch(/^(catppuccin|rose-pine)\/light (medium|strong)$/);
+  });
+});
+
+describe.each(COMBOS)('$label accent and --accent-mark (glass-settings AC33, D18)', (c) => {
+  const base = tree(c, BASE, 'chrome');
+  const mark = 'var(--accent-mark, var(--accent))';
+
+  it('off mac the accent glyphs paint --accent', () => {
+    expect(evalColour(mark, base.scope)).toEqual(token(base, '--accent'));
+  });
+
+  it.each(MAC_STATES)('%s: --accent and --accent-text resolve as before in every region; --accent-mark is --accent at Subtle and outside the chrome and frosted Shell sheet', (_, state) => {
+    for (const region of ['chrome', 'sheet', 'card', 'chat', 'modal', 'overlay'] as const) {
+      const t = tree(c, state, region);
+      expect(token(t, '--accent'), `${region} --accent`).toEqual(token(base, '--accent'));
+      expect(token(t, '--accent-text'), `${region} --accent-text`).toEqual(token(base, '--accent-text'));
+      const hooked = region === 'chrome' || ((region === 'sheet' || region === 'card') && state.terminalLevel !== 'off');
+      if (!hooked || state.chromeLevel === 'subtle')
+        expect(evalColour(mark, t.scope), `${region} --accent-mark`).toEqual(token(base, '--accent'));
+    }
+  });
+
+  it('every accent glyph on the chrome reads --accent-mark and is inventoried', () => {
+    const glyphs = CHROME_PAINT.filter((p) => /^var\(--accent(?:-mark)?[,)]/.test(p.fg));
+    expect(glyphs.map((p) => p.element).sort()).toEqual(
+      [
+        'project row focus ring',
+        'root folder glyph --accent',
+        'selected project placeholder dot',
+        'status-bar project dot',
+        'Tasks run glyph',
+      ].sort(),
+    );
+    for (const p of glyphs) expect(p.fg, p.element).toBe(mark);
+  });
+});
+
+/** Bare `--accent` classes on the Shell sheet that paint no indicator, with the reason. */
+const SHEET_ACCENT_FILLS: Readonly<Record<string, string>> = {
+  'bg-[color:var(--accent)]': 'solid accent fill under --accent-text (shell and split action buttons), material-independent',
+  'bg-[color:var(--accent)]/10': 'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
+};
+
+/** Every `--term-*` name the stylesheets declare except `--term-fg`: the ANSI colours, cursor and selection. */
+const TERM_TOKENS = [
+  ...new Set(RULES.flatMap((r) => r.decls.map(([p]) => p)).filter((p) => p.startsWith('--term-') && p !== '--term-fg')),
+].sort();
+
+/** D14: where the oracle needed the root `--term-fg` darker, as `palette/resolved level` (only with a terminal level on). */
+const TERM_FG_LIFTS: readonly string[] = [
+  'catppuccin/light strong',
+  'rose-pine/light strong',
+];
+
+describe('root --term-fg lift scope (glass-settings AC31, D14)', () => {
+  it('lifts only light catppuccin and rose-pine, never at chrome Subtle', () => {
+    for (const k of TERM_FG_LIFTS) expect(k).toMatch(/^(catppuccin|rose-pine)\/light (medium|strong)$/);
+  });
+});
+
+describe.each(COMBOS)('$label root --term-fg lift (glass-settings AC31, D14)', (c) => {
+  const today = token(tree(c, BASE, 'chrome'), '--term-fg');
+
+  it.each(MAC_STATES)('%s', (_, state) => {
+    const lifted = TERM_FG_LIFTS.includes(`${baseKey(c)} ${state.chromeLevel}`) && state.terminalLevel !== 'off';
+    for (const region of ['chrome', 'sheet', 'card'] as const) {
+      const t = tree(c, state, region);
+      const fg = token(t, '--term-fg');
+      if (lifted) {
+        expect(luminance(fg), `${region} darker`).toBeLessThan(luminance(today));
+        if (region !== 'chrome') expect(minRatio(fg, composites(t)), `${region} 4.5:1`).toBeGreaterThanOrEqual(CONTRAST_TEXT);
+      } else expect(fg, region).toEqual(today);
+      const base = tree(c, BASE, region);
+      for (const name of TERM_TOKENS)
+        expect(resolvedValue(t, [], `var(${name})`), `${region} ${name}`).toBe(resolvedValue(base, [], `var(${name})`));
+    }
+  });
+});
+
+describe('ShellTab repaints the terminal when a level changes (glass-settings AC31)', () => {
+  it('the theme observer watches the platform and both level attributes, with theme and palette', () => {
+    const src = readFileSync(resolve(RENDERER, 'components/ShellTab.tsx'), 'utf8');
+    const filter = /themeObserver\.observe\(document\.documentElement,\s*\{[^}]*attributeFilter:\s*\[([^\]]*)\]/.exec(src)?.[1] ?? '';
+    const watched = new Set([...filter.matchAll(/(?:'([\w-]+)'|FROST_ATTR\.(\w+))/g)].map((m) => m[1] ?? FROST_ATTR[m[2] as keyof typeof FROST_ATTR]));
+    expect([...watched].sort()).toEqual(
+      ['data-theme', 'data-palette', FROST_ATTR.platform, FROST_ATTR.chromeFrost, FROST_ATTR.terminalFrost].sort(),
+    );
+  });
+});
+
+describe.each(COMBOS)('$label menus, popovers and inputs (#38 AC31)', (c) => {
+  it.each(['--panel', '--panel-strong', '--chat-surface'])(
+    '%s keeps the baseline rgb at alpha 1 in chrome and sheet at every level',
+    (name) => {
+      const base = token(tree(c, BASE, 'chrome'), name);
+      for (const [label, state] of MAC_STATES)
+        for (const region of ['chrome', 'sheet'] as const) {
+          const mac = token(tree(c, state, region), name);
+          expect(mac.a, `${label} ${region}`).toBe(1);
+          mac.c.forEach((v, i) => expect(v).toBeCloseTo(base.c[i] ?? -1, 6));
+        }
+    },
+  );
+});
+
+describe('pinned exemptions (D13), re-checked at every level', () => {
+  it('pins exactly the D13 list', () => {
+    expect(D13_DEBT.map((p) => p.join(' '))).toEqual([
+      'default light --agent-idle any',
+      'catppuccin light --agent-idle any',
+      'catppuccin light --agent-busy any',
+      'catppuccin light --term-yellow any',
+      'catppuccin light --term-cursor any',
+      'rose-pine light --agent-busy any',
+      'rose-pine light --term-yellow any',
+      'rose-pine light --term-cyan any',
+    ]);
+  });
+
+  const PAINTED: Readonly<Record<string, string>> = {
+    '--term-yellow': '--hue-yellow',
+    '--term-cyan': '--hue-cyan',
+  };
+
+  /** Worst contrast of the pinned token over the surfaces the pin covers: the chrome and selected row in `chromeState`, the terminal sheet in `sheetState`. */
+  function worst([palette, resolved, name, surface]: Pin, chromeState: State, sheetState: State): number {
+    const combo = COMBOS.find((c) => c.palette === palette && c.theme === resolved) as Combo;
+    const painted = PAINTED[name] ?? name;
+    const chrome = tree(combo, chromeState, 'chrome');
+    const sheet = tree(combo, sheetState, 'sheet');
+    const under: Record<Surface, () => number> = {
+      chrome: () => minRatio(token(chrome, painted), composites(chrome)),
+      'selected-row': () => minRatio(token(chrome, painted), chip(chrome, '--accent-soft')),
+      terminal: () => minRatio(token(sheet, painted), composites(sheet)),
+    };
+    const surfaces: readonly Surface[] =
+      surface === 'any' ? ['chrome', 'selected-row', 'terminal'] : [surface];
+    return Math.min(...surfaces.map((s) => under[s]()));
+  }
+
+  it.each(D13_DEBT.map((p) => [p.join(' '), p] as const))('%s still fails 3:1 at baseline', (_, pin) => {
+    expect(worst(pin, BASE, BASE)).toBeLessThan(CONTRAST_GRAPHIC);
+  });
+
+  it.each(
+    D13_DEBT.flatMap((p) =>
+      CHROME_FROST_LEVELS.flatMap((cl) => FROSTED_TERMINAL.map((tl) => [p.join(' '), cl, tl, p] as const)),
+    ),
+  )('%s still fails at chrome %s, terminal %s (else unpin it)', (_, cl, tl, pin) => {
+    expect(worst(pin, at(cl, 'off'), at(cl, tl))).toBeLessThan(CONTRAST_GRAPHIC);
+  });
+});
+
+describe('catppuccin light chrome cyan (AC16 ruling: darker on mac chrome only)', () => {
+  const combos = COMBOS.filter((c) => c.palette === 'catppuccin' && c.resolved === 'light');
+
+  it.each(combos)('$label chrome glyphs read a darker --hue-cyan than the palette at every level', (c) => {
+    const palette = token(tree(c, BASE, 'chrome'), '--hue-cyan');
+    for (const cl of CHROME_FROST_LEVELS) {
+      const chrome = token(tree(c, at(cl, 'off'), 'chrome'), '--hue-cyan');
+      expect(chrome.c, cl).not.toEqual(palette.c);
+      expect(ratio(chrome, { c: [1, 1, 1], a: 1 }), cl).toBeGreaterThan(ratio(palette, { c: [1, 1, 1], a: 1 }));
+    }
+  });
+
+  it.each(combos)('$label --term-cyan keeps its palette value everywhere', (c) => {
+    const palette = token(tree(c, BASE, 'chrome'), '--term-cyan');
+    for (const [label, state] of MAC_STATES)
+      for (const region of ['chrome', 'sheet', 'card', 'chat'] as const)
+        expect(token(tree(c, state, region), '--term-cyan'), `${label} ${region}`).toEqual(palette);
+  });
+});
+
+describe('chrome text label lifts (D16: macOS chrome only, lighter in dark themes, darker in light themes)', () => {
+  it.each(GIT_LETTERS)(
+    'git status %s reads a --git-* token whose fallback is its Tailwind -400 hue, so off mac nothing changes',
+    (s) => {
+      const m = GIT_TOKEN.exec(gitStatusTextClass(s));
+      expect(m?.[1]).toMatch(/^--git-/);
+      expect(m?.[2]).toBe(tailwindColors[GIT_HUES[s]][400]);
+    },
+  );
+
+  it.each(COMBOS)('$label chrome --hue-pink and the deleted letter move toward the theme pole at every level', (c) => {
+    const toPole = (lifted: Colour, palette: Colour) =>
+      c.resolved === 'dark' ? luminance(lifted) > luminance(palette) : luminance(lifted) < luminance(palette);
+    for (const cl of CHROME_FROST_LEVELS) {
+      const chrome = tree(c, at(cl, 'off'), 'chrome');
+      expect(toPole(token(chrome, '--hue-pink'), token(tree(c, BASE, 'chrome'), '--hue-pink')), cl).toBe(true);
+      expect(toPole(evalColour(gitLetterExpr('D'), chrome.scope), { c: hex(tailwindColors.rose[400]), a: 1 }), cl).toBe(true);
+    }
+  });
+});
 
 describe('chrome colour inventory (D17)', () => {
   it('the mac focus rule reads --focus-outline for exactly the styles.css focus selectors', () => {
     const focus = (css: string) =>
-      /([^{}]*:focus-visible[^{}]*)\{[^}]*outline[^}]*\}/.exec(
-        css.replace(/\/\*[\s\S]*?\*\//g, ''),
-      );
+      /([^{}]*:focus-visible[^{}]*)\{[^}]*outline[^}]*\}/.exec(css.replace(/\/\*[\s\S]*?\*\//g, ''));
     const base = splitTop((focus(STYLES)?.[1] ?? '').trim(), ',');
     const mac = focus(FROSTED);
     expect(mac?.[0]).toContain(`outline-color: var(--focus-outline, ${FOCUS_OUTLINE_BASE})`);
@@ -1698,13 +1870,27 @@ describe('chrome colour inventory (D17)', () => {
     }
   });
 
-  it.each(Object.keys(D17_PINS))('%s still fails on the mac stack (else unpin it)', (element) => {
-    const p = CHROME_PAINT.find((x) => x.element === element) as ChromePaint;
-    const worst = Math.min(
-      ...COMBOS.flatMap((c) => MAC_STATES.map(([, s]) => paintMin(tree(c, s, 'chrome'), p))),
-    );
-    expect(worst).toBeLessThan(floorOf(p));
-  });
+  it.each(Object.keys(D17_PINS).flatMap((e) => CHROME_FROST_LEVELS.map((cl) => [e, cl] as const)))(
+    '%s still fails at chrome %s (else unpin it)',
+    (element, cl) => {
+      const p = CHROME_PAINT.find((x) => x.element === element) as ChromePaint;
+      const states = MAC_STATES.filter(([, s]) => s.chromeLevel === cl);
+      const worst = Math.min(...COMBOS.flatMap((c) => states.map(([, s]) => paintMin(tree(c, s, 'chrome'), p))));
+      expect(worst).toBeLessThan(floorOf(p));
+    },
+  );
+
+  it.each(['SplitGutter.tsx', 'ShellTab.tsx'])(
+    '%s paints its accent indicators on the frosted Shell sheet with --accent-mark (glass-settings D18)',
+    (src) => {
+      const text = readFileSync(resolve(COMPONENTS, src), 'utf8');
+      const bare = colourClasses(text).filter(
+        (k) => /--accent\)?\]/.test(k) && !/--accent-(?:mark|soft|text|label)/.test(k) && !(k in SHEET_ACCENT_FILLS),
+      );
+      expect(bare).toEqual([]);
+      expect(text).toContain('var(--accent-mark,var(--accent))');
+    },
+  );
 
   it.each(['StatusBar.tsx', 'ContextMenu.tsx', 'ToastStack.tsx'])(
     '%s marks its overlay root, so the mac reset keeps chrome lifts out of it (AC31)',

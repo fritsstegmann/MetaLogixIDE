@@ -418,6 +418,15 @@ function macPreviewSurface(block: TokenBlock): Rgb {
   return parsed;
 }
 
+const LEVELS_CSS = readFileSync(resolve(__dirname, '../../../../src/renderer/frosted-glass-levels.css'), 'utf8');
+
+describe('macOS preview surface at every frosted-glass level (glass-settings AC29)', () => {
+  it('no Medium or Strong level redeclares the preview surface, so markdown keeps the opaque mac sheet', () => {
+    expect(LEVELS_CSS).toMatch(/\[data-chrome-frost="(medium|strong)"\]/);
+    expect(LEVELS_CSS).not.toMatch(new RegExp(`${MAC_PREVIEW_SURFACE}\\s*:`));
+  });
+});
+
 describe.each(THEMES)('macOS preview surface (%s tokens, %s theme, AC29)', (block, theme) => {
   const tokens = stylesheetTokens(block);
   let vars: Record<string, string> = {};

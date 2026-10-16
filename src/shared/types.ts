@@ -125,8 +125,6 @@ export type SettingsMap = {
   'notify_claude_needs_input':     boolean;
   /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
   'notify_claude_finished':        boolean;
-  /** Legacy (pre frosted-glass settings): read only by the terminal_frost_level migration. Removed at teardown. */
-  'frost_terminal':                boolean;
   /** macOS only: frosted chrome on/off. Write via settings:set-frost-chrome only. */
   'frost_chrome':                  boolean;
   /** macOS only: chrome frost strength. Write via settings:set-chrome-frost-level only. */

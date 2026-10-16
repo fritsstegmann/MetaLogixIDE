@@ -219,7 +219,6 @@ export interface IpcContract {
 
   /** Set every open window's opacity. percent: 30..100. */
   'app:set-window-opacity': { request: { percent: number }; response: { ok: true } };
-  'settings:set-frost-terminal': { request: { enabled: boolean }; response: { ok: true } | { ok: false; error: 'invalid' } };
   'settings:set-frost-chrome': { request: { enabled: boolean }; response: { ok: true } | { ok: false; error: 'invalid' } };
   'settings:set-chrome-frost-level': { request: { level: ChromeFrostLevel }; response: { ok: true } | { ok: false; error: 'invalid' } };
   'settings:set-terminal-frost-level': { request: { level: TerminalFrostLevel }; response: { ok: true } | { ok: false; error: 'invalid' } };

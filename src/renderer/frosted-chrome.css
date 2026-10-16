@@ -1,15 +1,18 @@
 /* macOS frosted chrome. Every selector in this file starts with
- * :root[data-platform="mac"], so Windows and Linux never match it.
- * Imported after styles.css. html and body go transparent, so the chrome
- * root is the only layer over the vibrancy material; it paints --chrome-solid
- * at --chrome-glass-alpha. The working area paints the opaque --sheet-solid,
- * and the frosted-terminal setting drops the Shell sheet and split cards to
- * --terminal-glass-alpha. Palette blocks set only the solid, alpha and
- * label-lift tokens (plus the raw panel tokens at alpha 1, so menus and
- * popovers stay at least as opaque as before); each glass surface token is
- * declared exactly twice, here and in the Reduce transparency override, so
- * that override always wins. Values are tuned against the contrast floors in
- * tests/unit/renderer/frosted-chrome-contrast.test.ts. */
+ * :root[data-platform="mac"], so Windows and Linux never match it, and
+ * Frosted chrome OFF (which removes that attribute) renders styles.css alone.
+ * Imported after styles.css and before frosted-glass-levels.css. html and body
+ * go transparent, so the chrome root is the only layer over the vibrancy
+ * material; it paints --chrome-solid at --chrome-glass-alpha. The working area
+ * paints the opaque --sheet-solid. A Terminal frost level (data-terminal-frost)
+ * drops the Shell sheet to that level's --terminal-*-glass-alpha and split cards
+ * to its --terminal-*-pane-alpha. The palette blocks here hold the Subtle chrome
+ * values: the solid, alpha and label-lift tokens (plus the raw panel tokens at
+ * alpha 1, so menus and popovers stay at least as opaque as before);
+ * frosted-glass-levels.css overrides the alpha and lift tokens at Medium and
+ * Strong. Each glass surface token is declared exactly twice, here and in the
+ * Reduce transparency override, so that override always wins. Values are tuned
+ * against the contrast floors in tests/unit/renderer/frosted-chrome-contrast.test.ts. */
 
 :root[data-platform="mac"],
 :root[data-platform="mac"] body {
@@ -17,6 +20,7 @@
 }
 
 :root[data-platform="mac"] {
+  --text-base: var(--text);
   --text-muted-base: var(--text-muted);
   --accent-soft-text-base: var(--accent-soft-text);
   --accent-soft-base: var(--accent-soft);
@@ -33,18 +37,36 @@
   --agent-blocked-base: var(--agent-blocked);
   --surface-field-base: var(--surface-field);
   --terminal-live-alpha: 1;
+  --terminal-pane-live-alpha: 1;
+  --terminal-live-text-muted: var(--terminal-text-muted);
   --surface-chrome: rgb(from var(--chrome-solid) r g b / var(--chrome-glass-alpha));
   --surface-sheet: var(--sheet-solid);
   --surface-terminal: rgb(from var(--sheet-solid) r g b / var(--terminal-live-alpha));
-  --surface-pane: rgb(from var(--pane-solid) r g b / var(--terminal-live-alpha));
+  --surface-pane: rgb(from var(--pane-solid) r g b / var(--terminal-pane-live-alpha));
 }
 
-:root[data-platform="mac"][data-frost-terminal] {
+:root[data-platform="mac"][data-terminal-frost="subtle"] {
   --terminal-live-alpha: var(--terminal-glass-alpha);
+  --terminal-pane-live-alpha: var(--terminal-pane-alpha);
 }
 
-/* Chrome labels and indicators are lifted (D2, D16, D17) and selection, badge and field fills become opaque chips (D11, D15), so none depends on the material. */
+:root[data-platform="mac"][data-terminal-frost="medium"] {
+  --terminal-live-alpha: var(--terminal-medium-glass-alpha);
+  --terminal-pane-live-alpha: var(--terminal-medium-pane-alpha);
+  --terminal-live-text-muted: var(--terminal-medium-text-muted);
+}
+
+:root[data-platform="mac"][data-terminal-frost="strong"] {
+  --terminal-live-alpha: var(--terminal-strong-glass-alpha);
+  --terminal-pane-live-alpha: var(--terminal-strong-pane-alpha);
+  --terminal-live-text-muted: var(--terminal-strong-text-muted);
+}
+
+/* Chrome labels and indicators are lifted (D2, D16, D17) and selection, badge and field fills become opaque chips (D11, D15), so none depends on the material.
+ * --text and the accent glyph token --accent-mark fall back to the palette, so they move only where a level block declares a lift (glass-settings D17, D18). */
 :root[data-platform="mac"] [data-chrome-root] {
+  --text: var(--chrome-text, var(--text-base));
+  --accent-mark: var(--chrome-accent-mark, var(--accent));
   --text-muted: var(--chrome-text-muted);
   --accent-soft-text: var(--chrome-chip-text);
   --accent-label: var(--chrome-accent-label);
@@ -75,6 +97,7 @@
 :root[data-platform="mac"] [data-chrome-root] [data-view="chat"],
 :root[data-platform="mac"] [data-chrome-root] .modal-layer,
 :root[data-platform="mac"] [data-chrome-root] [data-overlay] {
+  --text: var(--text-base);
   --text-muted: var(--text-muted-base);
   --accent-soft-text: var(--accent-soft-text-base);
   --accent-soft: var(--accent-soft-base);
@@ -91,6 +114,7 @@
   --agent-blocked: var(--agent-blocked-base);
   --surface-field: var(--surface-field-base);
   --accent-label: initial;
+  --accent-mark: initial;
   --focus-outline: initial;
   --git-ahead-chip: initial;
   --git-behind-chip: initial;
@@ -114,8 +138,14 @@
   --surface-sheet: var(--surface-terminal);
 }
 
-:root[data-platform="mac"][data-frost-terminal] [data-chrome-root] [data-sheet-content="shell"] {
-  --text-muted: var(--terminal-text-muted);
+/* The frosted Shell sheet's labels and indicators read --terminal-* hooks that only level blocks declare, so at Subtle they fall back to the palette (glass-settings D18, D24). */
+:root[data-platform="mac"][data-terminal-frost] [data-chrome-root] [data-sheet-content="shell"] {
+  --text: var(--terminal-text, var(--text-base));
+  --accent-mark: var(--terminal-accent-mark, var(--accent));
+  --text-muted: var(--terminal-live-text-muted);
+  --agent-idle: var(--terminal-agent-idle, var(--agent-idle-base));
+  --agent-busy: var(--terminal-agent-busy, var(--agent-busy-base));
+  --agent-blocked: var(--terminal-agent-blocked, var(--agent-blocked-base));
   --accent-soft: color-mix(in oklab, var(--accent) 22%, var(--sheet-solid));
   --surface-hover: color-mix(in oklab, var(--text) 7%, var(--sheet-solid));
   --surface-active: color-mix(in oklab, var(--text) 10%, var(--sheet-solid));
@@ -133,9 +163,16 @@
   --sheet-solid: #1e222a;
   --pane-solid: #1c1f27;
   --terminal-glass-alpha: 0.06;
+  --terminal-pane-alpha: 0.06;
+  --terminal-medium-glass-alpha: 0.06;
+  --terminal-medium-pane-alpha: 0.06;
+  --terminal-strong-glass-alpha: 0.06;
+  --terminal-strong-pane-alpha: 0.06;
   --chrome-text-muted: #9aa3ac;
   --chrome-chip-text: #78aaf8;
   --terminal-text-muted: #99a2ab;
+  --terminal-medium-text-muted: #99a2ab;
+  --terminal-strong-text-muted: #99a2ab;
   --chrome-hue-pink: #f87b91;
   --chrome-git-modified: #fbbf24;
   --chrome-git-added: #34d399;
@@ -161,9 +198,16 @@
   --sheet-solid: #eceef3;
   --pane-solid: #f0f1f5;
   --terminal-glass-alpha: 0.05;
+  --terminal-pane-alpha: 0.05;
+  --terminal-medium-glass-alpha: 0.05;
+  --terminal-medium-pane-alpha: 0.05;
+  --terminal-strong-glass-alpha: 0.05;
+  --terminal-strong-pane-alpha: 0.05;
   --chrome-text-muted: #4b5563;
   --chrome-chip-text: #20479a;
   --terminal-text-muted: #4b5563;
+  --terminal-medium-text-muted: #4b5563;
+  --terminal-strong-text-muted: #4b5563;
   --chrome-hue-pink: #a71451;
   --chrome-git-modified: #6d5109;
   --chrome-git-added: #136145;
@@ -190,9 +234,16 @@
     --sheet-solid: #eceef3;
     --pane-solid: #f0f1f5;
     --terminal-glass-alpha: 0.05;
+    --terminal-pane-alpha: 0.05;
+    --terminal-medium-glass-alpha: 0.05;
+    --terminal-medium-pane-alpha: 0.05;
+    --terminal-strong-glass-alpha: 0.05;
+    --terminal-strong-pane-alpha: 0.05;
     --chrome-text-muted: #4b5563;
     --chrome-chip-text: #20479a;
     --terminal-text-muted: #4b5563;
+    --terminal-medium-text-muted: #4b5563;
+    --terminal-strong-text-muted: #4b5563;
     --chrome-hue-pink: #a71451;
     --chrome-git-modified: #6d5109;
     --chrome-git-added: #136145;
@@ -219,9 +270,16 @@
   --sheet-solid: #262636;
   --pane-solid: #242432;
   --terminal-glass-alpha: 0.18;
+  --terminal-pane-alpha: 0.18;
+  --terminal-medium-glass-alpha: 0;
+  --terminal-medium-pane-alpha: 0;
+  --terminal-strong-glass-alpha: 0;
+  --terminal-strong-pane-alpha: 0;
   --chrome-text-muted: #adb4cf;
   --chrome-chip-text: #a1c0f8;
   --terminal-text-muted: #a6adc8;
+  --terminal-medium-text-muted: color-mix(in oklab, #a6adc8 93.4%, #ffffff);
+  --terminal-strong-text-muted: color-mix(in oklab, #a6adc8 93.4%, #ffffff);
   --chrome-hue-pink: #f69bb3;
   --chrome-git-modified: #fbbf24;
   --chrome-git-added: #34d399;
@@ -247,9 +305,16 @@
   --sheet-solid: #e1e4eb;
   --pane-solid: #e4e6ed;
   --terminal-glass-alpha: 0.05;
+  --terminal-pane-alpha: 0.05;
+  --terminal-medium-glass-alpha: 0.05;
+  --terminal-medium-pane-alpha: 0.05;
+  --terminal-strong-glass-alpha: 0.05;
+  --terminal-strong-pane-alpha: 0.05;
   --chrome-text-muted: #52556e;
   --chrome-chip-text: #435892;
   --terminal-text-muted: #52566f;
+  --terminal-medium-text-muted: #52566f;
+  --terminal-strong-text-muted: #52566f;
   --chrome-hue-pink: #ac0a2d;
   --chrome-git-modified: #6d5109;
   --chrome-git-added: #136145;
@@ -275,9 +340,16 @@
   --sheet-solid: #232035;
   --pane-solid: #211e32;
   --terminal-glass-alpha: 0.17;
+  --terminal-pane-alpha: 0.17;
+  --terminal-medium-glass-alpha: 0;
+  --terminal-medium-pane-alpha: 0;
+  --terminal-strong-glass-alpha: 0;
+  --terminal-strong-pane-alpha: 0;
   --chrome-text-muted: #bab7d1;
   --chrome-chip-text: #cebaec;
   --terminal-text-muted: #b1aec9;
+  --terminal-medium-text-muted: color-mix(in oklab, #b1aec9 90.7%, #ffffff);
+  --terminal-strong-text-muted: color-mix(in oklab, #b1aec9 90.7%, #ffffff);
   --chrome-hue-pink: #f7a2b6;
   --chrome-git-modified: #fbbf24;
   --chrome-git-added: #34d399;
@@ -303,9 +375,16 @@
   --sheet-solid: #f8f1e9;
   --pane-solid: #f9f3ec;
   --terminal-glass-alpha: 0;
+  --terminal-pane-alpha: 0;
+  --terminal-medium-glass-alpha: 0;
+  --terminal-medium-pane-alpha: 0;
+  --terminal-strong-glass-alpha: 0;
+  --terminal-strong-pane-alpha: 0;
   --chrome-text-muted: #5f5b7f;
   --chrome-chip-text: #40607f;
   --terminal-text-muted: #5f5b7f;
+  --terminal-medium-text-muted: #5f5b7f;
+  --terminal-strong-text-muted: #5f5b7f;
   --chrome-hue-pink: #894a5c;
   --chrome-git-modified: #785a0b;
   --chrome-git-added: #166b4c;
@@ -332,9 +411,16 @@
     --sheet-solid: #e1e4eb;
     --pane-solid: #e4e6ed;
     --terminal-glass-alpha: 0.05;
+    --terminal-pane-alpha: 0.05;
+    --terminal-medium-glass-alpha: 0.05;
+    --terminal-medium-pane-alpha: 0.05;
+    --terminal-strong-glass-alpha: 0.05;
+    --terminal-strong-pane-alpha: 0.05;
     --chrome-text-muted: #52556e;
     --chrome-chip-text: #435892;
     --terminal-text-muted: #52566f;
+    --terminal-medium-text-muted: #52566f;
+    --terminal-strong-text-muted: #52566f;
     --chrome-hue-pink: #ac0a2d;
     --chrome-git-modified: #6d5109;
     --chrome-git-added: #136145;
@@ -360,9 +446,16 @@
     --sheet-solid: #f8f1e9;
     --pane-solid: #f9f3ec;
     --terminal-glass-alpha: 0;
+    --terminal-pane-alpha: 0;
+    --terminal-medium-glass-alpha: 0;
+    --terminal-medium-pane-alpha: 0;
+    --terminal-strong-glass-alpha: 0;
+    --terminal-strong-pane-alpha: 0;
     --chrome-text-muted: #5f5b7f;
     --chrome-chip-text: #40607f;
     --terminal-text-muted: #5f5b7f;
+    --terminal-medium-text-muted: #5f5b7f;
+    --terminal-strong-text-muted: #5f5b7f;
     --chrome-hue-pink: #894a5c;
     --chrome-git-modified: #785a0b;
     --chrome-git-added: #166b4c;
@@ -383,7 +476,7 @@
   }
 }
 
-/* Reads only the media query, never the frosted-terminal attribute, so the stored setting is untouched (AC12). */
+/* Reads only the media query, never a level attribute, so the stored settings are untouched (AC12, glass-settings AC23). */
 @media (prefers-reduced-transparency: reduce) {
   :root[data-platform="mac"] {
     --surface-chrome: var(--chrome-solid);

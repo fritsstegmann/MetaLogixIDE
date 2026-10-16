@@ -1,20 +1,23 @@
 /**
- * Static guards on `frosted-chrome.css` (spec macos-frosted-chrome AC12, AC21, AC25a, plan §2.1 and §4):
- * every selector is gated on `:root[data-platform="mac"]`, the stylesheet keys on the exact `FROST_ATTR`
- * strings, no glass surface adds a `backdrop-filter` or `filter`, each glass surface token has exactly two
- * declarations (the base rule and the Reduce transparency override, which maps it to its solid source and
- * never reads the setting), and every palette block declares the same token set, so the most specific
- * matching block always decides every token.
+ * Static guards on `frosted-chrome.css` and `frosted-glass-levels.css` (spec macos-frosted-chrome AC12, AC21,
+ * AC25a, plan §2.1 and §4; spec macos-frosted-glass-settings AC23, AC29, D14, D15): every selector in both
+ * files is gated on `:root[data-platform="mac"]`, the stylesheets key on the exact `FROST_ATTR` strings, no
+ * glass surface adds a `backdrop-filter` or `filter`, each glass surface token has exactly two declarations
+ * across both files (the base rule and the Reduce transparency override, which maps it to its solid source
+ * and never reads a setting), every palette block and every level block declares its kind's token set, so
+ * the most specific matching block always decides every token, every glass alpha stays inside the
+ * visible-effect cap, and the level file holds nothing but level blocks and the D14 `--term-fg` rules.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { FROST_ATTR, MAC_PLATFORM } from '@renderer/frosted-chrome-contract';
 
-const CSS = readFileSync(
-  resolve(__dirname, '../../../src/renderer/frosted-chrome.css'),
-  'utf8',
-).replace(/\/\*[\s\S]*?\*\//g, '');
+const read = (file: string): string =>
+  readFileSync(resolve(__dirname, '../../../src/renderer', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const FROSTED = read('frosted-chrome.css');
+const LEVELS = read('frosted-glass-levels.css');
+const CSS = `${FROSTED}\n${LEVELS}`;
 
 interface Rule {
   readonly selectors: readonly string[];
@@ -60,6 +63,8 @@ function rules(src: string, media: readonly string[] = []): Rule[] {
 }
 
 const RULES = rules(CSS);
+const FROSTED_RULES = rules(FROSTED);
+const LEVEL_RULES = rules(LEVELS);
 const GATE = `:root[${FROST_ATTR.platform}="${MAC_PLATFORM}"]`;
 const RT = '(prefers-reduced-transparency: reduce)';
 const GLASS = ['--surface-chrome', '--surface-terminal', '--surface-pane'] as const;
@@ -88,15 +93,24 @@ const PALETTE_SELECTORS = [
   ]),
 ];
 
-const PALETTE_TOKENS = [
-  '--chrome-solid',
+/** Glass alphas a palette or level block sets: chrome, then the Shell sheet and split card per terminal level. */
+const ALPHA_TOKENS = [
   '--chrome-glass-alpha',
-  '--sheet-solid',
-  '--pane-solid',
   '--terminal-glass-alpha',
+  '--terminal-pane-alpha',
+  '--terminal-medium-glass-alpha',
+  '--terminal-medium-pane-alpha',
+  '--terminal-strong-glass-alpha',
+  '--terminal-strong-pane-alpha',
+];
+
+/** Lift tokens both block kinds set (the Subtle values in a palette block, the level values in a level block). */
+const LIFT_TOKENS = [
   '--chrome-text-muted',
   '--chrome-chip-text',
   '--terminal-text-muted',
+  '--terminal-medium-text-muted',
+  '--terminal-strong-text-muted',
   '--chrome-hue-pink',
   '--chrome-git-modified',
   '--chrome-git-added',
@@ -111,18 +125,45 @@ const PALETTE_TOKENS = [
   '--chrome-agent-busy',
   '--chrome-agent-blocked',
   '--chrome-focus-ring',
-  '--panel',
-  '--panel-strong',
-  '--chat-surface',
-].sort();
+];
 
-function paletteBlock(selector: string): Rule {
-  const found = RULES.filter((r) => r.selectors.join(', ') === selector);
+/** Solids a palette block sets and a level block never touches, so every level paints the same solids, opaque panels and markdown sheet. */
+const SOLID_TOKENS = ['--chrome-solid', '--sheet-solid', '--pane-solid', '--panel', '--panel-strong', '--chat-surface'];
+
+const PALETTE_TOKENS = [...ALPHA_TOKENS, ...LIFT_TOKENS, ...SOLID_TOKENS].sort();
+
+/** Hooks only a level block sets; at Subtle they are undeclared, so their readers fall back to the palette. */
+const LEVEL_HOOKS = [
+  '--chrome-text',
+  '--chrome-accent-mark',
+  '--terminal-text',
+  '--terminal-accent-mark',
+  '--terminal-agent-idle',
+  '--terminal-agent-busy',
+  '--terminal-agent-blocked',
+];
+
+const LEVEL_TOKENS = [...ALPHA_TOKENS, ...LIFT_TOKENS, ...LEVEL_HOOKS].sort();
+
+const LEVELS_OF = ['medium', 'strong'] as const;
+
+/** The level block selector for a palette block selector: each compound gains `[data-chrome-frost]` before any `:not()`. */
+function levelSelector(palette: string, level: string): string {
+  return palette
+    .split(', ')
+    .map((s) => s.replace(/(:not\(\[data-theme\]\))?$/, `[${FROST_ATTR.chromeFrost}="${level}"]$1`))
+    .join(', ');
+}
+
+const LEVEL_SELECTORS = LEVELS_OF.flatMap((level) => PALETTE_SELECTORS.map((p) => levelSelector(p, level)));
+
+function paletteBlock(selector: string, from: readonly Rule[] = FROSTED_RULES): Rule {
+  const found = from.filter((r) => r.selectors.join(', ') === selector);
   expect(found, selector).toHaveLength(1);
   return found[0] as Rule;
 }
 
-describe('frosted-chrome.css', () => {
+describe('frosted-chrome.css and frosted-glass-levels.css', () => {
   it('has rules to check', () => {
     expect(RULES.length).toBeGreaterThan(5);
   });
@@ -143,7 +184,8 @@ describe('frosted-chrome.css', () => {
     expect([...attrs].sort()).toEqual(
       [
         FROST_ATTR.platform,
-        FROST_ATTR.frostTerminal,
+        FROST_ATTR.chromeFrost,
+        FROST_ATTR.terminalFrost,
         FROST_ATTR.chromeRoot,
         FROST_ATTR.sheetContent,
         FROST_ATTR.overlay,
@@ -153,10 +195,14 @@ describe('frosted-chrome.css', () => {
       ].sort(),
     );
     expect(CSS).toContain(`[${FROST_ATTR.sheetContent}="shell"]`);
-    expect(CSS).toContain(`[${FROST_ATTR.frostTerminal}]`);
+    expect(CSS).toContain(`[${FROST_ATTR.terminalFrost}]`);
+    expect(CSS).not.toContain('[data-frost-terminal');
     expect(CSS).toContain(`[${FROST_ATTR.chromeRoot}]`);
     expect(CSS).toContain('[data-view="chat"]');
     expect(CSS).toContain(`[${FROST_ATTR.overlay}]`);
+    for (const level of ['subtle', 'medium', 'strong'])
+      expect(FROSTED).toContain(`[${FROST_ATTR.terminalFrost}="${level}"]`);
+    for (const level of LEVELS_OF) expect(LEVELS).toContain(`[${FROST_ATTR.chromeFrost}="${level}"]`);
   });
 
   it('adds no backdrop-filter or filter (plan §4)', () => {
@@ -181,7 +227,8 @@ describe('frosted-chrome.css', () => {
     expect(rt.map((r) => r.selectors.join(', '))).toEqual([GATE]);
     const body = new Map(decls(rt[0]?.body ?? ''));
     for (const name of GLASS) expect(body.get(name), name).toBe(SOLID_SOURCE[name]);
-    expect(rt[0]?.body).not.toContain(FROST_ATTR.frostTerminal);
+    for (const attr of [FROST_ATTR.chromeFrost, FROST_ATTR.terminalFrost])
+      expect(rt[0]?.selectors.join() ?? '', attr).not.toContain(attr);
   });
 
   it('makes html and body transparent so only the app layers sit on the material', () => {
@@ -220,14 +267,67 @@ describe('frosted-chrome.css', () => {
     }
   });
 
-  it('sets glass alphas inside the visible-effect cap (alpha <= 0.8745, D11)', () => {
-    for (const selector of PALETTE_SELECTORS) {
-      const body = new Map(decls(paletteBlock(selector).body));
-      for (const name of ['--chrome-glass-alpha', '--terminal-glass-alpha']) {
+  it('sets every glass alpha inside the visible-effect cap (0 <= alpha <= 0.8745, D11), at every level', () => {
+    const blocks = [
+      ...PALETTE_SELECTORS.map((s) => paletteBlock(s)),
+      ...LEVEL_SELECTORS.map((s) => paletteBlock(s, LEVEL_RULES)),
+    ];
+    for (const block of blocks) {
+      const body = new Map(decls(block.body));
+      for (const name of ALPHA_TOKENS) {
         const a = Number(body.get(name));
-        expect(a, `${selector} ${name}`).toBeGreaterThanOrEqual(0);
-        expect(a, `${selector} ${name}`).toBeLessThanOrEqual(0.8745);
+        expect(a, `${block.selectors.join()} ${name}`).toBeGreaterThanOrEqual(0);
+        expect(a, `${block.selectors.join()} ${name}`).toBeLessThanOrEqual(0.8745);
       }
     }
+  });
+
+  it.each(LEVEL_SELECTORS)('level block %s declares exactly the level token set', (selector) => {
+    expect(
+      decls(paletteBlock(selector, LEVEL_RULES).body)
+        .map(([p]) => p)
+        .sort(),
+    ).toEqual(LEVEL_TOKENS);
+  });
+
+  it('puts the system-follow level blocks inside the light colour-scheme query only, identical to their light block', () => {
+    for (const level of LEVELS_OF)
+      for (const p of ['', '[data-palette="catppuccin"]', '[data-palette="rose-pine"]']) {
+        const system = paletteBlock(levelSelector(`${GATE}${p}:not([data-theme])`, level), LEVEL_RULES);
+        const light = paletteBlock(levelSelector(`${GATE}${p}[data-theme="light"]`, level), LEVEL_RULES);
+        expect(system.media).toEqual(['(prefers-color-scheme: light)']);
+        expect(light.media).toEqual([]);
+        expect(decls(system.body)).toEqual(decls(light.body));
+      }
+  });
+
+  it('keeps the level hooks out of frosted-chrome.css, so Subtle reads the palette through their fallbacks', () => {
+    for (const rule of FROSTED_RULES)
+      for (const [p] of decls(rule.body)) expect(LEVEL_HOOKS, rule.selectors.join()).not.toContain(p);
+  });
+
+  it('holds only level blocks and D14 --term-fg rules in frosted-glass-levels.css (glass-settings D14, D15)', () => {
+    const levelBlocks = new Set(LEVEL_SELECTORS);
+    const termFg = LEVEL_RULES.filter((r) => !levelBlocks.has(r.selectors.join(', ')));
+    expect(LEVEL_RULES.length - termFg.length).toBe(LEVEL_SELECTORS.length);
+    expect(termFg.length).toBeGreaterThan(0);
+    for (const rule of termFg) {
+      expect(decls(rule.body).map(([p]) => p), rule.selectors.join()).toEqual(['--term-fg']);
+      for (const s of rule.selectors) {
+        expect(s).toMatch(/\[data-palette="(catppuccin|rose-pine)"\]/);
+        expect(s).toMatch(/\[data-theme="light"\]|:not\(\[data-theme\]\)/);
+        expect(s).toMatch(new RegExp(`\\[${FROST_ATTR.chromeFrost}="(medium|strong)"\\]`));
+        expect(s).toContain(`[${FROST_ATTR.terminalFrost}]`);
+      }
+    }
+  });
+
+  it('never redeclares --accent, --text or an ANSI --term-* colour (glass-settings D14, D18)', () => {
+    for (const rule of RULES)
+      for (const [p] of decls(rule.body)) {
+        expect(p, rule.selectors.join()).not.toBe('--accent');
+        if (p.startsWith('--term-')) expect(p, rule.selectors.join()).toBe('--term-fg');
+        if (p === '--text') expect(rule.selectors.join(), 'only the chrome, its resets and the frosted Shell sheet').toMatch(/data-chrome-root/);
+      }
   });
 });

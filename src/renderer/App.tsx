@@ -66,7 +66,7 @@ import { ShellSplit } from './components/ShellSplit';
 import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
-import { useFrostTerminalAttribute } from './hooks/useFrostTerminalAttribute';
+import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -125,7 +125,7 @@ export function App() {
 
 function MainApp() {
   const platform = useShortcutPlatform();
-  useFrostTerminalAttribute();
+  useFrostedGlassAttributes();
   // App-boot auto-login: if the user opted into "Remember me" in a previous
   // session, the OS keychain has their password. Try the silent auto-login
   // once at startup so the chat unread badge, event stream, and rail state
@@ -1130,7 +1130,7 @@ function MainApp() {
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
-  useFrostTerminalAttribute();
+  useFrostedGlassAttributes();
   const shellAgentState = useShellAgentState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
