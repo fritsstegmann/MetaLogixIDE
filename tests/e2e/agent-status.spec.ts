@@ -376,6 +376,36 @@ test('AC5/AC6/AC13: app-loaded OMP reports lifecycle despite inherited OMPCODE=1
   }
 });
 
+test('AC5/AC7: an alive OMP shell loses its working dot when reports stop and regains it on heartbeat', async () => {
+  const h = await launchStatus(['demo'], { defaultAgent: 'omp' });
+  try {
+    await openProject(h.win, 'demo');
+    const id = await projectId(h.win, 'demo');
+    await waitForShell(h.win, id, 0, 'mock-omp ready');
+    await sendLine(h.win, id, 0, '/start');
+    await expectAgentDot(tabDot(h.win, 0), 'omp', 'busy'); // positive: accepted report
+    await expectAggregate(rowDot(h.win, 'demo'), 'busy');
+
+    await sendLine(h.win, id, 0, '/pause-reports');
+    await waitForShell(h.win, id, 0, 'mock-omp reports paused');
+    await expectAgentDot(tabDot(h.win, 0), 'omp', 'idle', 4000);
+    await expectAggregate(rowDot(h.win, 'demo'), 'idle');
+    await expect
+      .poll(async () =>
+        (await statusSnapshot(h.win)).find(
+          (entry) => entry.projectId === id && entry.shellIndex === 0,
+        ),
+      )
+      .toEqual(expect.objectContaining({ agent: 'omp', state: 'idle' }));
+
+    await waitForShell(h.win, id, 0, 'mock-omp reports resumed');
+    await expectAgentDot(tabDot(h.win, 0), 'omp', 'busy'); // positive: same live session recovers
+    await expectAggregate(rowDot(h.win, 'demo'), 'busy');
+  } finally {
+    await h.close();
+  }
+});
+
 test('AC6/AC7: unavailable OMP integration stays runnable and idle; late report after exit cannot revive it', async () => {
   const h = await launchStatus(['demo']);
   try {

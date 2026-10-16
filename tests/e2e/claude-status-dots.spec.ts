@@ -24,7 +24,7 @@ test('AC8/AC9: inactive idle tab stays static grey; only its live agent changes 
       `${h.home}/unused-settings.json`,
     ]);
     const inactive = tabDot(h.win, second);
-    await expect(inactive).toHaveAccessibleName('Idle');
+    await expect(inactive).toHaveAccessibleName('Claude is idle');
     await expect(inactive).not.toHaveAttribute(AGENT_DOT.stateAttr, /.+/);
     await expect(inactive).not.toHaveClass(/live-dot/);
     await expectAgentDot(tabDot(h.win, 0), 'claude', 'idle'); // control: active idle has a live state dot

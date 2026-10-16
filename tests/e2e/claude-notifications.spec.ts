@@ -37,7 +37,7 @@
  * needed here since AC17's own wording includes "all app windows minimised".
  */
 
-import { test, expect, _electron as electron } from '@playwright/test';
+import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,6 +67,20 @@ function snapshotClaudePath(path: string): ClaudePathSnapshot {
   const st = statSync(path);
   if (st.isDirectory()) return { present: true, kind: 'dir', entries: readdirSync(path).sort() };
   return { present: true, kind: 'file', size: st.size, mtimeMs: st.mtimeMs };
+}
+
+/** Activate the actual app before asserting focus-dependent notification policy. */
+async function focusMain(app: ElectronApplication): Promise<void> {
+  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    const main = BrowserWindow.getAllWindows().find((window) => !window.webContents.getURL().includes('popout=1'));
+    if (!main) throw new Error('main window unavailable');
+    electronApp.focus({ steal: true });
+    main.show();
+    main.focus();
+  });
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().find((window) => !window.webContents.getURL().includes('popout=1'))?.isFocused() ?? false
+  ), { timeout: 3000, message: 'main window holds OS focus' }).toBe(true);
 }
 
 test.describe('Claude Code system notifications', () => {
@@ -193,6 +207,7 @@ test.describe('Claude Code system notifications', () => {
       // would answer a blocked shell (AC7), so the AC16 event below has to
       // be posted directly.
       const projACreds = await hookCredentials(h.win, h.isolatedHome, projA, 0);
+      await focusMain(h.app);
 
       // AC15: main window focused and showing proja's shell 0 — an event on
       // that exact shell must not notify.
@@ -286,32 +301,11 @@ test.describe('Claude Code system notifications', () => {
       await popout.waitForLoadState('domcontentloaded');
       await expect(popout.locator('[data-testid="shell-tab"] .xterm-screen')).toBeVisible({ timeout: 8000 });
 
-      // The popout opens already focused (AC9, terminal-window-focus.spec.ts),
-      // so the shell would count as "viewed" (AC15) until we move focus back
-      // to main. Same blur()/show()/focus() sequence as
-      // focus.ts's sendNotificationFocusRequest — proven reliable for
-      // same-app window switching in this environment, unlike the cross-app
-      // blur() limitation documented at the top of this file. Poll
-      // `isFocused()` rather than assume the call landed synchronously.
-      // Identify the two windows by URL (popout carries `popout=1`), not by
-      // array position — getAllWindows()'s order is not documented to be
-      // creation order.
-      await h.app.evaluate(({ BrowserWindow }) => {
-        const wins = BrowserWindow.getAllWindows();
-        const popoutWin = wins.find((w) => w.webContents.getURL().includes('popout=1'));
-        const mainWin = wins.find((w) => !w.webContents.getURL().includes('popout=1'));
-        if (!popoutWin || !mainWin) throw new Error(`expected one main + one popout window, got ${wins.length}`);
-        popoutWin.blur();
-        mainWin.show();
-        mainWin.focus();
-      });
-      await expect.poll(
-        () => h.app.evaluate(({ BrowserWindow }) => {
-          const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('popout=1'));
-          return main?.isFocused() ?? false;
-        }),
-        { timeout: 3000, message: 'main window regains focus after the popout opened' },
-      ).toBe(true);
+      // The popout opens focused, so explicitly reactivate main before
+      // delivering a notification for the no-longer-viewed popout shell.
+      // Plain BrowserWindow.focus() can be refused while another app holds
+      // macOS focus; the helper establishes and verifies real OS focus.
+      await focusMain(h.app);
 
       await sendLine(h.win, projA, 0, '/hook-notify permission_prompt popped out and needs you');
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(1);

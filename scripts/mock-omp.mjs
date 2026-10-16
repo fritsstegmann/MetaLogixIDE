@@ -115,6 +115,12 @@ if (process.argv[2] === '--late-report') {
         } else if (line === '/end') {
           await emit('agent_end', { type: 'agent_end' });
           process.stdout.write('mock-omp turn settled\n> ');
+        } else if (line === '/pause-reports') {
+          // Suspend this live OMP process's event loop so its real extension
+          // cannot send heartbeats. The Electron watchdog runs independently.
+          process.stdout.write('mock-omp reports paused\n');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000);
+          process.stdout.write('mock-omp reports resumed\n> ');
         } else if (line === '/switch') {
           session = 'mock-session-2';
           await emit('session_switch', { type: 'session_switch' });

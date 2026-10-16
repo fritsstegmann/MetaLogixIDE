@@ -273,7 +273,7 @@ export async function expectAgentDot(
   await expectDot(dot, state, AGENT_STATE_LABEL[agent][state], timeout);
 }
 
-/** Inactive idle tabs intentionally have a generic grey dot; IPC still proves agent identity. */
+/** Inactive idle tabs stay grey but still name their recognized agent. */
 export async function expectInactiveAgentIdle(
   win: Page,
   projectId: number,
@@ -290,8 +290,8 @@ export async function expectInactiveAgentIdle(
     .toEqual({ agent, state: 'idle' });
   const dot = tabDot(win, shellIndex);
   await expect(dot).not.toHaveAttribute(AGENT_DOT.stateAttr);
-  await expect(dot).toHaveAttribute('title', AGGREGATE_STATE_LABEL.idle);
-  await expect(dot).toHaveAccessibleName(AGGREGATE_STATE_LABEL.idle);
+  await expect(dot).toHaveAttribute('title', AGENT_STATE_LABEL[agent].idle);
+  await expect(dot).toHaveAccessibleName(AGENT_STATE_LABEL[agent].idle);
 }
 
 export async function expectAggregate(
