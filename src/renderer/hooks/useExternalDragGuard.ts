@@ -42,6 +42,8 @@ export function createExternalDragGuard(): ExternalDragGuard {
   };
 }
 
+const CAPTURE = { capture: true } as const;
+
 const buttonsOf = (e: Event): number => ('buttons' in e ? Number(e.buttons) : 0);
 
 /** Wires the guard to `target` (a window); returns a disposer that removes every listener. */
@@ -59,11 +61,11 @@ export function installExternalDragGuard(target: EventTarget): () => void {
     ['pointerdown', () => guard.pointerDown()],
     ['mousemove', (e) => guard.pointerMove(buttonsOf(e))],
   ];
-  for (const [type, fn] of capture) target.addEventListener(type, fn, true);
+  for (const [type, fn] of capture) target.addEventListener(type, fn, CAPTURE);
   target.addEventListener('dragover', onDragOver);
   target.addEventListener('drop', onDrop);
   return () => {
-    for (const [type, fn] of capture) target.removeEventListener(type, fn, true);
+    for (const [type, fn] of capture) target.removeEventListener(type, fn, CAPTURE);
     target.removeEventListener('dragover', onDragOver);
     target.removeEventListener('drop', onDrop);
   };

@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { createDropStaging, defaultDropDir, type DropStaging } from '@main/drops/staging';
 import { MAX_STAGED_BYTES } from '@shared/terminal-drop-contract';
 
@@ -122,6 +122,27 @@ describe('stage — collisions never overwrite (AC9, AC17)', () => {
     expect(stagedPath(await s.stage('notes', 'text/plain', bytes('b')))).toBe(
       resolve(dir, 'notes-1'),
     );
+  });
+
+  it('keeps a suffixed 100-character name within 100 characters and keeps the extension', async () => {
+    const s = staging();
+    const name = `${'a'.repeat(96)}.png`;
+    const paths = [];
+    for (let n = 0; n < 12; n += 1)
+      paths.push(stagedPath(await s.stage(name, 'image/png', bytes(`${n}`))));
+    expect(paths[0]).toBe(resolve(dir, name));
+    expect(paths[1]).toBe(resolve(dir, `${'a'.repeat(94)}-1.png`));
+    expect(paths[11]).toBe(resolve(dir, `${'a'.repeat(93)}-11.png`));
+    for (const p of paths) expect(basename(p).length).toBeLessThanOrEqual(100);
+    expect(new Set(paths).size).toBe(12);
+  });
+
+  it('keeps a suffixed name within 100 characters when the extension leaves no room for a stem', async () => {
+    const s = staging();
+    const name = `a.${'b'.repeat(98)}`;
+    await s.stage(name, 'text/plain', bytes('1'));
+    const second = basename(stagedPath(await s.stage(name, 'text/plain', bytes('2'))));
+    expect(second).toBe(`a.${'b'.repeat(96)}-1`);
   });
 
   it.skipIf(!posix)('never follows a pre-planted symlink at the target name', async () => {

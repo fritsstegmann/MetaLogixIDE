@@ -4,6 +4,9 @@ import {
   installExternalDragGuard,
 } from '@renderer/hooks/useExternalDragGuard';
 
+const isCapture = (options?: boolean | { capture?: boolean }): boolean =>
+  typeof options === 'boolean' ? options : options?.capture === true;
+
 describe('createExternalDragGuard (AC22)', () => {
   it('swallows dragover and drop for a drag that did not start in this window', () => {
     const guard = createExternalDragGuard();
@@ -97,6 +100,14 @@ describe('installExternalDragGuard (AC22, popout and main window)', () => {
     expect(fire(target, 'dragover').defaultPrevented).toBe(true);
   });
 
+  it('treats a mousemove that reports no buttons field as button-free', () => {
+    const target = new EventTarget();
+    installExternalDragGuard(target);
+    fire(target, 'dragstart');
+    fire(target, 'mousemove');
+    expect(fire(target, 'dragover').defaultPrevented).toBe(true);
+  });
+
   it('self-heals a stuck in-app flag on pointerdown (M4)', () => {
     const target = new EventTarget();
     installExternalDragGuard(target);
@@ -119,13 +130,21 @@ describe('installExternalDragGuard (AC22, popout and main window)', () => {
     const live = new Set<string>();
     const key = (type: string, capture: unknown) => `${type}:${capture === true}`;
     class CountingTarget extends EventTarget {
-      override addEventListener(type: string, fn: EventListener, capture?: boolean): void {
-        live.add(key(type, capture));
-        super.addEventListener(type, fn, capture);
+      override addEventListener(
+        type: string,
+        fn: EventListener,
+        options?: boolean | { capture?: boolean },
+      ): void {
+        live.add(key(type, isCapture(options)));
+        super.addEventListener(type, fn, options);
       }
-      override removeEventListener(type: string, fn: EventListener, capture?: boolean): void {
-        live.delete(key(type, capture));
-        super.removeEventListener(type, fn, capture);
+      override removeEventListener(
+        type: string,
+        fn: EventListener,
+        options?: boolean | { capture?: boolean },
+      ): void {
+        live.delete(key(type, isCapture(options)));
+        super.removeEventListener(type, fn, options);
       }
     }
     const dispose = installExternalDragGuard(new CountingTarget());

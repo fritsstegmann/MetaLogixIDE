@@ -1,17 +1,16 @@
 /**
- * DOM glue for dropping onto a terminal (AC1, AC16, AC19, AC20). It snapshots the `DataTransfer`
- * synchronously (it is unreadable once the event returns), hands the snapshot to `planDrop` with
- * the real IPC, path and toast effects, and passes a non-empty payload to `paste`, which must be
- * `term.paste` so bracketed paste applies. It also drives the overlay through the enter/leave
- * depth counter. Logic lives in `terminal-drop.ts` and `drag-hover.ts`; this hook is covered by E2E.
+ * Thin React wiring for dropping onto a terminal (AC1, AC16, AC19, AC20). It builds one
+ * `createTerminalDropController` with the real IPC, path, toast and overlay effects, attaches its
+ * window dragend/drop reset for the component's lifetime, and exposes its handlers for the
+ * terminal container. `paste` must be `term.paste`; behaviour lives in `terminal-drop-controller.ts`.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { api } from '@renderer/api';
-import { createDragHover, dropKindFor, type DropKind } from '@renderer/drag-hover';
+import type { DropKind } from '@renderer/drag-hover';
 import { toast } from '@renderer/hooks/useToasts';
 import { planDrop, type DropDeps } from '@renderer/terminal-drop';
+import { createTerminalDropController } from '@renderer/terminal-drop-controller';
 import { pathStyleFor } from '@shared/shell-escape';
-import { APP_FILE_DRAG_TYPE } from '@shared/terminal-drop-contract';
 
 export interface TerminalDropOptions {
   /** Inserts the payload; called only with a non-empty string. */
@@ -44,57 +43,27 @@ export function useTerminalDrop(options: TerminalDropOptions): {
 } {
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const hover = useMemo(createDragHover, []);
   const [overlay, setOverlay] = useState<DropKind | null>(null);
-
-  const reset = useCallback(() => {
-    hover.reset();
-    setOverlay(null);
-  }, [hover]);
-
-  useEffect(() => {
-    window.addEventListener('dragend', reset);
-    window.addEventListener('drop', reset);
-    return () => {
-      window.removeEventListener('dragend', reset);
-      window.removeEventListener('drop', reset);
-    };
-  }, [reset]);
-
+  const controller = useMemo(
+    () =>
+      createTerminalDropController<File>({
+        plan: (snapshot) => planDrop(snapshot, dropDeps),
+        paste: (text) => optionsRef.current.paste(text),
+        isExited: () => optionsRef.current.isExited(),
+        setOverlay,
+        onError: (err) => console.error('[metaide] terminal drop failed', err),
+      }),
+    [],
+  );
+  useEffect(() => controller.attach(window), [controller]);
   const handlers = useMemo<TerminalDropHandlers>(
     () => ({
-      onDragEnter: (e) => {
-        hover.enter();
-        setOverlay(dropKindFor(e.dataTransfer.types));
-      },
-      onDragOver: (e) => {
-        if (!dropKindFor(e.dataTransfer.types)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      },
-      onDragLeave: () => {
-        if (!hover.leave()) setOverlay(null);
-      },
-      onDrop: (e) => {
-        reset();
-        const dt = e.dataTransfer;
-        if (!dropKindFor(dt.types)) return;
-        e.preventDefault();
-        if (optionsRef.current.isExited()) return;
-        const snapshot = {
-          appFile: dt.types.includes(APP_FILE_DRAG_TYPE) ? dt.getData(APP_FILE_DRAG_TYPE) : '',
-          files: Array.from(dt.files),
-          text: dt.getData('text/plain'),
-        };
-        void planDrop(snapshot, dropDeps)
-          .then((payload) => {
-            if (payload && !optionsRef.current.isExited()) optionsRef.current.paste(payload);
-          })
-          .catch((err: unknown) => console.error('[metaide] terminal drop failed', err));
-      },
+      onDragEnter: (e) => controller.dragEnter(e),
+      onDragOver: (e) => controller.dragOver(e),
+      onDragLeave: () => controller.dragLeave(),
+      onDrop: (e) => void controller.drop(e),
     }),
-    [hover, reset],
+    [controller],
   );
-
   return { overlay, handlers };
 }

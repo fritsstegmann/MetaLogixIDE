@@ -7,7 +7,8 @@
  */
 import { extname } from 'node:path';
 
-const MAX_NAME_LENGTH = 100;
+/** Longest staged file name, suffix included (spec AC9). */
+export const MAX_NAME_LENGTH = 100;
 const DISALLOWED = /[^A-Za-z0-9 ._()+,-]/gu;
 const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9]) *(\..*)?$/i;
 

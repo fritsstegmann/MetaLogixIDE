@@ -10,7 +10,7 @@
 import { lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { MAX_STAGED_BYTES, type StageResult } from '@shared/terminal-drop-contract';
-import { pastedImageName, safeFileName } from './file-name';
+import { MAX_NAME_LENGTH, pastedImageName, safeFileName } from './file-name';
 
 const OWNER_ONLY_DIR = 0o700;
 const OWNER_ONLY_FILE = 0o600;
@@ -51,7 +51,8 @@ export function defaultDropDir(platform: string, tmp: string, uid: number | null
 
 /** Node errno code of `err`, or undefined when it carries none. */
 function errorCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException | null)?.code;
+  if (typeof err !== 'object' || err === null || !('code' in err)) return undefined;
+  return typeof err.code === 'string' ? err.code : undefined;
 }
 
 /** Human-readable reason for a failed result. */
@@ -82,11 +83,19 @@ async function ensureTrustedDir(dir: string, uid: number | null): Promise<string
   return untrustedReason(dir, uid);
 }
 
-/** The `attempt`-th candidate name: `shot.png`, then `shot-1.png`, `shot-2.png`, and so on. */
+/**
+ * The `attempt`-th candidate name: `shot.png`, then `shot-1.png`, `shot-2.png`,
+ * and so on. The stem is trimmed so the suffixed name stays within
+ * `MAX_NAME_LENGTH` and keeps its extension; when the extension leaves no room
+ * for a stem, the whole name is trimmed and suffixed instead.
+ */
 function candidateName(name: string, attempt: number): string {
   if (attempt === 0) return name;
+  const suffix = `-${attempt}`;
   const ext = extname(name);
-  return `${name.slice(0, name.length - ext.length)}-${attempt}${ext}`;
+  const stemRoom = MAX_NAME_LENGTH - suffix.length - ext.length;
+  if (stemRoom < 1) return `${name.slice(0, MAX_NAME_LENGTH - suffix.length)}${suffix}`;
+  return `${name.slice(0, Math.min(name.length - ext.length, stemRoom))}${suffix}${ext}`;
 }
 
 /** Writes `bytes` to `path` only if it does not exist; on a write error the partial file is removed and the write error is rethrown. */
