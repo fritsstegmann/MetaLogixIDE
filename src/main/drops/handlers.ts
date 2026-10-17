@@ -5,9 +5,10 @@
  * failures come back as typed result values; nothing here throws to the
  * renderer, because Electron strips thrown errors of their identity.
  */
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import log from 'electron-log/main';
 import type { Handler } from '@main/ipc/register';
+import { isInsideRoot } from '@main/domain/path-containment';
 import type {
   AppFileDragPayload,
   ClipboardImageResult,
@@ -44,18 +45,15 @@ function isStageFileRequest(req: unknown): req is StageFileRequest {
 
 /**
  * Resolves `relPath` against `root` and returns the absolute path only when
- * it stays inside `root`. Containment uses `relative()` rather than a string
- * prefix test, which would let a sibling such as `/proj-evil` pass for `/proj`.
+ * it stays inside `root`, judged by the shared `isInsideRoot` rule so drops
+ * and the Files handlers cannot disagree about containment.
  */
 export function resolveWithinRoot(root: string, relPath: string): ResolveAppFileResult {
   if (isAbsolute(relPath)) return { kind: 'failed', reason: 'relPath must not be absolute' };
-  const base = resolve(root);
-  const abs = resolve(base, relPath);
-  const rel = relative(base, abs);
-  const escapes = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
-  return escapes
-    ? { kind: 'failed', reason: 'relPath resolves outside the project' }
-    : { kind: 'resolved', path: abs };
+  const abs = resolve(root, relPath);
+  return isInsideRoot(root, abs)
+    ? { kind: 'resolved', path: abs }
+    : { kind: 'failed', reason: 'relPath resolves outside the project' };
 }
 
 /** Logs a non-staged outcome at warn, so failed drops leave a trace without the file contents. */

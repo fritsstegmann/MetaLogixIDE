@@ -1244,8 +1244,9 @@ rules apply to it.
 
 Known gaps, recorded as follow-ups: a repository's `filter.<name>.clean`
 programs can still run during status, because git cannot turn them off
-for one command. `files:read` checks containment with a plain
-`startsWith` on the project path.
+for one command. The `files:*` handlers check containment lexically
+(`src/main/domain/path-containment.ts`), so unlike `assertWorktreeContained`
+they follow a symlink inside the project that points outside it.
 
 Highlighted lines reach the DOM through one `dangerouslySetInnerHTML`, in
 `SplitDiffRows.tsx`. It takes only the branded `SafeLineHtml` type, which
@@ -1268,10 +1269,16 @@ the whole side falls back to escaped plain text.
 - **Terminal drops use Ghostty's escaping, not quotes.** Dropped paths are
   backslash-escaped and pasted, the same as Ghostty does. CLI agents such as
   Claude Code recognise this form as a file path. The Files-tree resolver
-  checks containment with `path.relative()`. It does not reuse the
-  `abs.startsWith(resolve(root))` check of the `files:*` handlers
-  (`src/main/ipc/register.ts:977`), which accepts a sibling directory such as
-  `/proj-evil` for the root `/proj`.
+  checks containment with `isInsideRoot` from
+  `src/main/domain/path-containment.ts`.
+
+- **One containment rule for project files.** `isInsideRoot` and
+  `resolveInsideRoot` (`src/main/domain/path-containment.ts`) decide whether a
+  path is inside a project root with `path.relative()`. The `files:*` handlers,
+  `files:start-drag` and the drop resolver all use them. A string-prefix test is
+  not used, because it accepts a sibling such as `/proj-evil` for the root
+  `/proj`. `files:peek` still reads absolute paths by design; it uses
+  `isInsideRoot` only to choose which root a path is shown under.
 
 - **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
   old when added, inside the usual release-age window; it was accepted
