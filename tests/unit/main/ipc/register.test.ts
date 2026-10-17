@@ -13,13 +13,24 @@ import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const migrationsDir = resolve(__dirname, '../../../../migrations');
+
+const electronStubs = vi.hoisted(() => ({
+  showItemInFolder: vi.fn(),
+  getFileIcon: vi.fn(async () => ({ icon: true })),
+}));
+
+vi.mock('electron', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  shell: { showItemInFolder: electronStubs.showItemInFolder },
+  app: { getFileIcon: electronStubs.getFileIcon },
+}));
 
 function fakeIpcMain(): IpcMain & { handlers: Map<string, (e: unknown, req: unknown) => Promise<unknown>> } {
   const handlers = new Map<string, (e: unknown, req: unknown) => Promise<unknown>>();
@@ -1840,6 +1851,64 @@ describe('project file handlers keep every path inside the project root', () => 
     await expect(call('files:start-drag', { projectId: 1, paths: [SIBLING] }, { sender: { startDrag } }))
       .rejects.toThrow('no valid files to drag');
     expect(startDrag).not.toHaveBeenCalled();
+  });
+
+  it('files:write refuses the project root itself and leaves no temp file beside it', async () => {
+    const { base, call } = containmentRig();
+    for (const relPath of ['', '.']) {
+      await expect(call('files:write', { projectId: 1, relPath, content: 'x' })).rejects.toThrow('refusing to write to project root');
+    }
+    expect(readdirSync(base).filter((n) => n.includes('metaide-tmp'))).toEqual([]);
+  });
+
+  it('files:write removes its temp file when the final rename fails', async () => {
+    const { root, call } = containmentRig();
+    mkdirSync(join(root, 'dir'));
+    writeFileSync(join(root, 'dir', 'keep'), '');
+    await expect(call('files:write', { projectId: 1, relPath: 'dir', content: 'x' })).rejects.toThrow();
+    expect(readdirSync(root).filter((n) => n.includes('metaide-tmp'))).toEqual([]);
+  });
+
+  it('files:write writes a nested relative path and an absolute in-root path that read back', async () => {
+    const { root, call } = containmentRig();
+    mkdirSync(join(root, 'd'));
+    await expect(call('files:write', { projectId: 1, relPath: 'd/x', content: 'one' })).resolves.toEqual({ ok: true, sizeBytes: 3 });
+    await expect(call('files:read', { projectId: 1, relPath: 'd/x' })).resolves.toMatchObject({ content: 'one' });
+    await expect(call('files:write', { projectId: 1, relPath: join(root, 'abs'), content: 'two' })).resolves.toEqual({ ok: true, sizeBytes: 3 });
+    expect(readFileSync(join(root, 'abs'), 'utf8')).toBe('two');
+  });
+
+  it('files:mkdir creates a directory inside the root', async () => {
+    const { root, call } = containmentRig();
+    await expect(call('files:mkdir', { projectId: 1, relPath: 'd2' })).resolves.toEqual({ ok: true });
+    expect(existsSync(join(root, 'd2'))).toBe(true);
+  });
+
+  it('files:rename moves a file within the root', async () => {
+    const { root, call } = containmentRig();
+    await expect(call('files:rename', { projectId: 1, from: 'f', to: 'g' })).resolves.toEqual({ ok: true });
+    expect(existsSync(join(root, 'f'))).toBe(false);
+    expect(readFileSync(join(root, 'g'), 'utf8')).toBe('mine');
+  });
+
+  it('files:delete removes a file within the root', async () => {
+    const { root, call } = containmentRig();
+    await expect(call('files:delete', { projectId: 1, relPath: 'f' })).resolves.toEqual({ ok: true });
+    expect(existsSync(join(root, 'f'))).toBe(false);
+  });
+
+  it('files:reveal shows an in-root file in the OS file manager', async () => {
+    const { root, call } = containmentRig();
+    electronStubs.showItemInFolder.mockClear();
+    await expect(call('files:reveal', { projectId: 1, relPath: 'f' })).resolves.toEqual({ ok: true });
+    expect(electronStubs.showItemInFolder).toHaveBeenCalledWith(join(root, 'f'));
+  });
+
+  it('files:start-drag starts a drag of an in-root file', async () => {
+    const { root, call } = containmentRig();
+    const startDrag = vi.fn();
+    await expect(call('files:start-drag', { projectId: 1, paths: ['f'] }, { sender: { startDrag } })).resolves.toEqual({ ok: true });
+    expect(startDrag).toHaveBeenCalledWith(expect.objectContaining({ file: join(root, 'f'), files: [join(root, 'f')] }));
   });
 
   it('files:peek attributes a sibling-prefix path to the sibling project, not the current one', async () => {

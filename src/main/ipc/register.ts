@@ -975,11 +975,18 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     const abs = resolveInsideRoot(p.path, relPath);
+    // The temp file sits beside the target, so the root as target would put it outside the project.
+    if (abs === resolve(p.path)) throw new Error('refusing to write to project root');
     // Atomic write via a sibling temp file then rename — protects against
     // partial writes if the process dies mid-flush.
     const tmp = `${abs}.metaide-tmp-${process.pid}-${Date.now()}`;
     writeFileSync(tmp, content, 'utf8');
-    renameSync(tmp, abs);
+    try {
+      renameSync(tmp, abs);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
     const st = statSync(abs);
     return { ok: true as const, sizeBytes: st.size };
   },
