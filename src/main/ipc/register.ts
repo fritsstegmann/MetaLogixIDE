@@ -68,7 +68,7 @@ function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
   return patch;
 }
 
-export type Handler<C extends IpcChannelName> =(services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
+export type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
 
 // Keychain service name for the metaproject credential. One row per (service,

@@ -167,12 +167,10 @@ describe('planDrop: pathless files with bytes (AC9, AC10)', () => {
     expect(out).toBe('/tmp/drops/shot\\ one.png');
   });
 
-  it('keeps drop order for a mixed drop even when staging resolves out of order', async () => {
-    const order: string[] = [];
+  it('keeps drop order for a mixed drop when the first staging call is slow', async () => {
     const stageFile = vi.fn(async (r: StageFileRequest): Promise<StageResult> => {
       const delay = r.name === 'first.png' ? 20 : 1;
       await new Promise((resolve) => setTimeout(resolve, delay));
-      order.push(r.name);
       return { kind: 'staged', path: `/s/${r.name}` };
     });
     const { d } = deps({ stageFile });
@@ -182,8 +180,35 @@ describe('planDrop: pathless files with bytes (AC9, AC10)', () => {
       file('second.png', { size: 2 }),
     ];
     const out = await planDrop(snapshot({ files }), d);
-    expect(order).toEqual(['second.png', 'first.png']);
     expect(out).toBe('/s/first.png /real/one /s/second.png');
+  });
+
+  it('reads and stages one pathless file at a time, so peak memory is one file', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const events: string[] = [];
+    const tracked = (name: string): FakeFile => {
+      const f = file(name, { size: 4 });
+      f.arrayBuffer.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        events.push(`read ${name}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return new Uint8Array(4).buffer;
+      });
+      return f;
+    };
+    const stageFile = vi.fn(async (r: StageFileRequest): Promise<StageResult> => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      events.push(`staged ${r.name}`);
+      inFlight -= 1;
+      return { kind: 'staged', path: `/s/${r.name}` };
+    });
+    const { d } = deps({ stageFile });
+    const out = await planDrop(snapshot({ files: [tracked('a'), tracked('b'), tracked('c')] }), d);
+    expect(peak).toBe(1);
+    expect(events).toEqual(['read a', 'staged a', 'read b', 'staged b', 'read c', 'staged c']);
+    expect(out).toBe('/s/a /s/b /s/c');
   });
 
   it('stages a file exactly at the size limit', async () => {

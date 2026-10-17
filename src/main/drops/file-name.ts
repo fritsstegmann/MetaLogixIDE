@@ -9,6 +9,7 @@ import { extname } from 'node:path';
 
 const MAX_NAME_LENGTH = 100;
 const DISALLOWED = /[^A-Za-z0-9 ._()+,-]/gu;
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9]) *(\..*)?$/i;
 
 const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
   'image/png': 'png',
@@ -47,14 +48,26 @@ function capLength(name: string): string {
   return name.slice(0, MAX_NAME_LENGTH - ext.length) + ext;
 }
 
+/** On Windows, prefixes `_` to a reserved device stem (CON, NUL, COM1, ...) so `open` never reaches a device. */
+function avoidDeviceName(name: string, platform: string): string {
+  return platform === 'win32' && WINDOWS_DEVICE_NAME.test(name) ? `_${name}` : name;
+}
+
 /**
  * Derives a safe on-disk file name from a renderer-supplied `name`. Only `/`
  * separates path segments; a backslash is just another disallowed character.
- * When nothing survives, returns `dropped-<timestamp>.<ext>` with the
- * extension taken from `mime` and the timestamp from `now`.
+ * On `platform` win32, reserved device names are prefixed with `_`. When
+ * nothing survives, returns `dropped-<timestamp>.<ext>` with the extension
+ * taken from `mime` and the timestamp from `now`.
  */
-export function safeFileName(name: string, mime: string, now: Date): string {
+export function safeFileName(
+  name: string,
+  mime: string,
+  now: Date,
+  platform: string = process.platform,
+): string {
   const base = name.slice(name.lastIndexOf('/') + 1);
-  const cleaned = capLength(base.replace(DISALLOWED, '_').replace(/^\.+/, ''));
+  const stripped = base.replace(DISALLOWED, '_').replace(/^\.+/, '');
+  const cleaned = capLength(avoidDeviceName(stripped, platform));
   return cleaned.length > 0 ? cleaned : `dropped-${timestampSlug(now)}.${extensionForMime(mime)}`;
 }

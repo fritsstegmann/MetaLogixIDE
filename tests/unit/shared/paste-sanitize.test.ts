@@ -23,8 +23,19 @@ describe('sanitizePaste (AC2)', () => {
     expect(sanitizePaste('a\tb\nc\r\nd')).toBe('a\tb\nc\r\nd');
   });
 
-  it('leaves printable ASCII, non-ASCII and astral characters untouched', () => {
-    const text = 'echo "héllo" ~/日本/€ 🎉 \u0085  ';
+  it.each(['0080', '0085', '0090', '009b', '009c', '009d', '009f'])(
+    'replaces C1 control character U+%s with a space, so echo cannot smuggle 8-bit CSI/OSC',
+    (hex) => {
+      expect(sanitizePaste(`a${String.fromCharCode(parseInt(hex, 16))}b`)).toBe('a b');
+    },
+  );
+
+  it('neutralises an 8-bit CSI/OSC echo-spoofing payload', () => {
+    expect(sanitizePaste('hi\u009b2K\u009d0;pwned\u009c')).toBe('hi 2K 0;pwned ');
+  });
+
+  it('leaves printable ASCII, NBSP, non-ASCII and astral characters untouched', () => {
+    const text = 'echo "h\u00e9llo" ~/\u65e5\u672c/\u20ac \u{1f389} \u00a0\u00ff';
     expect(sanitizePaste(text)).toBe(text);
   });
 

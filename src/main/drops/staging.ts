@@ -89,13 +89,13 @@ function candidateName(name: string, attempt: number): string {
   return `${name.slice(0, name.length - ext.length)}-${attempt}${ext}`;
 }
 
-/** Writes `bytes` to `path` only if it does not exist; on a write error the partial file is removed. */
+/** Writes `bytes` to `path` only if it does not exist; on a write error the partial file is removed and the write error is rethrown. */
 async function writeExclusive(path: string, bytes: Uint8Array): Promise<void> {
   const handle = await open(path, 'wx', OWNER_ONLY_FILE);
   try {
     await handle.writeFile(bytes);
   } catch (err) {
-    await handle.close();
+    await handle.close().catch(() => undefined);
     await unlink(path).catch(() => undefined);
     throw err;
   }

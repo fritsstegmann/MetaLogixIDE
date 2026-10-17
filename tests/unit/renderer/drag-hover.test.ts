@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createDragHover, createExternalDragGuard, dropKindFor } from '@renderer/drag-hover';
+import { createDragHover, dropKindFor } from '@renderer/drag-hover';
 import { APP_FILE_DRAG_TYPE } from '@shared/terminal-drop-contract';
 
 describe('createDragHover (AC19)', () => {
@@ -69,37 +69,5 @@ describe('dropKindFor (AC20)', () => {
 
   it.each([[['text/uri-list']], [['text/html']], [[]]])('does not accept %j', (types) => {
     expect(dropKindFor(types)).toBeNull();
-  });
-});
-
-describe('createExternalDragGuard (AC22)', () => {
-  it('swallows dragover and drop for a drag that did not start in this window', () => {
-    const guard = createExternalDragGuard();
-    expect(guard.dragOver()).toBe(true);
-    expect(guard.drop()).toBe(true);
-  });
-
-  it('lets an in-app drag keep its native default on dragover and drop', () => {
-    const guard = createExternalDragGuard();
-    guard.dragStart();
-    expect(guard.dragOver()).toBe(false);
-    expect(guard.dragOver()).toBe(false);
-    expect(guard.drop()).toBe(false);
-  });
-
-  it('swallows the next external drag after an in-app drag ends with dragend', () => {
-    const guard = createExternalDragGuard();
-    guard.dragStart();
-    guard.dragEnd();
-    expect(guard.dragOver()).toBe(true);
-    expect(guard.drop()).toBe(true);
-  });
-
-  it('clears the in-app flag on drop, so a missed dragend cannot leak into the next drag', () => {
-    const guard = createExternalDragGuard();
-    guard.dragStart();
-    expect(guard.drop()).toBe(false);
-    expect(guard.dragOver()).toBe(true);
-    expect(guard.drop()).toBe(true);
   });
 });

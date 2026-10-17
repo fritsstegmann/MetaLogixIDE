@@ -95,12 +95,17 @@ async function filePath<F extends DropFile>(file: F, deps: DropDeps<F>): Promise
   return stageBytes(file, deps);
 }
 
+/** Resolves files in drop order, one at a time, so at most one file's bytes are held (AC10). */
 async function filePaths<F extends DropFile>(
   files: readonly F[],
   deps: DropDeps<F>,
 ): Promise<string[]> {
-  const paths = await Promise.all(files.map((file) => filePath(file, deps)));
-  return paths.filter((path): path is string => path !== null);
+  const paths: string[] = [];
+  for (const file of files) {
+    const path = await filePath(file, deps);
+    if (path !== null) paths.push(path);
+  }
+  return paths;
 }
 
 /** Plans a drop; resolves to the payload for `term.paste`, or null when nothing is usable. */

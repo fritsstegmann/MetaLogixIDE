@@ -6,6 +6,7 @@ import { createDropStaging } from '@main/drops/staging';
 
 const faults = vi.hoisted(() => ({
   write: null as Error | null,
+  close: null as Error | null,
   pruneUnlink: null as Error | null,
 }));
 
@@ -18,6 +19,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (faults.write) {
         const err = faults.write;
         handle.writeFile = async () => {
+          throw err;
+        };
+      }
+      if (faults.close) {
+        const err = faults.close;
+        const realClose = handle.close.bind(handle);
+        handle.close = async () => {
+          await realClose();
           throw err;
         };
       }
@@ -46,6 +55,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'drops-fault-'));
   dir = join(root, 'drops');
   faults.write = null;
+  faults.close = null;
   faults.pruneUnlink = null;
 });
 
@@ -56,6 +66,16 @@ afterEach(() => {
 describe('stage — write failure after the exclusive create (AC15)', () => {
   it('returns failed with the reason and leaves no partial file', async () => {
     faults.write = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    const result = await staging().stage('a.txt', 'text/plain', new Uint8Array([1, 2, 3]));
+    expect(result).toEqual({ kind: 'failed', reason: 'ENOSPC: no space left on device' });
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('stage — close failure during write-error cleanup (AC15)', () => {
+  it('still removes the partial file and reports the original write error', async () => {
+    faults.write = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    faults.close = Object.assign(new Error('EIO: i/o error, close'), { code: 'EIO' });
     const result = await staging().stage('a.txt', 'text/plain', new Uint8Array([1, 2, 3]));
     expect(result).toEqual({ kind: 'failed', reason: 'ENOSPC: no space left on device' });
     expect(readdirSync(dir)).toEqual([]);

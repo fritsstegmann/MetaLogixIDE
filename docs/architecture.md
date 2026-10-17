@@ -730,13 +730,14 @@ and that file's path is inserted.
 | Layer | File | Responsibility |
 |---|---|---|
 | Contract | `src/shared/terminal-drop-contract.ts` | Size limit, Files-tree drag type, result unions, function types and every user-facing string. |
-| Logic | `src/shared/paste-sanitize.ts` | Replaces each C0 control character other than TAB, LF and CR, plus DEL, with a space. A payload that contains `ESC[201~` cannot end a bracketed paste early. Pure. |
-| Logic | `src/shared/shell-escape.ts` | POSIX: a backslash before each character in Ghostty's macOS set. Windows: double quotes when the path contains a space or one of `&()^;,=`. Every control character in a path, CR, LF and TAB included, becomes a space first. Pure. |
+| Logic | `src/shared/paste-sanitize.ts` | Replaces each C0 control character other than TAB, LF and CR, plus DEL and the C1 controls U+0080-U+009F, with a space. A C1 character such as U+009B is otherwise echoed back by `cat` and bash readline, and xterm runs it as a control sequence. A payload that contains `ESC[201~` cannot end a bracketed paste early. Pure. |
+| Logic | `src/shared/shell-escape.ts` | POSIX: a backslash before each character in Ghostty's macOS set. Windows: double quotes when the path contains a space or one of `&()^;,=`. Every C0 and C1 control character and DEL in a path, CR, LF and TAB included, becomes a space first. Pure. |
 | Logic | `src/renderer/terminal-drop.ts` | `planDrop`: drop precedence, item order, size pre-check, per-item failure toasts, escaping and sanitising. Pure, with every dependency injected. |
 | Logic | `src/renderer/clipboard-paste.ts` | `resolveClipboardPaste`: clipboard text is sanitised; empty text stages the clipboard image and returns its escaped path. Pure. |
-| Logic | `src/renderer/drag-hover.ts` | The overlay depth counter, `dropKindFor`, and `createExternalDragGuard` for the window-level guard. Pure. |
+| Logic | `src/renderer/drag-hover.ts` | The overlay depth counter and `dropKindFor`. Pure. |
+| Adapter | `src/renderer/hooks/useExternalDragGuard.ts` | The window-level guard: the pure `createExternalDragGuard` state, `installExternalDragGuard(target)` for the listeners, and the hook that installs it on `window`. |
 | Adapter | `src/renderer/hooks/useTerminalDrop.ts`, `useTerminalPaste.ts` | DOM glue. The drop hook copies the `DataTransfer` synchronously, because it is unreadable after the event returns. The paste hook listens for `paste` in the capture phase on the xterm host element, before xterm's own listener. |
-| Presentation | `src/renderer/components/ShellTab.tsx`, `FilesTab.tsx`, `App.tsx` | Wiring: the drop overlay, the context-menu Paste item and the Ctrl+Shift+V key path in ShellTab; the Files-tree drag type in FilesTab; the global guard in App. |
+| Presentation | `src/renderer/components/ShellTab.tsx`, `FilesTab.tsx`, `App.tsx` | Wiring: the drop overlay, the context-menu Paste item and the Ctrl+Shift+V key path in ShellTab; the Files-tree drag type in FilesTab; the guard hook in both `MainApp` and `PopoutShell` (`App.tsx:544`, `App.tsx:1120`). |
 | IPC | `src/main/drops/handlers.ts` | `drops:resolve-app-file`, `drops:stage-file`, `drops:stage-clipboard-image`. Each guards its request shape by hand and returns failures as result values. It does not throw. |
 | Adapter | `src/main/drops/staging.ts`, `file-name.ts`, `clipboard-image.ts` | The temporary directory, file names, and the Electron clipboard wrapper. Built once in `buildServices` (`src/main/services.ts:86`). |
 
@@ -787,13 +788,18 @@ Temporary directory:
   packaged build share the directory, so each can prune the other's old
   files.
 
-The global guard in `App.tsx` cancels `dragover` and `drop` for every drag
-that did not start in this window, whatever its type. So a file, link or
+The global guard cancels `dragover` and `drop` for every drag that did not
+start in this window, whatever its type. It runs in the main window and in
+every popped-out window. So a file, link or
 text dropped outside a terminal never navigates the window and never opens
 a browser. A drag that starts in the window keeps its native behaviour, for
 example text dragged into the editor or the find box. `dragstart` and
-`dragend` are tracked in the capture phase (`App.tsx:554-555`). A drag from
-the main window into a popped-out window counts as external there.
+`dragend` are tracked in the capture phase
+(`src/renderer/hooks/useExternalDragGuard.ts:62`). The in-app state also
+clears on any `pointerdown`, and on a `mousemove` with no button pressed.
+Neither event occurs during a drag, so a lost `dragend` cannot leave the
+guard disabled. A drag from the main window into a popped-out window counts
+as external there.
 
 ### Claude notifications
 

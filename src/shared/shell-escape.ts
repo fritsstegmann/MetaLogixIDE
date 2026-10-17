@@ -1,13 +1,14 @@
 /**
  * Ghostty-style shell escaping for dropped and pasted file paths (AC3, AC3a, AC4, AC5). POSIX
  * paths get a backslash before each character in Ghostty's macOS set; Windows paths are wrapped
- * in double quotes when they contain a space or one of `&()^;,=`. Every C0 control character and
- * DEL inside a path, including CR, LF and TAB, becomes a space before escaping, so a crafted file
+ * in double quotes when they contain a space or one of `&()^;,=`. Every C0 control character,
+ * DEL and C1 control (U+0080-U+009F) inside a path, including CR, LF and TAB, becomes a space
+ * before escaping, so a crafted file
  * name can never submit a command even when bracketed paste is off.
  */
 import type { EscapePathFn, JoinEscapedPathsFn, PathStyleForFn } from './terminal-drop-contract';
 
-const PATH_CONTROL = /[^\x20-\x7e\x80-\uffff]/g;
+const PATH_CONTROL = /[^\x20-\x7e\xa0-\uffff]/g;
 const POSIX_SPECIAL = /[\\ ()[\]{}<>"'`!#$&;|*?]/g;
 const WINDOWS_NEEDS_QUOTES = /[ &()^;,=]/;
 

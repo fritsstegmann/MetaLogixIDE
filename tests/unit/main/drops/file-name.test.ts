@@ -98,3 +98,45 @@ describe('timestampSlug and pastedImageName', () => {
     expect(pastedImageName(NOW)).toBe('pasted-20261017-090507-042.png');
   });
 });
+
+describe('safeFileName — Windows reserved device names', () => {
+  const reserved = [
+    'CON',
+    'prn',
+    'Aux',
+    'NUL',
+    'COM0',
+    'com9',
+    'LPT0',
+    'lpt9',
+    'nul.txt',
+    'CON.tar.gz',
+    'Com1.png',
+  ];
+
+  it.each(reserved)('prefixes %s with an underscore on win32', (name) => {
+    expect(safeFileName(name, 'text/plain', NOW, 'win32')).toBe(`_${name}`);
+  });
+
+  it.each(['CONSOLE', 'nullable.txt', 'COM10', 'LPT', 'xCON', 'AUXx.png'])(
+    'leaves the non-reserved name %s alone on win32',
+    (name) => {
+      expect(safeFileName(name, 'text/plain', NOW, 'win32')).toBe(name);
+    },
+  );
+
+  it('leaves reserved names alone on POSIX', () => {
+    expect(safeFileName('NUL.txt', 'text/plain', NOW, 'darwin')).toBe('NUL.txt');
+    expect(safeFileName('con', 'text/plain', NOW, 'linux')).toBe('con');
+  });
+
+  it('applies the prefix after sanitising, so a traversal name is caught too', () => {
+    expect(safeFileName('..\\x/../.aux.log', 'text/plain', NOW, 'win32')).toBe('_aux.log');
+  });
+
+  it('still caps a prefixed reserved name at 100 characters, keeping the extension', () => {
+    const out = safeFileName(`CON.${'e'.repeat(120)}`, 'text/plain', NOW, 'win32');
+    expect(out.length).toBeLessThanOrEqual(100);
+    expect(out.startsWith('_CON.')).toBe(true);
+  });
+});

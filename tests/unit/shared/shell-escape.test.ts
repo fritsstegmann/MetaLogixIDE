@@ -63,6 +63,18 @@ describe('escapePath control characters (AC3a)', () => {
     expect(out).toBe('/a/x\\ y');
   });
 
+  it.each(['0080', '009b', '009d', '009f'])(
+    'neutralises C1 control U+%s before escaping',
+    (hex) => {
+      const code = parseInt(hex, 16);
+      expect(escapePath(`/a/x${String.fromCharCode(code)}y`, 'posix')).toBe('/a/x\\ y');
+    },
+  );
+
+  it('keeps NBSP and other non-ASCII characters in a path', () => {
+    expect(escapePath('/a/\u00a0\u00e9\u65e5', 'posix')).toBe('/a/\u00a0\u00e9\u65e5');
+  });
+
   it('neutralises control characters in Windows paths too', () => {
     const out = escapePath('C:\\a\nb', 'windows');
     expect(out).not.toMatch(/[\r\n]/);

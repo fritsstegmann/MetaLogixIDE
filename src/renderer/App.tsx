@@ -67,7 +67,7 @@ import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
 import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
-import { createExternalDragGuard } from './drag-hover';
+import { useExternalDragGuard } from './hooks/useExternalDragGuard';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -541,27 +541,7 @@ function MainApp() {
     document.title = selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
   }, [selected]);
 
-  // Global drag/drop guard (AC22). Chromium's default on a drop is to navigate
-  // the webview to the dropped file or URL, or open it in a new window. Every
-  // drag that started outside this window is swallowed; in-app drags keep
-  // their native default, and ShellTab handles its own drops before bubbling.
-  useEffect(() => {
-    const guard = createExternalDragGuard();
-    const onDragStart = () => guard.dragStart();
-    const onDragEnd = () => guard.dragEnd();
-    const onDragOver = (e: DragEvent) => { if (guard.dragOver()) e.preventDefault(); };
-    const onDrop = (e: DragEvent) => { if (guard.drop()) e.preventDefault(); };
-    window.addEventListener('dragstart', onDragStart, true);
-    window.addEventListener('dragend', onDragEnd, true);
-    window.addEventListener('dragover', onDragOver);
-    window.addEventListener('drop', onDrop);
-    return () => {
-      window.removeEventListener('dragstart', onDragStart, true);
-      window.removeEventListener('dragend', onDragEnd, true);
-      window.removeEventListener('dragover', onDragOver);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, []);
+  useExternalDragGuard();
 
   // Guards against the "clicked another project but nothing happens" bug:
   // a slow projects:open (or the shells:launch that runs after it) can
@@ -1137,6 +1117,7 @@ function MainApp() {
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   useFrostedGlassAttributes();
+  useExternalDragGuard();
   const shellAgentState = useShellAgentState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
