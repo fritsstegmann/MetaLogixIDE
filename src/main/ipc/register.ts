@@ -1345,7 +1345,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   ...dropHandlers,
 };
 
-const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
+/** Events broadcast after a channel's handler resolves; exported for the CHANNEL_EMITS guard test. */
+export const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'roots:add':      ['projects:changed'],
   'roots:remove':   ['projects:changed'],
   'roots:rescan':   ['projects:changed'],
