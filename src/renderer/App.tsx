@@ -67,6 +67,7 @@ import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
 import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
+import { useExternalDragGuard } from './hooks/useExternalDragGuard';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -540,22 +541,7 @@ function MainApp() {
     document.title = selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
   }, [selected]);
 
-  // Global drag/drop guard. Chromium's default behaviour on a file drop is
-  // to navigate the whole webview to `file://<dropped-path>` — which flashes
-  // an error page and unmounts the app. We swallow drops that don't hit a
-  // component that opted in (ShellTab handles its own drop event).
-  useEffect(() => {
-    const swallow = (e: DragEvent) => {
-      if (!e.dataTransfer?.types?.includes('Files')) return;
-      e.preventDefault();
-    };
-    window.addEventListener('dragover', swallow);
-    window.addEventListener('drop', swallow);
-    return () => {
-      window.removeEventListener('dragover', swallow);
-      window.removeEventListener('drop', swallow);
-    };
-  }, []);
+  useExternalDragGuard();
 
   // Guards against the "clicked another project but nothing happens" bug:
   // a slow projects:open (or the shells:launch that runs after it) can
@@ -1131,6 +1117,7 @@ function MainApp() {
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
   useFrostedGlassAttributes();
+  useExternalDragGuard();
   const shellAgentState = useShellAgentState(projectId, shellIndex);
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
