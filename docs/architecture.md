@@ -501,7 +501,7 @@ decides who gets each key:
 | Ctrl+K | App: command palette | taken from the shell (readline kill-line); the terminal takes focus automatically, so the palette key must work there |
 | Ctrl+Shift+P/K/O/N/T/F, Ctrl+, Ctrl+/ Ctrl+= Ctrl+- Ctrl+0 | App | an explicit allow-list; xterm sends nothing and the event bubbles |
 | Ctrl+Shift+C | Copy | writes the sanitised selection; does nothing without a selection |
-| Ctrl+Shift+V | Paste | reads the clipboard and calls `term.paste`, which honours bracketed paste |
+| Ctrl+Shift+V | Paste | reads the clipboard and inserts it through the terminal paste pipeline (see Terminal drop and paste) |
 | Anything else | xterm default | unchanged |
 
 So Ctrl+P, Ctrl+B and Ctrl+T do nothing in the app from a focused terminal;
@@ -715,6 +715,85 @@ Rules:
   move focus.
 - Closing the split from its header returns focus to the left terminal.
   **To tab** focuses the moved shell's terminal once it is the active pane.
+
+### Terminal drop and paste
+
+Every drop onto a terminal and every paste into it goes through one
+pipeline. The pipeline resolves each item to text, escapes file paths,
+replaces control characters, and inserts the result with `term.paste`. So
+bracketed paste applies when the program in the terminal has turned it on
+(DECSET 2004), and the text arrives as a paste, not as keystrokes. The
+behaviour follows Ghostty, with two additions: dropped bytes that have no
+filesystem path, and an image-only clipboard, are saved to a temporary file
+and that file's path is inserted.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/terminal-drop-contract.ts` | Size limit, Files-tree drag type, result unions, function types and every user-facing string. |
+| Logic | `src/shared/paste-sanitize.ts` | Replaces each C0 control character other than TAB, LF and CR, plus DEL, with a space. A payload that contains `ESC[201~` cannot end a bracketed paste early. Pure. |
+| Logic | `src/shared/shell-escape.ts` | POSIX: a backslash before each character in Ghostty's macOS set. Windows: double quotes when the path contains a space or one of `&()^;,=`. Every control character in a path, CR, LF and TAB included, becomes a space first. Pure. |
+| Logic | `src/renderer/terminal-drop.ts` | `planDrop`: drop precedence, item order, size pre-check, per-item failure toasts, escaping and sanitising. Pure, with every dependency injected. |
+| Logic | `src/renderer/clipboard-paste.ts` | `resolveClipboardPaste`: clipboard text is sanitised; empty text stages the clipboard image and returns its escaped path. Pure. |
+| Logic | `src/renderer/drag-hover.ts` | The overlay depth counter, `dropKindFor`, and `createExternalDragGuard` for the window-level guard. Pure. |
+| Adapter | `src/renderer/hooks/useTerminalDrop.ts`, `useTerminalPaste.ts` | DOM glue. The drop hook copies the `DataTransfer` synchronously, because it is unreadable after the event returns. The paste hook listens for `paste` in the capture phase on the xterm host element, before xterm's own listener. |
+| Presentation | `src/renderer/components/ShellTab.tsx`, `FilesTab.tsx`, `App.tsx` | Wiring: the drop overlay, the context-menu Paste item and the Ctrl+Shift+V key path in ShellTab; the Files-tree drag type in FilesTab; the global guard in App. |
+| IPC | `src/main/drops/handlers.ts` | `drops:resolve-app-file`, `drops:stage-file`, `drops:stage-clipboard-image`. Each guards its request shape by hand and returns failures as result values. It does not throw. |
+| Adapter | `src/main/drops/staging.ts`, `file-name.ts`, `clipboard-image.ts` | The temporary directory, file names, and the Electron clipboard wrapper. Built once in `buildServices` (`src/main/services.ts:86`). |
+
+Drop precedence:
+
+1. A Files-tree drag carries `application/x-metaide-file` with the
+   `projectId` and `relPath`. The main process resolves it to an absolute
+   path inside the project root. This type wins over any `Files` or
+   `text/plain` entry in the same drop, so the path is inserted once.
+2. Otherwise each dropped file is used in drop order. A file with a path from
+   `webUtils.getPathForFile` inserts that path. A file without a path but
+   with bytes is staged. A file over 50 MB shows a toast and is skipped. A
+   file whose staging fails shows a toast; the other files are still
+   inserted.
+3. With no files, `text/plain` is inserted as it is, without escaping.
+
+A drop with nothing usable inserts nothing. A drop onto an exited shell
+inserts nothing. The pipeline never calls `term.paste('')`, because with
+bracketed paste on that sends an empty bracketed pair.
+
+Paste routes: macOS ⌘V and the Edit menu fire a DOM `paste` event, which the
+paste hook takes. Ctrl+Shift+V and the context-menu Paste item read the
+clipboard and call the same function (`ShellTab.tsx:183`,
+`ShellTab.tsx:599`). All routes sanitise the text. When the clipboard has no
+text, all routes try the clipboard image. The renderer is sandboxed, so the
+main process reads the image.
+
+Temporary directory:
+
+- The location is `<tmp>/metaide-drops-<uid>` on POSIX and
+  `<tmp>/metaide-drops` on Windows (`src/main/drops/staging.ts:46`).
+- Before every write, staging creates the directory with mode 0700 when it
+  is missing. It then refuses to write when the directory is a symlink or
+  not a directory. On POSIX it also refuses when another user owns the
+  directory or its mode is not exactly 0700 (`staging.ts:63-73`). On Windows
+  the owner and mode checks do not run; the per-user `%TEMP%` applies.
+- Files are created with `open(path, 'wx', 0o600)`, an exclusive create
+  (`staging.ts:94`). A name collision adds `-1`, `-2` and so on. A file is
+  never overwritten.
+- File names keep only `A-Z a-z 0-9`, space and `._()+,-`, lose leading
+  dots, and are capped at 100 characters. An empty name becomes
+  `dropped-<timestamp>.<ext>`; a clipboard image is `pasted-<timestamp>.png`.
+  Timestamps are UTC.
+- At startup, after the main window is created, the main process deletes
+  regular files older than 24 hours, once, without awaiting the result
+  (`src/main/index.ts:467`). Pruning refuses an untrusted directory, so a
+  planted symlink cannot make it delete other files. A dev build and a
+  packaged build share the directory, so each can prune the other's old
+  files.
+
+The global guard in `App.tsx` cancels `dragover` and `drop` for every drag
+that did not start in this window, whatever its type. So a file, link or
+text dropped outside a terminal never navigates the window and never opens
+a browser. A drag that starts in the window keeps its native behaviour, for
+example text dragged into the editor or the find box. `dragstart` and
+`dragend` are tracked in the capture phase (`App.tsx:554-555`). A drag from
+the main window into a popped-out window counts as external there.
 
 ### Claude notifications
 
@@ -1178,6 +1257,14 @@ the whole side falls back to escaped plain text.
 | `mermaid` | 11.17.2, exact pin | Diagrams. Version 12 requires Node 22, and the repo uses Node 20. |
 
 ## Architectural Decisions
+
+- **Terminal drops use Ghostty's escaping, not quotes.** Dropped paths are
+  backslash-escaped and pasted, the same as Ghostty does. CLI agents such as
+  Claude Code recognise this form as a file path. The Files-tree resolver
+  checks containment with `path.relative()`. It does not reuse the
+  `abs.startsWith(resolve(root))` check of the `files:*` handlers
+  (`src/main/ipc/register.ts:977`), which accepts a sibling directory such as
+  `/proj-evil` for the root `/proj`.
 
 - **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
   old when added, inside the usual release-age window; it was accepted
