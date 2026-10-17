@@ -13,7 +13,7 @@ import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
@@ -1755,5 +1755,106 @@ describe('roots:rescan', () => {
     await rescan();
 
     expect(projects.list().map((p) => p.name)).toEqual(['busy']);
+  });
+});
+
+describe('project file handlers keep every path inside the project root', () => {
+  /** `<base>/proj` as project 1 and `<base>/proj-evil` as project 2, each holding a file `f`, plus a handler caller. */
+  function containmentRig() {
+    const { base, root } = tempProject('reg-contain-');
+    const evil = join(base, 'proj-evil');
+    mkdirSync(evil);
+    writeFileSync(join(evil, 'f'), 'secret');
+    writeFileSync(join(root, 'f'), 'mine');
+    const all = [{ id: 1, path: root }, { id: 2, path: evil }];
+    const projects = { get: (id: number) => all.find((p) => p.id === id), list: () => all };
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    const call = (channel: string, req: unknown, event: unknown = {}) => ipc.handlers.get(channel)!(event, req);
+    return { base, root, evil, call };
+  }
+
+  const ESCAPE = 'path escapes project root';
+  const SIBLING = '../proj-evil/f';
+
+  it('files:tree rejects a parent-climbing path instead of listing outside the root', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:tree', { projectId: 1, relPath: '../..' })).rejects.toThrow(ESCAPE);
+    await expect(call('files:tree', { projectId: 1, relPath: '../proj-evil' })).rejects.toThrow(ESCAPE);
+  });
+
+  it('files:tree still lists the root and a dotted child directory', async () => {
+    const { root, call } = containmentRig();
+    mkdirSync(join(root, '..config'));
+    writeFileSync(join(root, '..config', 'c'), '');
+    await expect(call('files:tree', { projectId: 1, relPath: '' })).resolves.toEqual({
+      entries: [{ name: '..config', isDir: true, relPath: '..config' }, { name: 'f', isDir: false, relPath: 'f' }],
+    });
+    await expect(call('files:tree', { projectId: 1, relPath: '..config' })).resolves.toEqual({
+      entries: [{ name: 'c', isDir: false, relPath: join('..config', 'c') }],
+    });
+  });
+
+  it('files:read rejects a sibling-prefix path', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:read', { projectId: 1, relPath: SIBLING })).rejects.toThrow(ESCAPE);
+    await expect(call('files:read', { projectId: 1, relPath: 'f' })).resolves.toMatchObject({ content: 'mine' });
+  });
+
+  it('files:write rejects a sibling-prefix path and leaves the sibling untouched', async () => {
+    const { evil, call } = containmentRig();
+    await expect(call('files:write', { projectId: 1, relPath: SIBLING, content: 'pwned' })).rejects.toThrow(ESCAPE);
+    expect(readFileSync(join(evil, 'f'), 'utf8')).toBe('secret');
+  });
+
+  it('files:mkdir rejects a sibling-prefix path without creating it', async () => {
+    const { evil, call } = containmentRig();
+    await expect(call('files:mkdir', { projectId: 1, relPath: '../proj-evil/d' })).rejects.toThrow(ESCAPE);
+    expect(existsSync(join(evil, 'd'))).toBe(false);
+  });
+
+  it('files:rename rejects a sibling-prefix source and a sibling-prefix destination', async () => {
+    const { root, evil, call } = containmentRig();
+    await expect(call('files:rename', { projectId: 1, from: SIBLING, to: 'stolen' })).rejects.toThrow(ESCAPE);
+    expect(existsSync(join(evil, 'f'))).toBe(true);
+    await expect(call('files:rename', { projectId: 1, from: 'f', to: '../proj-evil/g' })).rejects.toThrow(ESCAPE);
+    expect(existsSync(join(root, 'f'))).toBe(true);
+  });
+
+  it('files:delete rejects a sibling-prefix path and still refuses the project root', async () => {
+    const { root, evil, call } = containmentRig();
+    await expect(call('files:delete', { projectId: 1, relPath: SIBLING })).rejects.toThrow(ESCAPE);
+    expect(existsSync(join(evil, 'f'))).toBe(true);
+    await expect(call('files:delete', { projectId: 1, relPath: '' })).rejects.toThrow('refusing to delete project root');
+    expect(existsSync(root)).toBe(true);
+  });
+
+  it('files:reveal rejects a sibling-prefix path', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:reveal', { projectId: 1, relPath: SIBLING })).rejects.toThrow(ESCAPE);
+  });
+
+  it('files:start-drag drops a sibling-prefix path and never starts a drag', async () => {
+    const { call } = containmentRig();
+    const startDrag = vi.fn();
+    await expect(call('files:start-drag', { projectId: 1, paths: [SIBLING] }, { sender: { startDrag } }))
+      .rejects.toThrow('no valid files to drag');
+    expect(startDrag).not.toHaveBeenCalled();
+  });
+
+  it('files:peek attributes a sibling-prefix path to the sibling project, not the current one', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:peek', { projectId: 1, relPath: SIBLING })).resolves.toMatchObject({
+      found: true, relPath: 'f', head: 'secret',
+    });
+  });
+
+  it('files:peek still previews an absolute path outside every project', async () => {
+    const { base, call } = containmentRig();
+    const outside = join(base, 'loose.txt');
+    writeFileSync(outside, 'loose');
+    await expect(call('files:peek', { projectId: 1, relPath: outside })).resolves.toMatchObject({
+      found: true, relPath: outside, head: 'loose',
+    });
   });
 });

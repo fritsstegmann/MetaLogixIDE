@@ -39,6 +39,7 @@ import { describeGitFailure, runGit } from '@main/git/run-git';
 import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
+import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
@@ -930,7 +931,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:tree':   async (s, { projectId, relPath }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const abs = relPath ? join(p.path, relPath) : p.path;
+    const abs = resolveInsideRoot(p.path, relPath ?? '');
     const entries = readdirSync(abs).map(name => {
       const full = join(abs, name);
       let isDir = false; try { isDir = statSync(full).isDirectory(); } catch {}
@@ -973,8 +974,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:write':  async (s, { projectId, relPath, content }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const abs = resolve(p.path, relPath);
-    if (!abs.startsWith(resolve(p.path))) throw new Error('path escapes project root');
+    const abs = resolveInsideRoot(p.path, relPath);
     // Atomic write via a sibling temp file then rename — protects against
     // partial writes if the process dies mid-flush.
     const tmp = `${abs}.metaide-tmp-${process.pid}-${Date.now()}`;
@@ -987,8 +987,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:mkdir':  async (s, { projectId, relPath }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const abs = resolve(p.path, relPath);
-    if (!abs.startsWith(resolve(p.path))) throw new Error('path escapes project root');
+    const abs = resolveInsideRoot(p.path, relPath);
     if (existsSync(abs)) throw new Error(`already exists: ${relPath}`);
     mkdirSync(abs, { recursive: true });
     return { ok: true as const };
@@ -998,9 +997,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     const root = resolve(p.path);
-    const src = resolve(root, from);
-    const dst = resolve(root, to);
-    if (!src.startsWith(root) || !dst.startsWith(root)) throw new Error('path escapes project root');
+    const src = resolveInsideRoot(root, from);
+    const dst = resolveInsideRoot(root, to);
     if (!existsSync(src)) throw new Error(`no such file: ${from}`);
     if (existsSync(dst)) throw new Error(`target exists: ${to}`);
     renameSync(src, dst);
@@ -1010,8 +1008,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:delete': async (s, { projectId, relPath }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const abs = resolve(p.path, relPath);
-    if (!abs.startsWith(resolve(p.path))) throw new Error('path escapes project root');
+    const abs = resolveInsideRoot(p.path, relPath);
     if (abs === resolve(p.path)) throw new Error('refusing to delete project root');
     if (!existsSync(abs)) return { ok: true as const };
     rmSync(abs, { recursive: true, force: true });
@@ -1037,7 +1034,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     for (const r of roots) candidates.push({ abs: resolve(r, relPath), root: r });
 
     for (const { abs, root } of candidates) {
-      if (root && !abs.startsWith(root)) continue;
+      if (root && !isInsideRoot(root, abs)) continue;
       try {
         const st = statSync(abs);
         if (st.isDirectory()) continue;
@@ -1062,8 +1059,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:reveal': async (s, { projectId, relPath }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const abs = resolve(p.path, relPath);
-    if (!abs.startsWith(resolve(p.path))) throw new Error('path escapes project root');
+    const abs = resolveInsideRoot(p.path, relPath);
     if (!existsSync(abs)) throw new Error(`no such file: ${relPath}`);
     shell.showItemInFolder(abs);
     return { ok: true as const };
@@ -1322,8 +1318,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     // Prevent path traversal — resolved path must stay within project root.
-    const abs = resolve(p.path, relPath);
-    if (!abs.startsWith(resolve(p.path))) throw new Error('path escapes project root');
+    const abs = resolveInsideRoot(p.path, relPath);
     const st = statSync(abs);
     if (st.isDirectory()) throw new Error(`${relPath} is a directory`);
     if (st.size > 2_000_000) return { content: `File too large (${st.size} bytes) — preview capped at 2 MB.`, kind: 'text' as const, sizeBytes: st.size };
@@ -1504,7 +1499,7 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     const root = resolve(project.path);
     // Reject anything that escapes the project root — we only expose files
     // the user could already see in the Files tab.
-    const absPaths = req.paths.map((p) => resolve(root, p)).filter((abs) => abs.startsWith(root) && existsSync(abs));
+    const absPaths = req.paths.map((p) => resolve(root, p)).filter((abs) => isInsideRoot(root, abs) && existsSync(abs));
     if (absPaths.length === 0) throw new Error('no valid files to drag');
     // startDrag needs a non-empty NativeImage. app.getFileIcon returns the
     // OS's own icon for the file (or a generic folder icon for dirs), which
