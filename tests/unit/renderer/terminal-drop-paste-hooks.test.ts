@@ -188,10 +188,21 @@ describe('useTerminalDrop wiring', () => {
   });
 
   it('reads isExited from the latest options (AC16)', async () => {
-    const { first, paste } = mount({ exited: true });
+    const paste = vi.fn();
+    const first = rt.render(() => useTerminalDrop({ paste, isExited: () => false }));
+    rt.render(() => useTerminalDrop({ paste, isExited: () => true }));
     first.handlers.onDrop(drag(['text/plain'], { 'text/plain': 'x' }));
     await flush();
     expect(paste).not.toHaveBeenCalled();
+  });
+
+  it('pastes again once the latest options report the shell alive (AC16)', async () => {
+    const paste = vi.fn();
+    const first = rt.render(() => useTerminalDrop({ paste, isExited: () => true }));
+    rt.render(() => useTerminalDrop({ paste, isExited: () => false }));
+    first.handlers.onDrop(drag(['text/plain'], { 'text/plain': 'x' }));
+    await flush();
+    expect(paste).toHaveBeenCalledWith('x');
   });
 
   it('logs a paste failure instead of throwing', async () => {

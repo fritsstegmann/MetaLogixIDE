@@ -174,3 +174,14 @@ export function createDropStaging(opts: DropStagingOptions): DropStaging {
     pruneOlderThan,
   };
 }
+
+/**
+ * Drop directory override for E2E runs. In test mode (`METAIDE_TEST_MODE=1`)
+ * returns `METAIDE_DROP_DIR` when set, otherwise `<userDataDir>/drops`, so a
+ * test launch never stages into or prunes the real user drop directory.
+ * Returns undefined outside test mode. Read once at the entrypoint.
+ */
+export function testModeDropDir(env: Readonly<Record<string, string | undefined>>, userDataDir: string): string | undefined {
+  if (env.METAIDE_TEST_MODE !== '1') return undefined;
+  return env.METAIDE_DROP_DIR || join(userDataDir, 'drops');
+}

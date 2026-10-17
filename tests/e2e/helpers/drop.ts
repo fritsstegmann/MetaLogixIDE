@@ -12,10 +12,11 @@
  */
 
 import { expect, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installInvokeRecorder, invokeCalls } from './terminal-probe';
+import { closeApp } from './claude-harness';
 import { launch, newShellTab, openProject, PRIMARY, type Launched } from './focus';
 import { openSplit, RIGHT } from './split';
 
@@ -288,7 +289,7 @@ export async function launchDropFixture(): Promise<DropFixture> {
     await recordChannel(h.app, 'drops:stage-file');
     return { ...h, left, right, projectId, projectRoot, pageErrors: collectPageErrors(h.win) };
   } catch (e) {
-    await h.app.close();
+    await closeApp(h.app);
     h.cleanup();
     throw e;
   }
@@ -309,17 +310,23 @@ export function unescapePath(escaped: string): string {
   return escaped.replace(/\\(.)/gs, '$1');
 }
 
-/** The drop directory the spec names (AC17), as this process sees the OS temp directory. */
-export function dropDir(): string {
+/**
+ * Where a test-mode launch stages dropped and pasted bytes:
+ * `<userData>/drops`, userData being the `--user-data-dir` the launch helper
+ * passed, so a run never touches the user's real drop directory.
+ */
+export function dropDir(launched: Pick<Launched, 'userData'>): string {
+  return join(launched.userData, 'drops');
+}
+
+/** The real per-user drop directory (AC17) as this process sees the OS temp dir; test runs must not write here. */
+export function realDropDir(): string {
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   return join(tmpdir(), uid === null ? 'metaide-drops' : `metaide-drops-${uid}`);
 }
 
-/** Removes staged files whose names start with `prefix` (they live in a directory shared across runs). */
-export function removeStaged(prefix: string): void {
-  const dir = dropDir();
-  if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (name.startsWith(prefix)) rmSync(join(dir, name), { force: true });
-  }
+/** Names of entries in `dir` that start with `prefix`; empty when `dir` does not exist. */
+export function stagedWithPrefix(dir: string, prefix: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((name) => name.startsWith(prefix));
 }

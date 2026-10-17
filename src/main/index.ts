@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import log from 'electron-log/main';
 import { buildServices, type Services } from './services';
-import { DROP_MAX_AGE_MS } from './drops/staging';
+import { DROP_MAX_AGE_MS, testModeDropDir } from './drops/staging';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
@@ -401,7 +401,11 @@ const startupReady = app.whenReady().then(async () => {
   const ompExtensionPath = app.isPackaged
     ? join(process.resourcesPath, 'omp-status-extension.js')
     : resolve(app.getAppPath(), 'resources/omp-status-extension.js');
-  const services = buildServices({ migrationsDir: resolve(app.getAppPath(), 'migrations'), ompExtensionPath });
+  const services = buildServices({
+    migrationsDir: resolve(app.getAppPath(), 'migrations'),
+    ompExtensionPath,
+    dropDir: testModeDropDir(process.env, app.getPath('userData')),
+  });
   await startClaudeHooks(services);
   try {
     await services.ompReceiver.start();

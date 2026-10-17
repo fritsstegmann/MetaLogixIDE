@@ -69,41 +69,133 @@ export interface Harness {
  * any of them.
  */
 export async function launch(projectNames: string[]): Promise<Harness> {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-notif-home-'));
-  const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-notif-root-'));
-  for (const name of projectNames) {
-    const proj = join(demoRoot, name);
-    mkdirSync(proj);
-    mkdirSync(join(proj, '.git'));
-  }
-  const shimPath = makeClaudeShim(isolatedHome);
-  const app = await electron.launch({
-    ...(process.env.METAIDE_PACKAGED_APP ? { executablePath: process.env.METAIDE_PACKAGED_APP } : {}),
-    args: [...(process.env.METAIDE_PACKAGED_APP ? [] : ['.']), `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...baseEnv(),
-      HOME: isolatedHome,
-      ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
-      PATH: `${join(isolatedHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const isolatedHome = scope.tempDir('metaide-notif-home-');
+    const demoRoot = scope.tempDir('metaide-notif-root-');
+    for (const name of projectNames) {
+      const proj = join(demoRoot, name);
+      mkdirSync(proj);
+      mkdirSync(join(proj, '.git'));
+    }
+    const shimPath = makeClaudeShim(isolatedHome);
+    const app = scope.own(await electron.launch({
+      ...(process.env.METAIDE_PACKAGED_APP ? { executablePath: process.env.METAIDE_PACKAGED_APP } : {}),
+      args: [...(process.env.METAIDE_PACKAGED_APP ? [] : ['.']), `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...baseEnv(),
+        HOME: isolatedHome,
+        ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
+        PATH: `${join(isolatedHome, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
+    await win.evaluate(async (path: string) => {
+      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+    }, demoRoot);
+    return {
+      app, win, isolatedHome, demoRoot, shimPath,
+      cleanup: () => {
+        rmSync(isolatedHome, { recursive: true, force: true });
+        rmSync(demoRoot, { recursive: true, force: true });
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
-  await win.evaluate(async (path: string) => {
-    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-  }, demoRoot);
-  return {
-    app, win, isolatedHome, demoRoot, shimPath,
-    cleanup: () => {
-      rmSync(isolatedHome, { recursive: true, force: true });
-      rmSync(demoRoot, { recursive: true, force: true });
+}
+
+/* ───────────────────────── launch teardown guard ───────────────────────── */
+
+/**
+ * Launch setup must finish within this budget, so a wedged launch fails
+ * inside `guardedLaunch` (and is torn down) rather than at the 60 s test
+ * timeout, which abandons the helper mid-await and runs no catch block.
+ */
+export const LAUNCH_BUDGET_MS = 45_000;
+
+/** How long `closeApp` waits for a graceful `app.close()` before SIGKILLing the process group. */
+const CLOSE_GRACE_MS = 10_000;
+
+export interface LaunchScope {
+  /** Creates a temp dir that is removed if the launch fails. */
+  tempDir(prefix: string): string;
+  /** Registers the launched app so a failed launch closes it; returns it unchanged. */
+  own(app: ElectronApplication): ElectronApplication;
+}
+
+/**
+ * Closes `app` without ever throwing: a graceful `close()` bounded by
+ * `CLOSE_GRACE_MS`, then SIGKILL of the Electron process group (Playwright
+ * spawns it detached on POSIX, so `-pid` also reaches its PTY children).
+ */
+export async function closeApp(app: ElectronApplication): Promise<void> {
+  const proc = app.process();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      app.close(),
+      new Promise((resolveGrace) => { timer = setTimeout(resolveGrace, CLOSE_GRACE_MS); }),
+    ]);
+  } catch {
+    // Best effort: fall through to the kill below.
+  } finally {
+    clearTimeout(timer);
+  }
+  if (proc.exitCode !== null || proc.signalCode !== null || proc.pid === undefined) return;
+  try {
+    if (process.platform === 'win32') proc.kill('SIGKILL');
+    else process.kill(-proc.pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
+}
+
+/**
+ * Runs a launch helper's setup so a throw, or overrunning `budgetMs`, closes
+ * any app it registered with `scope.own` and removes every `scope.tempDir`,
+ * then rethrows the original error. An app registered after the budget has
+ * already failed the launch is closed as soon as it is registered.
+ */
+export async function guardedLaunch<T>(
+  setup: (scope: LaunchScope) => Promise<T>,
+  budgetMs: number = LAUNCH_BUDGET_MS,
+): Promise<T> {
+  const dirs: string[] = [];
+  const apps: ElectronApplication[] = [];
+  let failed = false;
+  const scope: LaunchScope = {
+    tempDir(prefix) {
+      const dir = mkdtempSync(join(tmpdir(), prefix));
+      dirs.push(dir);
+      if (failed) rmSync(dir, { recursive: true, force: true });
+      return dir;
+    },
+    own(app) {
+      apps.push(app);
+      if (failed) void closeApp(app);
+      return app;
     },
   };
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`launch setup exceeded ${budgetMs} ms`)), budgetMs);
+  });
+  try {
+    return await Promise.race([setup(scope), budget]);
+  } catch (error) {
+    failed = true;
+    await Promise.all(apps.map(closeApp));
+    for (const dir of dirs) {
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Resolves a project's id by name via `projects:list`. */

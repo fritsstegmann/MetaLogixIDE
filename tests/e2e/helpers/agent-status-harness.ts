@@ -5,8 +5,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, join, resolve } from 'node:path';
 import {
   AGENT_DOT,
@@ -19,6 +18,7 @@ import {
 } from '../../../src/shared/agent-state';
 import {
   baseEnv,
+  guardedLaunch,
   projectId,
   openProject,
   sendLine,
@@ -80,32 +80,31 @@ export async function launchStatus(
     inheritedOmp?: boolean;
   } = {},
 ): Promise<StatusHarness> {
-  const home = mkdtempSync(join(tmpdir(), 'metaide-agent-home-'));
-  const root = mkdtempSync(join(tmpdir(), 'metaide-agent-root-'));
-  for (const name of names) {
-    mkdirSync(join(root, name, '.git'), { recursive: true });
-  }
-  const claude = command(home, 'claude', MOCK_CLAUDE);
-  const omp = command(home, 'omp', MOCK_OMP);
-  if (opts.unavailableHooks) {
-    mkdirSync(join(home, '.metaide'), { recursive: true });
-    writeFileSync(join(home, '.metaide', 'claude-hooks'), 'hook settings directory unavailable');
-  }
-  const first = opts.defaultAgent === 'omp' ? omp : claude;
-  const env: NodeJS.ProcessEnv = {
-    ...baseEnv(),
-    ...(opts.inheritedOmp ? { OMPCODE: '1' } : {}),
-    HOME: home,
-    ...(WINDOWS ? { USERPROFILE: home } : { SHELL: '/bin/bash' }),
-    PATH: `${join(home, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
-    METAIDE_TEST_MODE: '1',
-    METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-    METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [first], env: {} }),
-    METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [first, '--continue'], env: {} }),
-  };
-  let app: ElectronApplication | undefined;
-  try {
-    app = await electron.launch(electronOptions(home, env));
+  return guardedLaunch(async (scope) => {
+    const home = scope.tempDir('metaide-agent-home-');
+    const root = scope.tempDir('metaide-agent-root-');
+    for (const name of names) {
+      mkdirSync(join(root, name, '.git'), { recursive: true });
+    }
+    const claude = command(home, 'claude', MOCK_CLAUDE);
+    const omp = command(home, 'omp', MOCK_OMP);
+    if (opts.unavailableHooks) {
+      mkdirSync(join(home, '.metaide'), { recursive: true });
+      writeFileSync(join(home, '.metaide', 'claude-hooks'), 'hook settings directory unavailable');
+    }
+    const first = opts.defaultAgent === 'omp' ? omp : claude;
+    const env: NodeJS.ProcessEnv = {
+      ...baseEnv(),
+      ...(opts.inheritedOmp ? { OMPCODE: '1' } : {}),
+      HOME: home,
+      ...(WINDOWS ? { USERPROFILE: home } : { SHELL: '/bin/bash' }),
+      PATH: `${join(home, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+      METAIDE_TEST_MODE: '1',
+      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [first], env: {} }),
+      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [first, '--continue'], env: {} }),
+    };
+    const app = scope.own(await electron.launch(electronOptions(home, env)));
     const win = await app.firstWindow();
     await win.getByTestId('settings-open').waitFor();
     await app.evaluate(({ BrowserWindow }) => {
@@ -123,17 +122,12 @@ export async function launchStatus(
       claude,
       omp,
       close: async () => {
-        await app!.close();
+        await app.close();
         rmSync(home, { recursive: true, force: true });
         rmSync(root, { recursive: true, force: true });
       },
     };
-  } catch (error) {
-    if (app) await app.close();
-    rmSync(home, { recursive: true, force: true });
-    rmSync(root, { recursive: true, force: true });
-    throw error;
-  }
+  });
 }
 
 export { projectId, openProject, sendLine, waitForShell };

@@ -29,15 +29,14 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { APP_FILE_DRAG_TYPE, DROP_COPY, MAX_STAGED_BYTES } from '../../src/shared/terminal-drop-contract';
 import { marker, waitForShellOutput } from './helpers/focus';
 import {
   BP_END, BP_START, PNG_1X1, PRIMARY, PROJECT, RIGHT,
   channelCalls, detachedDragPrevented, dragEventOn, dropDir, dropOn, expectWrite,
-  expectedEscape, holdBracketedPaste, interrupt, launchDropFixture, removeStaged, runInPane, screen,
+  expectedEscape, holdBracketedPaste, interrupt, launchDropFixture, realDropDir, runInPane, screen, stagedWithPrefix,
   shellTab, shellWrites, unescapePath, writeContaining,
   type DropFixture,
 } from './helpers/drop';
@@ -57,12 +56,14 @@ const appFile = (projectId: number, relPath: string) => ({
   payload: JSON.stringify({ projectId, relPath }),
 });
 
-/** The staged file an inserted (escaped) path names, checked against the AC17 directory. */
-function stagedPath(escaped: string): string {
+/**
+ * The staged file an inserted (escaped) path names, checked against the
+ * launch's drop directory: a test-mode launch stages into `<userData>/drops`.
+ */
+function stagedPath(f: DropFixture, escaped: string): string {
   const path = unescapePath(escaped);
   expect(path.startsWith('/'), `inserted staged path is absolute: ${JSON.stringify(escaped)}`).toBe(true);
-  expect(basename(dirname(path)), 'staged file sits in the per-user drop directory').toBe(basename(dropDir()));
-  expect(realpathSync(dirname(dirname(path))), 'drop directory is inside the OS temp directory').toBe(realpathSync(tmpdir()));
+  expect(realpathSync(dirname(path)), 'staged file sits in the launch\'s <userData>/drops').toBe(realpathSync(dropDir(f)));
   return path;
 }
 
@@ -151,7 +152,8 @@ test.describe('terminal drop', () => {
   test('AC9, AC10: pathless dropped files are staged with identical bytes, mode 0600, and inserted in drop order', async () => {
     const tag = marker('ac9');
     try {
-      await withFixture(async ({ app, win, left }) => {
+      await withFixture(async (f) => {
+        const { app, win, left } = f;
         await holdBracketedPaste(win, PRIMARY, false);
         const first = `${tag}-a.png`;
         const second = `${tag}-b.png`;
@@ -165,7 +167,7 @@ test.describe('terminal drop', () => {
         const written = await writeContaining(app, left, tag, 'the staged paths reach the PTY');
         const parts = written.split(/(?<!\\) /);
         expect(parts, `two escaped paths joined by one space: ${JSON.stringify(written)}`).toHaveLength(2);
-        const [a, b] = parts.map(stagedPath) as [string, string];
+        const [a, b] = parts.map((part) => stagedPath(f, part)) as [string, string];
         expect(basename(a), 'first dropped file is inserted first').toMatch(new RegExp(`^${tag}-a(-\\d+)?\\.png$`));
         expect(basename(b), 'second dropped file is inserted second').toMatch(new RegExp(`^${tag}-b(-\\d+)?\\.png$`));
         expect([...readFileSync(a)], 'first staged file has the dropped bytes').toEqual([...PNG_1X1]);
@@ -175,9 +177,13 @@ test.describe('terminal drop', () => {
           expect(statSync(dirname(a)).mode & 0o777, 'drop directory is owner-only').toBe(0o700);
         }
         expect(await channelCalls(app, 'drops:stage-file'), 'one staging call per pathless file').toHaveLength(2);
+        // Positive control for the check below: the same directory probe finds both files under <userData>/drops.
+        expect(stagedWithPrefix(dropDir(f), tag), 'positive control: both files are staged under <userData>/drops').toHaveLength(2);
+        expect(stagedWithPrefix(realDropDir(), tag), `the real ${realDropDir()} is not written by a test-mode run`).toEqual([]);
       });
     } finally {
-      removeStaged(tag);
+      // Normally a no-op; if the app regressed into the real directory, never leave tagged files there.
+      for (const name of stagedWithPrefix(realDropDir(), tag)) rmSync(join(realDropDir(), name), { force: true });
     }
   });
 
