@@ -67,6 +67,7 @@ import { ShellTabDot } from './components/ShellTabDot';
 import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
 import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
+import { createExternalDragGuard } from './drag-hover';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -540,20 +541,25 @@ function MainApp() {
     document.title = selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
   }, [selected]);
 
-  // Global drag/drop guard. Chromium's default behaviour on a file drop is
-  // to navigate the whole webview to `file://<dropped-path>` — which flashes
-  // an error page and unmounts the app. We swallow drops that don't hit a
-  // component that opted in (ShellTab handles its own drop event).
+  // Global drag/drop guard (AC22). Chromium's default on a drop is to navigate
+  // the webview to the dropped file or URL, or open it in a new window. Every
+  // drag that started outside this window is swallowed; in-app drags keep
+  // their native default, and ShellTab handles its own drops before bubbling.
   useEffect(() => {
-    const swallow = (e: DragEvent) => {
-      if (!e.dataTransfer?.types?.includes('Files')) return;
-      e.preventDefault();
-    };
-    window.addEventListener('dragover', swallow);
-    window.addEventListener('drop', swallow);
+    const guard = createExternalDragGuard();
+    const onDragStart = () => guard.dragStart();
+    const onDragEnd = () => guard.dragEnd();
+    const onDragOver = (e: DragEvent) => { if (guard.dragOver()) e.preventDefault(); };
+    const onDrop = (e: DragEvent) => { if (guard.drop()) e.preventDefault(); };
+    window.addEventListener('dragstart', onDragStart, true);
+    window.addEventListener('dragend', onDragEnd, true);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
     return () => {
-      window.removeEventListener('dragover', swallow);
-      window.removeEventListener('drop', swallow);
+      window.removeEventListener('dragstart', onDragStart, true);
+      window.removeEventListener('dragend', onDragEnd, true);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
     };
   }, []);
 

@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import log from 'electron-log/main';
 import { buildServices, type Services } from './services';
+import { DROP_MAX_AGE_MS } from './drops/staging';
 import { registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
@@ -463,6 +464,10 @@ const startupReady = app.whenReady().then(async () => {
   });
   mainWindow = await createMainWindow();
   Menu.setApplicationMenu(buildAppMenu(mainWindow));
+  void services.dropStaging.pruneOlderThan(DROP_MAX_AGE_MS).then(
+    (summary) => log.info('[drops] startup prune finished', summary),
+    (err: unknown) => log.warn('[drops] startup prune failed', err),
+  );
 
 
   // ─── Long-running command "done" notifier ─────────────────────────────

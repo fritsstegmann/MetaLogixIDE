@@ -20,7 +20,9 @@ import { OmpReceiver } from './agent-status/omp-receiver';
 import { createOmpLaunchDecorator } from './agent-status/omp-launch';
 import { ClaudeHookHistory } from './notifications/claude-hook-history';
 import type { AgentStatusTracker } from './agent-status/state-tracker';
-import { homedir } from 'node:os';
+import { createDropStaging, defaultDropDir, type DropStaging } from './drops/staging';
+import { createClipboardImage, type ClipboardImage } from './drops/clipboard-image';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 export interface Services {
@@ -43,6 +45,9 @@ export interface Services {
   /** Installed before the renderer can spawn a shell. */
   agentStatus: AgentStatusTracker | null;
   viewedShells: ViewedShells;
+  /** Owner-only temp directory for dropped bytes and pasted images. */
+  dropStaging: DropStaging;
+  clipboardImage: ClipboardImage;
   homeDir: string;
   migrationsDir: string;
 }
@@ -75,8 +80,10 @@ function lastOutputAt(ptyManager: PtyManager, shell: ShellKey): number | null {
 /**
  * Composition root for main-process services. Receivers are built but not
  * started here; startup opens their sockets before any shell can launch.
+ * `dropDir` overrides the drop staging directory, which is otherwise resolved
+ * here once from the OS temp directory and the current uid.
  */
-export function buildServices(opts: { dbPath?: string; migrationsDir?: string; homeDir?: string; ompExtensionPath?: string | null } = {}): Services {
+export function buildServices(opts: { dbPath?: string; migrationsDir?: string; homeDir?: string; ompExtensionPath?: string | null; dropDir?: string } = {}): Services {
   const home = opts.homeDir ?? homedir();
   const dbPath = opts.dbPath ?? join(home, '.metaide', 'metaide.db');
   const migrationsDir = opts.migrationsDir ?? resolve(process.cwd(), 'migrations');
@@ -111,9 +118,15 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
     lastOutputAt: (shell) => lastOutputAt(ptyManager, shell),
     now: () => Date.now(),
   });
+  const uid = process.getuid?.() ?? null;
+  const dropStaging = createDropStaging({
+    dir: opts.dropDir ?? defaultDropDir(process.platform, tmpdir(), uid),
+    now: () => new Date(),
+    uid,
+  });
   return {
     db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
     hookSessions, hookReceiver, hookRuntime, hookHistory, ompReceiver, agentStatus: null,
-    viewedShells: new ViewedShells(), homeDir: home, migrationsDir,
+    viewedShells: new ViewedShells(), dropStaging, clipboardImage: createClipboardImage(), homeDir: home, migrationsDir,
   };
 }
