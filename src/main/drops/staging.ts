@@ -182,6 +182,6 @@ export function createDropStaging(opts: DropStagingOptions): DropStaging {
  * Returns undefined outside test mode. Read once at the entrypoint.
  */
 export function testModeDropDir(env: Readonly<Record<string, string | undefined>>, userDataDir: string): string | undefined {
-  void env; void userDataDir;
-  throw new Error('not implemented');
+  if (env.METAIDE_TEST_MODE !== '1') return undefined;
+  return env.METAIDE_DROP_DIR || join(userDataDir, 'drops');
 }
