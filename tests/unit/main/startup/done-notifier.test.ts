@@ -4,7 +4,7 @@ import {
   DONE_POLL_INTERVAL_MS,
   formatDoneDuration,
   isMainFocused,
-  planDoneNotices,
+  planDoneNotice,
   startDoneNotifier,
   type DoneCommand,
   type DoneNotifierDeps,
@@ -52,42 +52,46 @@ describe('isMainFocused', () => {
   });
 });
 
-describe('planDoneNotices', () => {
-  const done: DoneCommand[] = [
-    { projectId: 1, shellIndex: 0, durationMs: 12_000 },
-    { projectId: 2, shellIndex: 3, durationMs: 90_000 },
-  ];
+describe('planDoneNotice', () => {
+  const inMain: DoneCommand = { projectId: 1, shellIndex: 0, durationMs: 12_000 };
+  const unnamed: DoneCommand = { projectId: 2, shellIndex: 3, durationMs: 90_000 };
   const names: Record<number, string> = { 1: 'alpha' };
   const projectName = (id: number): string | undefined => names[id];
 
-  it('notifies every finished shell when the main window is not focused', () => {
-    const notices = planDoneNotices(done, { mainFocused: false, isPopped: () => false, projectName });
-    expect(notices).toEqual([
+  it('notifies a finished shell when the main window is not focused', () => {
+    expect(planDoneNotice(inMain, { mainFocused: false, isPopped: () => false, projectName })).toEqual(
       { projectId: 1, shellIndex: 0, popped: false, title: 'alpha — shell 0', body: 'Command finished in 12s' },
+    );
+  });
+
+  it('names an unknown project by its id', () => {
+    expect(planDoneNotice(unnamed, { mainFocused: false, isPopped: () => false, projectName })).toEqual(
       { projectId: 2, shellIndex: 3, popped: false, title: '#2 — shell 3', body: 'Command finished in 1m 30s' },
-    ]);
+    );
   });
 
-  it('skips in-main shells while the main window is focused', () => {
-    expect(planDoneNotices(done, { mainFocused: true, isPopped: () => false, projectName })).toEqual([]);
+  it('skips an in-main shell while the main window is focused', () => {
+    expect(planDoneNotice(inMain, { mainFocused: true, isPopped: () => false, projectName })).toBeNull();
   });
 
-  it('still notifies popped-out shells while the main window is focused', () => {
+  it('still notifies a popped-out shell while the main window is focused', () => {
     const isPopped = (key: string): boolean => key === '2:3';
-    const notices = planDoneNotices(done, { mainFocused: true, isPopped, projectName });
-    expect(notices).toEqual([
+    expect(planDoneNotice(unnamed, { mainFocused: true, isPopped, projectName })).toEqual(
       { projectId: 2, shellIndex: 3, popped: true, title: '#2 — shell 3', body: 'Command finished in 1m 30s' },
-    ]);
+    );
   });
 
-  it('keys popouts by projectId:shellIndex', () => {
-    const isPopped = vi.fn(() => false);
-    planDoneNotices(done, { mainFocused: false, isPopped, projectName });
-    expect(isPopped.mock.calls).toEqual([['1:0'], ['2:3']]);
+  it('keys popouts by projectId:shellIndex and looks the project up first', () => {
+    const order: string[] = [];
+    const isPopped = vi.fn((key: string) => { order.push(`popped:${key}`); return false; });
+    const lookup = vi.fn((id: number) => { order.push(`name:${id}`); return projectName(id); });
+    planDoneNotice(unnamed, { mainFocused: true, isPopped, projectName: lookup });
+    expect(order).toEqual(['name:2', 'popped:2:3']);
   });
 
-  it('returns nothing for no finished commands', () => {
-    expect(planDoneNotices([], { mainFocused: false, isPopped: () => false, projectName })).toEqual([]);
+  it('propagates a lookup failure', () => {
+    const failure = new Error('db closed');
+    expect(() => planDoneNotice(inMain, { mainFocused: false, isPopped: () => false, projectName: () => { throw failure; } })).toThrow(failure);
   });
 });
 
@@ -283,6 +287,41 @@ describe('startDoneNotifier', () => {
     vi.advanceTimersByTime(500);
     expect(() => FakeNotification.instances[0]!.click()).not.toThrow();
     expect(warn).toHaveBeenCalledWith('[metaide] notification click failed', expect.any(Error));
+  });
+
+  it('shows earlier notices before a mid-batch lookup failure escapes the poll', () => {
+    pending = [
+      { projectId: 1, shellIndex: 0, durationMs: 1_000 },
+      { projectId: 2, shellIndex: 1, durationMs: 1_000 },
+      { projectId: 1, shellIndex: 2, durationMs: 1_000 },
+    ];
+    const failure = new Error('lookup failed');
+    const projectName = vi.fn((id: number) => {
+      if (id === 2) throw failure;
+      return 'alpha';
+    });
+    timer = startDoneNotifier({ ...deps, projectName });
+    expect(() => vi.advanceTimersByTime(500)).toThrow(failure);
+    expect(FakeNotification.instances.map((n) => n.options.title)).toEqual(['alpha — shell 0']);
+    expect(FakeNotification.instances[0]!.show).toHaveBeenCalledTimes(1);
+    expect(projectName).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows earlier notices before a mid-batch popout check failure escapes the poll', () => {
+    pending = [
+      { projectId: 1, shellIndex: 0, durationMs: 1_000 },
+      { projectId: 1, shellIndex: 1, durationMs: 1_000 },
+      { projectId: 1, shellIndex: 2, durationMs: 1_000 },
+    ];
+    const failure = new Error('popout map gone');
+    const isPopped = vi.fn((key: string) => {
+      if (key === '1:1') throw failure;
+      return false;
+    });
+    timer = startDoneNotifier({ ...deps, isPopped });
+    expect(() => vi.advanceTimersByTime(500)).toThrow(failure);
+    expect(FakeNotification.instances.map((n) => n.options.title)).toEqual(['alpha — shell 0']);
+    expect(FakeNotification.instances[0]!.show).toHaveBeenCalledTimes(1);
   });
 
   it('logs a notification failure and carries on with the next shell', () => {

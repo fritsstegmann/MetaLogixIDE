@@ -25,7 +25,7 @@ export interface DoneNotice {
   body: string;
 }
 
-/** Inputs to `planDoneNotices`: focus state, popout membership by `projectId:shellIndex` key, and project-name lookup. */
+/** Inputs to `planDoneNotice`: focus state, popout membership by `projectId:shellIndex` key, and project-name lookup. */
 export interface DonePlanContext {
   mainFocused: boolean;
   isPopped: (key: string) => boolean;
@@ -56,25 +56,21 @@ export function isMainFocused(focused: BrowserWindow | null, main: BrowserWindow
 }
 
 /**
- * Decides which finished shells get a notification and what it says. A shell is skipped only
- * when the main window is focused and the shell is not popped out; unknown projects are named
- * `#<id>`. Order follows `done`.
+ * Decides whether one finished shell gets a notification and what it says: `null` when the main
+ * window is focused and the shell is not popped out, otherwise the notice. Unknown projects are
+ * named `#<id>`. Lookup errors propagate to the caller.
  */
-export function planDoneNotices(done: readonly DoneCommand[], ctx: DonePlanContext): DoneNotice[] {
-  const notices: DoneNotice[] = [];
-  for (const d of done) {
-    const projectName = ctx.projectName(d.projectId) ?? `#${d.projectId}`;
-    const popped = ctx.isPopped(`${d.projectId}:${d.shellIndex}`);
-    if (ctx.mainFocused && !popped) continue;
-    notices.push({
-      projectId: d.projectId,
-      shellIndex: d.shellIndex,
-      popped,
-      title: `${projectName} — shell ${d.shellIndex}`,
-      body: `Command finished in ${formatDoneDuration(d.durationMs)}`,
-    });
-  }
-  return notices;
+export function planDoneNotice(d: DoneCommand, ctx: DonePlanContext): DoneNotice | null {
+  const projectName = ctx.projectName(d.projectId) ?? `#${d.projectId}`;
+  const popped = ctx.isPopped(`${d.projectId}:${d.shellIndex}`);
+  if (ctx.mainFocused && !popped) return null;
+  return {
+    projectId: d.projectId,
+    shellIndex: d.shellIndex,
+    popped,
+    title: `${projectName} — shell ${d.shellIndex}`,
+    body: `Command finished in ${formatDoneDuration(d.durationMs)}`,
+  };
 }
 
 /** Starts the poll loop and returns its interval handle so the caller can clear it on quit. */
@@ -86,8 +82,10 @@ function notifyDone(deps: DoneNotifierDeps): void {
   const done = deps.pollDone();
   if (done.length === 0) return;
   const mainFocused = isMainFocused(deps.focusedWindow(), deps.mainWindow());
-  for (const notice of planDoneNotices(done, { mainFocused, isPopped: deps.isPopped, projectName: deps.projectName })) {
-    showDoneNotice(notice, deps);
+  const ctx: DonePlanContext = { mainFocused, isPopped: deps.isPopped, projectName: deps.projectName };
+  for (const d of done) {
+    const notice = planDoneNotice(d, ctx);
+    if (notice) showDoneNotice(notice, deps);
   }
 }
 
