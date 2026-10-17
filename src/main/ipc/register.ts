@@ -1357,6 +1357,7 @@ const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'metaproject:link-local-project': ['projects:changed'],
   'shells:launch':  ['alive-shells:changed', 'projects:changed'],
   'shells:launch-plain': ['alive-shells:changed'],
+  'tasks:run':           ['alive-shells:changed'],
   'shells:launch-cli':   ['alive-shells:changed', 'projects:changed'],
   'shells:cli-profiles-remove': ['projects:changed'],
   'shells:set-default-cli': ['projects:changed'],

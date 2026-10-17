@@ -1340,6 +1340,14 @@ describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
     expect(rig.spawned(0).env).toStrictEqual({ API_URL: 'http://localhost:4000' });
   });
 
+  it('tasks:run emits alive-shells:changed so tab strips show the new shell', async () => {
+    const rig = envRig();
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect(rig.spawned(0).argv).toEqual(['npm', 'run', 'dev']);
+    expect(rig.events).toContain('alive-shells:changed');
+  });
+
   it('AC16 — a second project spawns without project A vars', async () => {
     const rig = envRig();
     rig.setEnv(rig.a.id, { API_URL: 'a-only' });
