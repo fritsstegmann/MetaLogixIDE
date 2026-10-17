@@ -25,8 +25,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   MARKDOWN_PREVIEW_TESTID,
@@ -40,6 +39,7 @@ import {
   BG_LAYERS,
   REFERENCE_MATERIALS,
 } from '../../../src/renderer/markdown/mermaid/paletteContract';
+import { guardedLaunch } from './claude-harness';
 
 export const PROJECT = 'palproj';
 const FIXTURES = resolve(process.cwd(), 'tests/e2e/fixtures/mermaid-palette');
@@ -239,54 +239,58 @@ export interface PaletteIde {
 /** Launches the built app with an isolated profile and one project holding every palette fixture. */
 export async function launchPaletteIde(label: string): Promise<PaletteIde> {
   const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const home = mkdtempSync(join(tmpdir(), `metaide-pal-${label}-home-`));
-  const root = mkdtempSync(join(tmpdir(), `metaide-pal-${label}-root-`));
-  const projDir = join(root, PROJECT);
-  mkdirSync(projDir);
-  mkdirSync(join(projDir, '.git'));
-  cpSync(FIXTURES, projDir, { recursive: true });
+  return guardedLaunch(async (scope) => {
+    const home = scope.tempDir(`metaide-pal-${label}-home-`);
+    const root = scope.tempDir(`metaide-pal-${label}-root-`);
+    const projDir = join(root, PROJECT);
+    mkdirSync(projDir);
+    mkdirSync(join(projDir, '.git'));
+    cpSync(FIXTURES, projDir, { recursive: true });
 
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(home, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({
-        argv: ['node', mockClaude, '--continue'],
-        env: {},
+    const app = scope.own(
+      await electron.launch({
+        args: ['.', `--user-data-dir=${join(home, 'userData')}`],
+        env: {
+          ...process.env,
+          HOME: home,
+          METAIDE_TEST_MODE: '1',
+          METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+          METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+          METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({
+            argv: ['node', mockClaude, '--continue'],
+            env: {},
+          }),
+        },
       }),
-    },
-  });
-  const win = await app.firstWindow();
-  const ide: PaletteIde = {
-    app,
-    win,
-    pageErrors: [],
-    cleanup: async () => {
-      await app.close();
-      rmSync(home, { recursive: true, force: true });
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
-  win.on('pageerror', (err) => ide.pageErrors.push(err.message));
-  await win.waitForLoadState('domcontentloaded');
+    );
+    const win = await app.firstWindow();
+    const ide: PaletteIde = {
+      app,
+      win,
+      pageErrors: [],
+      cleanup: async () => {
+        await app.close();
+        rmSync(home, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+    win.on('pageerror', (err) => ide.pageErrors.push(err.message));
+    await win.waitForLoadState('domcontentloaded');
 
-  // Seed the root through IPC (dialogs are no-ops under METAIDE_TEST_MODE).
-  await win.evaluate(async (path: string) => {
-    const api = (
-      window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }
-    ).api;
-    await api.invoke('roots:add', { path });
-  }, root);
-  const projectButton = win.getByRole('button', { name: PROJECT, exact: true });
-  await expect(projectButton).toBeVisible({ timeout: 10000 });
-  await projectButton.click();
-  await win.getByRole('button', { name: 'Files', exact: true }).click();
-  await expect(fileEntry(win, 'flowchart.md')).toBeVisible({ timeout: 10000 });
-  return ide;
+    // Seed the root through IPC (dialogs are no-ops under METAIDE_TEST_MODE).
+    await win.evaluate(async (path: string) => {
+      const api = (
+        window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }
+      ).api;
+      await api.invoke('roots:add', { path });
+    }, root);
+    const projectButton = win.getByRole('button', { name: PROJECT, exact: true });
+    await expect(projectButton).toBeVisible({ timeout: 10000 });
+    await projectButton.click();
+    await win.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(fileEntry(win, 'flowchart.md')).toBeVisible({ timeout: 10000 });
+    return ide;
+  });
 }
 
 function fileEntry(win: Page, name: string): Locator {

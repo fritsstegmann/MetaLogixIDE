@@ -21,7 +21,7 @@
  */
 
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, realpathSync, rmSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { DROP_COPY } from '../../src/shared/terminal-drop-contract';
 import { marker } from './helpers/focus';
@@ -92,7 +92,7 @@ async function expectStagedPng(app: ElectronApplication, written: string, route:
   expect(written.startsWith(BP_START) && written.endsWith(BP_END), `${route}: the image path arrives bracketed`).toBe(true);
   const path = unescapePath(written.slice(BP_START.length, -BP_END.length));
   stagedFiles.push(path);
-  expect(basename(dirname(path)), `${route}: staged in the per-user drop directory`).toBe(basename(dropDir()));
+  expect(realpathSync(dirname(path)), `${route}: staged in the launch's <userData>/drops`).toBe(realpathSync(dropDir(f)));
   expect(basename(path), `${route}: staged as pasted-<timestamp>.png`).toMatch(/^pasted-.+\.png$/);
   expect([...readFileSync(path).subarray(0, 8)], `${route}: the staged file is a PNG`).toEqual(PNG_SIGNATURE);
   const size = await app.evaluate(({ nativeImage }, p) => nativeImage.createFromPath(p).getSize(), path);
