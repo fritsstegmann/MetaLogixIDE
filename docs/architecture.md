@@ -770,6 +770,10 @@ Temporary directory:
 
 - The location is `<tmp>/metaide-drops-<uid>` on POSIX and
   `<tmp>/metaide-drops` on Windows (`src/main/drops/staging.ts:46`).
+  In test mode (`METAIDE_TEST_MODE=1`) the entrypoint passes
+  `METAIDE_DROP_DIR`, or `<userData>/drops` when it is unset, so an E2E launch
+  never stages into or prunes the real directory (`testModeDropDir`,
+  `src/main/index.ts:404-408`).
 - Before every write, staging creates the directory with mode 0700 when it
   is missing. It then refuses to write when the directory is a symlink or
   not a directory. On POSIX it also refuses when another user owns the
