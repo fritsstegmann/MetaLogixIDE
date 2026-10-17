@@ -16,10 +16,17 @@ dots. The product design is in
 
 After services are constructed, `src/main/index.ts` registers every generic
 IPC handler before creating the initial `BrowserWindow`. `startApp`
-(`src/main/index.ts:503-519`) runs the startup steps in order, and
+(`src/main/index.ts:503-518`) runs the startup steps in order, and
 `registerMainIpc` comes before `openMainWindow`. Renderer providers
 may invoke settings channels while the first document is still loading, so
 window creation must not move ahead of `registerIpc`.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Composition | `src/main/index.ts` | `startApp` runs the startup steps in order. It owns the module state: the main window, popout windows, and the window-setting readers. It reads the environment and app paths. |
+| Composition | `src/main/startup/receivers.ts` | Starts the Claude hook receiver, then the OMP receiver. A failure in either is logged and does not stop startup. |
+| Composition | `src/main/startup/boot-rescan.ts` | Rescans every registered root at boot and prunes projects whose folder is gone. A failure is logged. |
+| Logic and adapter | `src/main/startup/done-notifier.ts` | Polls finished long-running commands every 500 ms. `planDoneNotice` decides, for one finished command, whether to notify and how. Each command is planned and shown before the next. The wiring shows the native notification and routes its click to the main window or a popout. |
 
 On macOS, startup resolves PATH from the user's interactive login shell before
 constructing services or creating a renderer (`adoptLoginShellPath`,
@@ -878,7 +885,7 @@ status dots.
 | Adapter | `src/main/agent-status/omp-receiver.ts` | Receive bounded reports on loopback. Authenticate the current OMP spawn and reject stale reports. |
 | Adapter | `src/main/agent-status/omp-launch.ts`, `resources/omp-status-extension.js` | Add an explicit app-owned extension to direct OMP launches. Report root-session lifecycle without prompt or tool arguments. |
 | Service | `src/main/agent-status/{claude-screen,omp-session,state-tracker}.ts` | Classify Claude's current title, working rows, and live confirmation forms; apply ordered OMP events and publish changed shell states. |
-| Composition | `src/main/agent-status/install.ts`, `src/main/index.ts` | Start the receiver before any launch, subscribe to PTY lifecycle, and sample Claude status every 250 ms. |
+| Composition | `src/main/agent-status/install.ts`, `src/main/startup/receivers.ts`, `src/main/index.ts` | Start the receiver before any launch, subscribe to PTY lifecycle, and sample Claude status every 250 ms. |
 | Transport | `src/main/ipc/register.ts`, `src/shared/ipc-contract.ts` | Send `agent-state:list` snapshots, including recognized idle agents, and `agent-state:changed` deltas to all windows. |
 | Renderer | `src/renderer/agent-state.ts`, `src/renderer/hooks/useAgentStates.ts` | Keep the current shell map, apply snapshots and deltas, and compute project/global severity. |
 | Presentation | `src/renderer/components/{StatusDot,ShellTabDot}.tsx`, `src/renderer/styles.css` | Show agent-specific shell labels, generic aggregate labels, the existing three colours and inactive grey tabs. |
