@@ -38,6 +38,7 @@ import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
 import { describeGitFailure, runGit } from '@main/git/run-git';
 import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
+import { dropHandlers } from '@main/drops/handlers';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
@@ -67,7 +68,7 @@ function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
   return patch;
 }
 
-type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
+export type Handler<C extends IpcChannelName> =(services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
 
 // Keychain service name for the metaproject credential. One row per (service,
@@ -1338,6 +1339,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     }
     return { content: buf.toString('utf8'), kind: 'text' as const, sizeBytes: st.size };
   },
+
+  ...dropHandlers,
 };
 
 const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {

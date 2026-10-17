@@ -5,6 +5,7 @@ import type { AgentShellStateEntry } from './agent-state';
 import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
+import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -176,6 +177,13 @@ export interface IpcContract {
    * into Finder, VS Code, iMessage, Mail, etc.
    */
   'files:start-drag':{ request: { projectId: number; paths: string[] };                      response: { ok: true } };
+  // Terminal drop and paste — see src/shared/terminal-drop-contract.ts.
+  /** Resolve a Files-tree drag payload to an absolute path inside its project root. */
+  'drops:resolve-app-file':      { request: AppFileDragPayload; response: ResolveAppFileResult };
+  /** Write dropped bytes that have no filesystem path to the owner-only drop directory. */
+  'drops:stage-file':            { request: StageFileRequest;   response: StageResult };
+  /** Save an image-only clipboard as a PNG in the drop directory. */
+  'drops:stage-clipboard-image': { request: undefined;          response: ClipboardImageResult };
   'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
   'search:project':  { request: { projectId: number; query: string; caseSensitive?: boolean; regex?: boolean; maxFiles?: number; maxMatchesPerFile?: number }; response: { matches: Array<{ relPath: string; line: number; col: number; preview: string }>; filesScanned: number; truncated: boolean } };
 
