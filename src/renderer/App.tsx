@@ -44,6 +44,7 @@ import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
 import { api } from './api';
+import { createPendingFileOpen } from './pending-file-open';
 import { useTheme, type ThemeMode } from './hooks/useTheme';
 import { usePersistedNumber } from './hooks/usePersistedNumber';
 import { usePersistedState } from './hooks/usePersistedState';
@@ -202,8 +203,15 @@ function MainApp() {
   useEffect(() => { if (activeView === 'chat') setChatUnread(0); }, [activeView]);
   // Clear any pending "open this file" request when the project changes —
   // otherwise a relPath captured from project A would fire in project B's
-  // FilesTab and either open the wrong file or 404.
-  useEffect(() => { setOpenInFiles(null); }, [selected?.id]);
+  // FilesTab and either open the wrong file or 404. The one exception is a
+  // file opened from another project's terminal path, recorded for exactly
+  // this project before the switch.
+  const [pendingFileOpen] = useState(createPendingFileOpen);
+  useEffect(() => {
+    const open = pendingFileOpen.take(selected?.id ?? null);
+    setOpenInFiles(open);
+    if (open) setMainTab('files');
+  }, [selected?.id, pendingFileOpen, setMainTab]);
   const taskCount = useTaskCount(selected?.id ?? null);
   // Which shellIndex is currently visible in the Shell tab. Default 0 (the
   // Claude/primary shell); ad-hoc terminals opened as tabs bump this to
@@ -536,15 +544,18 @@ function MainApp() {
   // resolve after the user has clicked a DIFFERENT project. Without this
   // ref the stale earlier setSelected would win, reverting the click.
   const lastPickIdRef = useRef<number | null>(null);
-  async function pick(p: Project) {
+  /** Selects `p` as the sidebar does and launches its shell; resolves true when it selected `p`, false when the open failed or a newer pick superseded it. */
+  async function pick(p: Pick<Project, 'id'>): Promise<boolean> {
     setProjectSettingsTarget(null);
     lastPickIdRef.current = p.id;
     terminalFocus.cancelRequest();
+    let selectedIt = false;
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
-      if (lastPickIdRef.current !== p.id) return;    // superseded by a newer click
+      if (lastPickIdRef.current !== p.id) return false;    // superseded by a newer click
       if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
+      selectedIt = true;
       await api.invoke('shells:launch', { projectId: project.id });
     } catch (e) {
       // Only surface the toast when the failure is for the current pick —
@@ -554,6 +565,22 @@ function MainApp() {
       }
       console.error(e);
     }
+    return selectedIt;
+  }
+
+  /**
+   * Opens a file a terminal path or hover preview found in another project: records it as pending for that project,
+   * then selects the project through the sidebar's `pick` path. The project-change effect opens it in the Files tab
+   * when the selection lands; a failed or superseded pick drops it and restores the tab ref.
+   */
+  async function openFileInProject(projectId: number, relPath: string, line: number | null): Promise<void> {
+    pendingFileOpen.request(projectId, { relPath, line });
+    const previousTab = mainTabRef.current;
+    // Set synchronously so pick() queues no terminal focus for a tab that is about to become Files.
+    mainTabRef.current = 'files';
+    const selectedIt = await pick({ id: projectId });
+    pendingFileOpen.pickSettled(projectId, selectedIt);
+    if (!selectedIt) mainTabRef.current = previousTab;
   }
 
   function editEnv(p: Project) {
@@ -603,7 +630,11 @@ function MainApp() {
             }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
-            onOpenFile={(relPath, line) => {
+            onOpenFile={(relPath, line, targetProjectId) => {
+              if (targetProjectId !== undefined && targetProjectId !== project.id) {
+                void openFileInProject(targetProjectId, relPath, line);
+                return;
+              }
               setMainTab('files');
               setOpenInFiles({ relPath, line });
             }}
@@ -1165,7 +1196,9 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
             projectId={projectId}
             shellIndex={shellIndex}
             primary
-            onOpenFile={(relPath, line) => {
+            popout
+            onOpenFile={(relPath, line, targetProjectId) => {
+              if (targetProjectId !== undefined && targetProjectId !== projectId) return;
               // Open the editor inline in this popout window instead of
               // dropping the user back to Finder.
               setTab('files');

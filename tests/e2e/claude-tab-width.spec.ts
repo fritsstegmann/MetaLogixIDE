@@ -20,9 +20,9 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 const WIDE = { width: 1600, height: 1000 };
 const NARROW = { width: 900, height: 1000 };
@@ -124,53 +124,55 @@ async function tabXtermSize(app: ElectronApplication, win: Page, projectName: st
 }
 
 async function openDemoProject(): Promise<{ app: ElectronApplication; win: Page; cleanup: () => void }> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-home-'));
-  const demoRoot     = mkdtempSync(join(tmpdir(), 'metaide-demo-'));
-  const proj         = join(demoRoot, 'demo');
-  mkdirSync(proj); mkdirSync(join(proj, '.git'));
-  // The "Claude" CLI profile in "+ new shell" runs this shim, named `claude`
-  // like the real binary, which execs mock-claude.
-  const claudeShim = join(isolatedHome, 'bin', 'claude');
-  mkdirSync(join(isolatedHome, 'bin'));
-  writeFileSync(claudeShim, `#!/bin/sh\nexec node ${JSON.stringify(mockClaude)} "$@"\n`);
-  chmodSync(claudeShim, 0o755);
+  return guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-home-');
+    const demoRoot     = scope.tempDir('metaide-demo-');
+    const proj         = join(demoRoot, 'demo');
+    mkdirSync(proj); mkdirSync(join(proj, '.git'));
+    // The "Claude" CLI profile in "+ new shell" runs this shim, named `claude`
+    // like the real binary, which execs mock-claude.
+    const claudeShim = join(isolatedHome, 'bin', 'claude');
+    mkdirSync(join(isolatedHome, 'bin'));
+    writeFileSync(claudeShim, `#!/bin/sh\nexec node ${JSON.stringify(mockClaude)} "$@"\n`);
+    chmodSync(claudeShim, 0o755);
 
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const cleanup = () => {
+      rmSync(isolatedHome, { recursive: true, force: true });
+      rmSync(demoRoot, { recursive: true, force: true });
+    };
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    // Wide enough that the tab's xterm is well over 100 columns.
+    await setWindowSize(app, WIDE);
+
+    // `dialogs:pick-directory` is a no-op under METAIDE_TEST_MODE, so add the
+    // root over IPC (as project-lifecycle.spec.ts does); the project itself is
+    // opened through the real UI path — a sidebar click → App.tsx pick().
+    await win.evaluate(async ({ path, claudeShim }: { path: string; claudeShim: string }) => {
+      const api = (window as unknown as { api: Api }).api;
+      await api.invoke('settings:set', { key: 'default_cli_profiles', value: [{ name: 'Claude', argv: [claudeShim] }] });
+      await api.invoke('roots:add', { path });
+    }, { path: demoRoot, claudeShim });
+    const projectButton = win.getByRole('button', { name: 'demo', exact: true });
+    await expect(projectButton).toBeVisible({ timeout: 5000 });
+    await projectButton.click();
+
+    await expect(win.locator('.xterm').first()).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => shellOutput(win, 'demo'), { timeout: 10000 }).toContain('mock-claude ready');
+    return { app, win, cleanup };
   });
-  const cleanup = () => {
-    rmSync(isolatedHome, { recursive: true, force: true });
-    rmSync(demoRoot, { recursive: true, force: true });
-  };
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  // Wide enough that the tab's xterm is well over 100 columns.
-  await setWindowSize(app, WIDE);
-
-  // `dialogs:pick-directory` is a no-op under METAIDE_TEST_MODE, so add the
-  // root over IPC (as project-lifecycle.spec.ts does); the project itself is
-  // opened through the real UI path — a sidebar click → App.tsx pick().
-  await win.evaluate(async ({ path, claudeShim }: { path: string; claudeShim: string }) => {
-    const api = (window as unknown as { api: Api }).api;
-    await api.invoke('settings:set', { key: 'default_cli_profiles', value: [{ name: 'Claude', argv: [claudeShim] }] });
-    await api.invoke('roots:add', { path });
-  }, { path: demoRoot, claudeShim });
-  const projectButton = win.getByRole('button', { name: 'demo', exact: true });
-  await expect(projectButton).toBeVisible({ timeout: 5000 });
-  await projectButton.click();
-
-  await expect(win.locator('.xterm').first()).toBeVisible({ timeout: 10000 });
-  await expect.poll(() => shellOutput(win, 'demo'), { timeout: 10000 }).toContain('mock-claude ready');
-  return { app, win, cleanup };
 }
 
 test('Claude reopened from "+ new shell" after closing its tab starts at the tab xterm width, not 100 cols', async () => {
@@ -199,7 +201,7 @@ test('Claude reopened from "+ new shell" after closing its tab starts at the tab
     expect(atFirstOpen, 'Claude PTY size at first open vs the tab xterm size').toEqual(tab);
     expect(atReopen, 'Claude PTY size after reopening from + new shell vs the tab xterm size').toEqual(tab);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -224,7 +226,7 @@ test('Claude relaunched from the sidebar into its still-open tab starts at the t
 
     expect(atRelaunch, 'Claude PTY size at relaunch vs the tab xterm size').toEqual(tab);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });

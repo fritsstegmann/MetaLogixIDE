@@ -16,7 +16,7 @@ dots. The product design is in
 
 After services are constructed, `src/main/index.ts` registers every generic
 IPC handler before creating the initial `BrowserWindow`. `startApp`
-(`src/main/index.ts:503-518`) runs the startup steps in order, and
+(`src/main/index.ts:444-459`) runs the startup steps in order, and
 `registerMainIpc` comes before `openMainWindow`. Renderer providers
 may invoke settings channels while the first document is still loading, so
 window creation must not move ahead of `registerIpc`.
@@ -30,7 +30,7 @@ window creation must not move ahead of `registerIpc`.
 
 On macOS, startup resolves PATH from the user's interactive login shell before
 constructing services or creating a renderer (`adoptLoginShellPath`,
-`src/main/index.ts:377-389`, the first step of `startApp`).
+`src/main/index.ts:318-330`, the first step of `startApp`).
 The resolver reads only NUL-framed PATH output, ignoring shell startup banners.
 It limits execution to 10 seconds and output to 1 MiB
 (`src/main/domain/login-shell-path.ts:10-33`).
@@ -787,7 +787,7 @@ Temporary directory:
   In test mode (`METAIDE_TEST_MODE=1`) the entrypoint passes
   `METAIDE_DROP_DIR`, or `<userData>/drops` when it is unset, so an E2E launch
   never stages into or prunes the real directory (`testModeDropDir`,
-  `createServices`, `src/main/index.ts:397-406`).
+  `createServices`, `src/main/index.ts:338-347`).
 - Before every write, staging creates the directory with mode 0700 when it
   is missing. It then refuses to write when the directory is a symlink or
   not a directory. On POSIX it also refuses when another user owns the
@@ -802,7 +802,7 @@ Temporary directory:
   Timestamps are UTC.
 - At startup, after the main window is created, the main process deletes
   regular files older than 24 hours, once, without awaiting the result
-  (`openMainWindow`, `src/main/index.ts:457-463`). Pruning refuses an untrusted directory, so a
+  (`openMainWindow`, `src/main/index.ts:398-405`). Pruning refuses an untrusted directory, so a
   planted symlink cannot make it delete other files. A dev build and a
   packaged build share the directory, so each can prune the other's old
   files.
@@ -1366,6 +1366,25 @@ the whole side falls back to escaped plain text.
   not used, because it accepts a sibling such as `/proj-evil` for the root
   `/proj`. `files:peek` still reads absolute paths by design; it uses
   `isInsideRoot` only to choose which root a path is shown under.
+
+- **A terminal path opens in the project it was found in.** `files:peek`
+  returns `projectId`: the project whose root holds the file, or null when
+  the file is outside every project. A relative path is tried in the current
+  project first, then the other projects, and never against the app's working
+  directory. An absolute path goes to the project with the longest containing
+  root. `peekOpenAction` (`src/renderer/peek-open.ts`) makes one decision for
+  both the hover card and a click on the printed path:
+  - same project: open the file here;
+  - another project, in the main window: select that project, then open the
+    file in its Files tab. The open is held as a pending request and applied
+    when the selection lands on that project; a failed or superseded switch
+    drops it (`src/renderer/pending-file-open.ts`);
+  - outside every project, or another project from a popout: preview only, with
+    a note. Nothing is opened and no project is added.
+
+  The hover card stays open while the pointer is on the path or on the card,
+  and closes 200 ms after the pointer leaves both (`createHoverHold`,
+  `src/renderer/hover-hold.ts`).
 
 - **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
   old when added, inside the usual release-age window; it was accepted

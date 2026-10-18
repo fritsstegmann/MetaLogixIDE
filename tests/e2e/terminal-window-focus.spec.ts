@@ -68,10 +68,10 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 
@@ -85,38 +85,40 @@ interface Launched {
 /** Launches the app with an isolated profile and one project dir per name (each with a `.git`). */
 async function launch(projectNames: string[] = ['alpha']): Promise<Launched> {
   const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-focus-home-'));
-  const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-focus-root-'));
-  for (const name of projectNames) {
-    const proj = join(demoRoot, name);
-    mkdirSync(proj);
-    mkdirSync(join(proj, '.git'));
-    writeFileSync(join(proj, 'notes.txt'), 'hello from notes\n');
-  }
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const isolatedHome = scope.tempDir('metaide-focus-home-');
+    const demoRoot = scope.tempDir('metaide-focus-root-');
+    for (const name of projectNames) {
+      const proj = join(demoRoot, name);
+      mkdirSync(proj);
+      mkdirSync(join(proj, '.git'));
+      writeFileSync(join(proj, 'notes.txt'), 'hello from notes\n');
+    }
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
+    await win.evaluate(async (path: string) => {
+      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+    }, demoRoot);
+    return {
+      app, win, demoRoot,
+      cleanup: () => {
+        rmSync(isolatedHome, { recursive: true, force: true });
+        rmSync(demoRoot, { recursive: true, force: true });
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
-  await win.evaluate(async (path: string) => {
-    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-  }, demoRoot);
-  return {
-    app, win, demoRoot,
-    cleanup: () => {
-      rmSync(isolatedHome, { recursive: true, force: true });
-      rmSync(demoRoot, { recursive: true, force: true });
-    },
-  };
 }
 
 /** Selects a project by exact sidebar row name and waits for its terminal to render. */
@@ -203,7 +205,7 @@ test('probe: activeElement persists across a real window blur/focus cycle', asyn
 
     await expect(searchInput, 'the find input keeps focus across a real OS blur/focus cycle').toBeFocused();
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -232,7 +234,7 @@ test('AC1: body-focused window, single shell — refocus moves keyboard input in
       return snap.output;
     }, { timeout: 5000 }).toContain('echo: hi');
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -249,7 +251,7 @@ test('AC2: a non-text control held focus — refocus still moves focus into the 
 
     await expect.poll(() => terminalActiveIn(win, '[data-testid="shell-tab"]'), { timeout: 3000 }).toBe(true);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -289,7 +291,7 @@ test('AC3: text-entry elements keep focus across refocus (find input, files edit
     await refocus(win);
     await expect(chatInput, 'chat panel text-entry keeps focus').toBeFocused();
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -321,7 +323,7 @@ test('AC4: an open overlay blocks auto-focus even with activeElement forced to <
     await expect(finder, 'positive control: the overlay is still open in this state').toBeVisible();
     await expect(terminalActiveIn(win, '[data-testid="shell-tab"]'), 'no terminal took focus while the finder is open').resolves.toBe(false);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -349,7 +351,7 @@ test('AC5/AC7: split — last-used pane gets focus, mirrored, and only one termi
     await expect(terminalActiveIn(win, '[data-testid="split-right"]'), 'right pane was not called (no focus ping-pong)').resolves.toBe(false);
     expect(await focusedTerminalCount(win), 'exactly one terminal holds focus').toBe(1);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -367,7 +369,7 @@ test('AC6: split open, nothing used yet — the left (primary) terminal gets foc
     await expect.poll(() => terminalActiveIn(win, '.split-left'), { timeout: 3000 }).toBe(true);
     await expect(terminalActiveIn(win, '[data-testid="split-right"]'), 'right pane (registered second) is not the default target').resolves.toBe(false);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -390,7 +392,7 @@ test('AC8: no terminal mounted on the Files tab — refocus is a no-op, and swit
     await expect(win.locator('[data-testid="shell-tab"] .xterm-screen'), 'positive control: the shell tab is rendered').toBeVisible({ timeout: 5000 });
     await expect(terminalActiveIn(win, '[data-testid="shell-tab"]'), 'in-app tab switch does not auto-focus the terminal (D4)').resolves.toBe(false);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -430,7 +432,7 @@ test('AC9/AC15: popout window — opens already focused, and the same window-foc
     await refocus(popout);
     await expect(popout.locator('[data-testid="shell-tab"]')).toHaveCount(0);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -505,7 +507,7 @@ test('AC10: notification click always switches project/shell, and honours D5 (ov
     await expect(palette, 'positive control: the overlay is still open').toBeVisible();
     await expect(terminalActiveIn(win, '[data-testid="shell-tab"]'), 'the switch happens but no terminal steals focus while an overlay is open (D5)').resolves.toBe(false);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -536,7 +538,7 @@ test('AC12: focus moves inside an already-focused window never triggers auto-foc
     await handle.evaluate((w) => w.focus());
     await expect(chatInput, 'the activating click keeps its element focused; the terminal does not take it').toBeFocused();
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });

@@ -7,7 +7,7 @@ import { ENV_TESTIDS } from '../../src/renderer/project-env-copy';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
 import {
   baseEnv, hookCredentials, installNotificationSpy, launch, notifications, openProject, postRawHook, projectId,
-  waitForShell, type Api, type Harness,
+  waitForShell, closeApp, guardedLaunch, type Api, type Harness,
 } from './helpers/claude-harness';
 import {
   HALF_EDIT, LINK_SECRET, LONG_EDITED_123, LONG_INSERTED, LONG_MERGED, LONG_PATH, MID_EDIT, RENAME_NEW, RENAME_OLD,
@@ -43,7 +43,7 @@ const POLL_WINDOW = 5500;
 let h: Harness | undefined;
 
 test.afterEach(async () => {
-  await h?.app.close();
+  if (h) await closeApp(h.app);
   h?.cleanup();
   h = undefined;
 });
@@ -241,21 +241,24 @@ async function terminalActiveIn(win: Page, containerSelector: string): Promise<b
 async function relaunch(): Promise<Page> {
   const cur = h!;
   await cur.app.close();
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(cur.isolatedHome, 'userData')}`],
-    env: {
-      ...baseEnv(),
-      HOME: cur.isolatedHome,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [cur.shimPath], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [cur.shimPath, '--continue'], env: {} }),
-    },
+  const { app, win } = await guardedLaunch(async (scope) => {
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(cur.isolatedHome, 'userData')}`],
+      env: {
+        ...baseEnv(),
+        HOME: cur.isolatedHome,
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [cur.shimPath], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [cur.shimPath, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
+    return { app, win };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
   cur.app = app;
   cur.win = win;
   return win;

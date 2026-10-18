@@ -76,6 +76,94 @@ describe('shell mutation scanner', () => {
     expect(() => scanSynthetic(files, () => null)).toThrow(/cannot follow spread pkg/);
   });
 
+  it('recognises non-null assertions and parentheses around the receiver', () => {
+    const scan = scanSynthetic({
+      'main.ts': `
+        const handlers = {
+          'd:bang': async (s) => { await s.ptyManager!.spawn(1, 0, {}); },
+          'd:paren': async (s) => { (s.shells as Shells)!.upsert({}); },
+          'd:bang-quiet': async (s) => { s.ptyManager!.write(1, 0, 'x'); },
+        };`,
+    });
+    expect(scan.mutating).toEqual(['d:bang', 'd:paren']);
+  });
+
+  it('recognises string-literal element access on the receiver and on the method', () => {
+    const scan = scanSynthetic({
+      'main.ts': `
+        const handlers = {
+          'e:receiver': async (s) => { await s['ptyManager'].kill(1, 0); },
+          'e:method': async (s) => { s.shells['remove'](1, 0); },
+          'e:template': async (s) => { s[\`ptyManager\`]?.[\`spawn\`](1, 0, {}); },
+          'e:quiet': async (s) => { s['shells'].list(); },
+        };`,
+    });
+    expect(scan.mutating).toEqual(['e:receiver', 'e:method', 'e:template']);
+  });
+
+  it('recognises a mutating method referenced without being called', () => {
+    const scan = scanSynthetic({
+      'main.ts': `const handlers = { 'f:ref': async (s, r) => { r.ids.forEach(s.ptyManager.kill); } };`,
+    });
+    expect(scan.mutating).toEqual(['f:ref']);
+  });
+
+  it.each([
+    ['a computed method key', `s.ptyManager[method](1, 0)`],
+    ['a computed receiver key', `s[key].spawn(1, 0, {})`],
+    ['an aliased receiver', `const pm = s.ptyManager; pm.spawn(1, 0, {})`],
+    ['an aliased receiver behind a non-null assertion', `const sh = s.shells!; sh.remove(1, 0)`],
+    ['a receiver passed to a function', `stopAll(s.ptyManager)`],
+    ['a receiver stored in an object', `const deps = { pty: s['ptyManager'] }; deps.pty.kill(1, 0)`],
+    ['a destructured receiver', `const { ptyManager } = s; ptyManager.spawn(1, 0, {})`],
+    ['a renamed destructured receiver', `const { ptyManager: pty } = s; pty.spawn(1, 0, {})`],
+    ['a destructured method', `const { kill } = s.ptyManager; kill(1, 0)`],
+    ['a destructuring assignment', `let pty; ({ ptyManager: pty } = s); pty.kill(1, 0)`],
+    ['a string-literal computed destructuring key', `const { ['ptyManager']: p } = s; p.spawn(1, 0, {})`],
+    ['a template-literal computed destructuring key', `const { [\`shells\`]: sh } = s; sh.remove(1, 0)`],
+    ['a non-literal computed destructuring key', `const { [key]: p } = s; p.spawn(1, 0, {})`],
+    ['a computed key in a destructuring assignment', `let p; ({ ['ptyManager']: p } = s); p.kill(1, 0)`],
+    ['a non-literal computed key in a destructuring assignment', `let p; ({ [key]: p } = s); p.kill(1, 0)`],
+    ['a computed key in the handler parameter destructuring', `(({ ['shells']: sh }) => sh.upsert({}))(s)`],
+    ['a numeric index followed by a mutating method on any object', `r.procs[0]?.kill()`],
+  ])('throws on %s instead of passing the handler', (_label, body) => {
+    const files = { 'main.ts': `const handlers = { 'g:hidden': async (s, { method, key }) => { ${body}; } };` };
+    expect(() => scanSynthetic(files)).toThrow(/g:hidden: cannot analyse/);
+  });
+
+  it('throws on a destructured receiver in the handler parameter', () => {
+    const files = { 'main.ts': `const handlers = { 'g:param': async ({ shells: sh }) => { sh.upsert({}); } };` };
+    expect(() => scanSynthetic(files)).toThrow(/g:param: cannot analyse/);
+  });
+
+  it('throws when a handler reaches an unanalysable helper, but not for helpers no handler reaches', () => {
+    const helper = `function evict(s) { const pm = s.ptyManager; pm.kill(1, 0); }`;
+    const boot = `function boot(services) { if (services.ptyManager) return evict(services); }`;
+    expect(() => scanSynthetic({ 'main.ts': `${helper} const run = (s) => evict(s); const handlers = { 'h:via': async (s) => run(s) };` }))
+      .toThrow(/h:via: cannot analyse helper run/);
+    const scan = scanSynthetic({ 'main.ts': `${helper} ${boot} const handlers = { 'h:clean': async (s) => s.shells.list() };` });
+    expect(scan.mutating).toEqual([]);
+  });
+
+  it('passes an indexed element bound to a local first, and literal computed keys naming other services', () => {
+    const scan = scanSynthetic({
+      'main.ts': `const handlers = { 'j:bound': async (s, r) => { const p = r.procs[0]; p?.kill(); const { ['projects']: pr } = s; pr.remove(1); } };`,
+    });
+    expect(scan.mutating).toEqual([]);
+  });
+
+  it('does not mistake look-alike names for an escaping receiver', () => {
+    const scan = scanSynthetic({
+      'main.ts': `
+        const handlers = {
+          'i:keys': async (s) => { const shells = s.shells.list(); return { shells, ptyManager: 1 }; },
+          'i:nested': async (s, r) => { r.result.shells.map((x) => x); child.kill(); },
+        };`,
+    });
+    expect(scan.channels).toEqual(['i:keys', 'i:nested']);
+    expect(scan.mutating).toEqual([]);
+  });
+
   it('throws on a computed handler key', () => {
     const files = { 'main.ts': `const k = 'x'; const handlers = { [k]: async () => ({}) };` };
     expect(() => scanSynthetic(files)).toThrow(/unreadable handler key/);

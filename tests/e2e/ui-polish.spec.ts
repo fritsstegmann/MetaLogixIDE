@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Reads the shell's terminal state via `shells:snapshot` (main's headless
@@ -26,29 +26,32 @@ async function shellOutput(win: Page, projectName: string): Promise<string> {
 }
 
 test('UI polish: sidebar toggle, in-use section, live indicator, popout window', async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-polish-home-'));
-  const demoRoot     = mkdtempSync(join(tmpdir(), 'metaide-polish-root-'));
-  const proj         = join(demoRoot, 'polished');
-  mkdirSync(proj); mkdirSync(join(proj, '.git'));
+  const { app, win, isolatedHome, demoRoot } = await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-polish-home-');
+    const demoRoot     = scope.tempDir('metaide-polish-root-');
+    const proj         = join(demoRoot, 'polished');
+    mkdirSync(proj); mkdirSync(join(proj, '.git'));
 
-  const app = await electron.launch({
-    // Own user-data dir: Electron's default userData path is not reliably
-    // isolated by HOME alone (see root-removal.spec.ts), so persisted
-    // renderer state (localStorage — e.g. the mainTab toggle) and the
-    // single-instance lock can leak across launches without this.
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'],env: {} }),
-    },
+    const app = scope.own(await electron.launch({
+      // Own user-data dir: Electron's default userData path is not reliably
+      // isolated by HOME alone (see root-removal.spec.ts), so persisted
+      // renderer state (localStorage — e.g. the mainTab toggle) and the
+      // single-instance lock can leak across launches without this.
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'],env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    return { app, win, isolatedHome, demoRoot };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
 
   // Add root via IPC directly. `dialogs:pick-directory` always resolves
   // `{ path: null }` under METAIDE_TEST_MODE=1 (register.ts), so clicking
@@ -107,7 +110,7 @@ test('UI polish: sidebar toggle, in-use section, live indicator, popout window',
   await themeBtn.click(); // dark → light
   await expect(win.locator('html')).toHaveAttribute('data-theme', 'light', { timeout: 2000 });
 
-  await app.close();
+  await closeApp(app);
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(demoRoot, { recursive: true, force: true });
 });

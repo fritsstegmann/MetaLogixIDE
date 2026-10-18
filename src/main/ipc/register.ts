@@ -41,7 +41,7 @@ import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
 import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
 const execFileAsync = promisify(execFile);
@@ -157,6 +157,42 @@ export interface WindowHooks {
   tileAll: () => number;
   /** Applies the vibrancy material to every open window (no-op off darwin). */
   setVibrancy: (material: VibrancyMaterial) => void;
+}
+
+/** A file files:peek may read: its absolute path, the root it is displayed relative to, and that root's project (null when outside every project). */
+interface PeekCandidate { abs: string; root: string | null; projectId: number | null }
+
+/**
+ * Candidate files for `files:peek`, in priority order. An absolute `relPath` yields itself, attributed to the project with
+ * the longest root containing it; a relative one yields one candidate per project root that contains it, `projects` order
+ * kept, and is never resolved against the process working directory.
+ */
+function peekCandidates(projects: ReadonlyArray<{ id: number; path: string }>, relPath: string): PeekCandidate[] {
+  const roots = projects.map((p) => ({ projectId: p.id, root: resolve(p.path) }));
+  if (isAbsolute(relPath)) {
+    const abs = resolve(relPath);
+    const owner = roots.filter((r) => isInsideRoot(r.root, abs)).sort((a, b) => b.root.length - a.root.length)[0];
+    return [{ abs, root: owner?.root ?? null, projectId: owner?.projectId ?? null }];
+  }
+  return roots
+    .map((r) => ({ ...r, abs: resolve(r.root, relPath) }))
+    .filter((c) => isInsideRoot(c.root, c.abs));
+}
+
+/** Reads the head of a peek candidate, or returns null when it is missing, unreadable or a directory so the next candidate is tried. */
+function peekFile({ abs, root, projectId }: PeekCandidate, maxLines: number): IpcResponse<'files:peek'> | null {
+  try {
+    const st = statSync(abs);
+    if (st.isDirectory()) return null;
+    const base = { relPath: root ? relative(root, abs) : abs, projectId, found: true, sizeBytes: st.size };
+    if (st.size > 2_000_000) return { ...base, kind: 'text', head: `File too large (${st.size} bytes).`, totalLines: null };
+    const buf = readFileSync(abs);
+    if (buf.subarray(0, Math.min(4096, buf.length)).includes(0)) return { ...base, kind: 'binary', head: '', totalLines: null };
+    const lines = buf.toString('utf8').split(/\r?\n/);
+    return { ...base, kind: 'text', head: lines.slice(0, maxLines).join('\n'), totalLines: lines.length };
+  } catch {
+    return null;
+  }
 }
 
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
@@ -1038,42 +1074,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'files:peek':   async (s, { projectId, relPath, maxLines = 40 }) => {
     const cur = s.projects.get(projectId);
     if (!cur) throw new Error(`no project ${projectId}`);
-
-    // Roots to try, in priority order:
-    //   1. the current project
-    //   2. absolute path as-is
-    //   3. every other visible project (so Claude output referencing a
-    //      sibling project still previews)
-    const roots: string[] = [resolve(cur.path)];
-    const others = s.projects.list().filter((p) => p.id !== projectId).map((p) => resolve(p.path));
-    for (const o of others) if (!roots.includes(o)) roots.push(o);
-
-    // Build candidate absolute paths for each root plus the raw path.
-    const candidates: Array<{ abs: string; root: string }> = [];
-    candidates.push({ abs: resolve(relPath), root: '' });                 // absolute as-is
-    for (const r of roots) candidates.push({ abs: resolve(r, relPath), root: r });
-
-    for (const { abs, root } of candidates) {
-      if (root && !isInsideRoot(root, abs)) continue;
-      try {
-        const st = statSync(abs);
-        if (st.isDirectory()) continue;
-        const displayRel = root ? relative(root, abs) : abs;
-        if (st.size > 2_000_000) {
-          return { relPath: displayRel, found: true, kind: 'text' as const, head: `File too large (${st.size} bytes).`, sizeBytes: st.size, totalLines: null };
-        }
-        const buf = readFileSync(abs);
-        const scan = buf.subarray(0, Math.min(4096, buf.length));
-        if (scan.includes(0)) {
-          return { relPath: displayRel, found: true, kind: 'binary' as const, head: '', sizeBytes: st.size, totalLines: null };
-        }
-        const text = buf.toString('utf8');
-        const lines = text.split(/\r?\n/);
-        const head = lines.slice(0, maxLines).join('\n');
-        return { relPath: displayRel, found: true, kind: 'text' as const, head, sizeBytes: st.size, totalLines: lines.length };
-      } catch { /* try next candidate */ }
+    const projects = [cur, ...s.projects.list().filter((p) => p.id !== projectId)];
+    for (const candidate of peekCandidates(projects, relPath)) {
+      const res = peekFile(candidate, maxLines);
+      if (res) return res;
     }
-    return { relPath, found: false, kind: 'text' as const, head: '', sizeBytes: 0, totalLines: null };
+    return { relPath, projectId: null, found: false, kind: 'text' as const, head: '', sizeBytes: 0, totalLines: null };
   },
 
   'files:reveal': async (s, { projectId, relPath }) => {

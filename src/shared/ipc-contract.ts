@@ -185,7 +185,13 @@ export interface IpcContract {
   'drops:stage-file':            { request: StageFileRequest;   response: StageResult };
   /** Save an image-only clipboard as a PNG in the drop directory. */
   'drops:stage-clipboard-image': { request: undefined;          response: ClipboardImageResult };
-  'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
+  /**
+   * Preview a path printed in terminal output. A relative `relPath` is tried against the current project's root, then every
+   * other project's; an absolute one is read as-is. The response's `relPath` is relative to the project the file was found
+   * in, named by `projectId`; `projectId` is null when the file lies outside every project (then `relPath` is absolute)
+   * or was not found.
+   */
+  'files:peek':      { request: { projectId: number; relPath: string; maxLines?: number };  response: { relPath: string; projectId: number | null; found: boolean; kind: 'text' | 'binary'; head: string; sizeBytes: number; totalLines: number | null } };
   'search:project':  { request: { projectId: number; query: string; caseSensitive?: boolean; regex?: boolean; maxFiles?: number; maxMatchesPerFile?: number }; response: { matches: Array<{ relPath: string; line: number; col: number; preview: string }>; filesScanned: number; truncated: boolean } };
 
   // Git — surfaced for the sidebar, status bar and Diff tab: status, staging, commit, push/pull.

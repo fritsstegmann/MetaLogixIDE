@@ -1,7 +1,7 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * A window created after the Window opacity setting changes (a shell
@@ -9,24 +9,27 @@ import { join, resolve } from 'node:path';
  * current opacity, not the opacity that was persisted at boot.
  */
 test('popout opened after an opacity change starts at the new opacity', async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-opacity-home-'));
-  const demoRoot     = mkdtempSync(join(tmpdir(), 'metaide-opacity-root-'));
-  const proj         = join(demoRoot, 'translucent');
-  mkdirSync(proj); mkdirSync(join(proj, '.git'));
+  const { app, isolatedHome, demoRoot } = await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-opacity-home-');
+    const demoRoot     = scope.tempDir('metaide-opacity-root-');
+    const proj         = join(demoRoot, 'translucent');
+    mkdirSync(proj); mkdirSync(join(proj, '.git'));
 
-  const app = await electron.launch({
-    // Own user-data dir: HOME alone does not isolate Electron's userData
-    // (see ui-polish.spec.ts), and the persisted opacity lives there.
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'],env: {} }),
-    },
+    const app = scope.own(await electron.launch({
+      // Own user-data dir: HOME alone does not isolate Electron's userData
+      // (see ui-polish.spec.ts), and the persisted opacity lives there.
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'],env: {} }),
+      },
+    }));
+    return { app, isolatedHome, demoRoot };
   });
   try {
     const win = await app.firstWindow();
@@ -91,7 +94,7 @@ test('popout opened after an opacity change starts at the new opacity', async ()
       expect(await popOutOpacity(), `stored ${JSON.stringify(stored)}`).toBeCloseTo(expected, 2);
     }
   } finally {
-    await app.close();
+    await closeApp(app);
     rmSync(isolatedHome, { recursive: true, force: true });
     rmSync(demoRoot, { recursive: true, force: true });
   }

@@ -14,7 +14,7 @@ import type { ResolvedLaunch } from '@main/domain/launch';
 import type { MiseLister, MiseListResult } from '@main/domain/mise-cli';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
@@ -2055,7 +2055,7 @@ describe('project file handlers keep every path inside the project root', () => 
   it('files:peek attributes a sibling-prefix path to the sibling project, not the current one', async () => {
     const { call } = containmentRig();
     await expect(call('files:peek', { projectId: 1, relPath: SIBLING })).resolves.toMatchObject({
-      found: true, relPath: 'f', head: 'secret',
+      found: true, relPath: 'f', head: 'secret', projectId: 2,
     });
   });
 
@@ -2064,7 +2064,160 @@ describe('project file handlers keep every path inside the project root', () => 
     const outside = join(base, 'loose.txt');
     writeFileSync(outside, 'loose');
     await expect(call('files:peek', { projectId: 1, relPath: outside })).resolves.toMatchObject({
-      found: true, relPath: outside, head: 'loose',
+      found: true, relPath: outside, head: 'loose', projectId: null,
+    });
+  });
+
+  it('files:peek attributes a relative hit in the current project to the current project first', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:peek', { projectId: 1, relPath: 'f' })).resolves.toMatchObject({
+      found: true, relPath: 'f', head: 'mine', projectId: 1,
+    });
+  });
+
+  it('files:peek attributes a relative hit found only in another project to that project', async () => {
+    const { evil, call } = containmentRig();
+    writeFileSync(join(evil, 'only-evil'), 'theirs');
+    await expect(call('files:peek', { projectId: 1, relPath: 'only-evil' })).resolves.toMatchObject({
+      found: true, relPath: 'only-evil', head: 'theirs', projectId: 2,
+    });
+  });
+
+  it('files:peek never resolves a relative path against the process working directory', async () => {
+    const { call } = containmentRig();
+    expect(existsSync(resolve('package.json'))).toBe(true);
+    await expect(call('files:peek', { projectId: 1, relPath: 'package.json' })).resolves.toEqual({
+      relPath: 'package.json', found: false, kind: 'text', head: '', sizeBytes: 0, totalLines: null, projectId: null,
+    });
+  });
+
+  it('files:peek attributes an absolute path inside another project to that project with a root-relative path', async () => {
+    const { evil, call } = containmentRig();
+    await expect(call('files:peek', { projectId: 1, relPath: join(evil, 'f') })).resolves.toMatchObject({
+      found: true, relPath: 'f', head: 'secret', projectId: 2,
+    });
+  });
+
+  it('files:peek skips a directory match and tries the next project root', async () => {
+    const { root, evil, call } = containmentRig();
+    mkdirSync(join(root, 'd'));
+    writeFileSync(join(evil, 'd'), 'file in evil');
+    await expect(call('files:peek', { projectId: 1, relPath: 'd' })).resolves.toMatchObject({
+      found: true, relPath: 'd', head: 'file in evil', projectId: 2,
+    });
+  });
+
+  it('files:peek reports a binary file without a head, keeping its project', async () => {
+    const { root, call } = containmentRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([1, 0, 2]));
+    await expect(call('files:peek', { projectId: 1, relPath: 'bin' })).resolves.toEqual({
+      relPath: 'bin', projectId: 1, found: true, kind: 'binary', head: '', sizeBytes: 3, totalLines: null,
+    });
+  });
+
+  it('files:peek reports an oversized file by size only, keeping its project', async () => {
+    const { evil, call } = containmentRig();
+    truncateSync(join(evil, 'f'), 2_000_001);
+    await expect(call('files:peek', { projectId: 1, relPath: join(evil, 'f') })).resolves.toEqual({
+      relPath: 'f', projectId: 2, found: true, kind: 'text', head: 'File too large (2000001 bytes).', sizeBytes: 2_000_001, totalLines: null,
+    });
+  });
+
+  it('files:peek returns the first maxLines lines and the total line count', async () => {
+    const { root, call } = containmentRig();
+    writeFileSync(join(root, 'lines'), 'a\nb\r\nc');
+    await expect(call('files:peek', { projectId: 1, relPath: 'lines', maxLines: 2 })).resolves.toMatchObject({
+      head: 'a\nb', totalLines: 3, projectId: 1,
+    });
+  });
+
+  it('files:peek attributes an absolute path to the longest matching project root', async () => {
+    const { root } = containmentRig();
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub', 'n'), 'nested');
+    const all = [{ id: 1, path: root }, { id: 3, path: join(root, 'sub') }];
+    const projects = { get: (id: number) => all.find((p) => p.id === id), list: () => all };
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    await expect(ipc.handlers.get('files:peek')!({}, { projectId: 1, relPath: join(root, 'sub', 'n') })).resolves.toMatchObject({
+      found: true, relPath: 'n', projectId: 3,
+    });
+  });
+});
+
+describe('files:read', () => {
+  /** Project 1 rooted at a fresh temp dir, plus a caller for the real files:read handler. */
+  function readRig() {
+    const root = mkdtempSync(join(tmpdir(), 'reg-read-'));
+    const projects = { get: (id: number) => (id === 1 ? { id: 1, path: root } : undefined), list: () => [{ id: 1, path: root }] };
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    const read = (req: Record<string, unknown>) => ipc.handlers.get('files:read')!({}, { projectId: 1, ...req });
+    return { root, read };
+  }
+
+  /** A buffer of `size` printable bytes with a single NUL at `nulAt`. */
+  function withNulAt(size: number, nulAt: number): Buffer {
+    const buf = Buffer.alloc(size, 0x61);
+    buf[nulAt] = 0;
+    return buf;
+  }
+
+  it('returns a text file inside a subdirectory as utf8 text with its size', async () => {
+    const { root, read } = readRig();
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub', 'code.ts'), 'export const x = "é";');
+    await expect(read({ relPath: 'sub/code.ts' })).resolves.toEqual({ content: 'export const x = "é";', kind: 'text', sizeBytes: 22 });
+  });
+
+  it('rejects an unknown project', async () => {
+    const { read } = readRig();
+    await expect(read({ projectId: 9, relPath: 'x' })).rejects.toThrow('no project 9');
+  });
+
+  it('rejects parent-climbing and absolute paths outside the root', async () => {
+    const { read } = readRig();
+    await expect(read({ relPath: '../../etc/passwd' })).rejects.toThrow('path escapes project root');
+    await expect(read({ relPath: '/etc/passwd' })).rejects.toThrow('path escapes project root');
+  });
+
+  it('rejects a directory', async () => {
+    const { root, read } = readRig();
+    mkdirSync(join(root, 'sub'));
+    await expect(read({ relPath: 'sub' })).rejects.toThrow('sub is a directory');
+  });
+
+  it('reports a NUL byte in the scanned head as binary with empty content', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([1, 0, 2]));
+    await expect(read({ relPath: 'bin' })).resolves.toEqual({ content: '', kind: 'binary', sizeBytes: 3 });
+  });
+
+  it('scans exactly the first 8192 bytes: a NUL at offset 8191 is binary, at 8192 is text', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'last-in'), withNulAt(9000, 8191));
+    writeFileSync(join(root, 'first-out'), withNulAt(9000, 8192));
+    await expect(read({ relPath: 'last-in' })).resolves.toMatchObject({ kind: 'binary', content: '' });
+    const outside = await read({ relPath: 'first-out' }) as { kind: string; content: string };
+    expect(outside.kind).toBe('text');
+    expect(outside.content).toHaveLength(9000);
+  });
+
+  it('forceText returns a NUL-bearing file as text instead of the binary placeholder', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([0x61, 0, 0x62]));
+    await expect(read({ relPath: 'bin', forceText: true })).resolves.toEqual({ content: 'a\u0000b', kind: 'text', sizeBytes: 3 });
+  });
+
+  it('caps the preview at 2 MB: 2_000_000 bytes are read, 2_000_001 return the size message', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'at-cap'), Buffer.alloc(2_000_000, 0x61));
+    writeFileSync(join(root, 'over-cap'), Buffer.alloc(2_000_001, 0x61));
+    const atCap = await read({ relPath: 'at-cap' }) as { content: string; kind: string; sizeBytes: number };
+    expect(atCap.kind).toBe('text');
+    expect(atCap.content).toHaveLength(2_000_000);
+    await expect(read({ relPath: 'over-cap' })).resolves.toEqual({
+      content: 'File too large (2000001 bytes) — preview capped at 2 MB.', kind: 'text', sizeBytes: 2_000_001,
     });
   });
 });

@@ -38,11 +38,10 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { baseEnv, makeClaudeShim } from './helpers/claude-harness';
+import { baseEnv, closeApp, guardedLaunch, makeClaudeShim } from './helpers/claude-harness';
 import { electronOptions } from './helpers/agent-status-harness';
 
 type HeadlessModule = typeof import('@xterm/headless');
@@ -247,43 +246,45 @@ async function setWindowSize(app: ElectronApplication, size: { width: number; he
 
 /** Launches the app on an isolated HOME with project `demo` open on mock-claude (see claude-tab-width.spec.ts). */
 async function openDemoProject(): Promise<{ app: ElectronApplication; win: Page; cleanup: () => void }> {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-home-'));
-  const demoRoot     = mkdtempSync(join(tmpdir(), 'metaide-demo-'));
-  const proj         = join(demoRoot, 'demo');
-  mkdirSync(proj); mkdirSync(join(proj, '.git'));
-  // A genuine Claude-named launch exercises the same live status identity as
-  // the rest of the suite while retaining the old terminal snapshot tests.
-  const claudeShim = makeClaudeShim(isolatedHome);
+  return guardedLaunch(async (scope) => {
+    const isolatedHome = scope.tempDir('metaide-home-');
+    const demoRoot     = scope.tempDir('metaide-demo-');
+    const proj         = join(demoRoot, 'demo');
+    mkdirSync(proj); mkdirSync(join(proj, '.git'));
+    // A genuine Claude-named launch exercises the same live status identity as
+    // the rest of the suite while retaining the old terminal snapshot tests.
+    const claudeShim = makeClaudeShim(isolatedHome);
 
-  const app = await electron.launch(electronOptions(isolatedHome, {
-    ...baseEnv(),
-    HOME: isolatedHome,
-    ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
-    METAIDE_TEST_MODE: '1',
-    METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-    METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [claudeShim], env: {} }),
-    METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [claudeShim, '--continue'], env: {} }),
-  }));
-  const cleanup = () => {
-    rmSync(isolatedHome, { recursive: true, force: true });
-    rmSync(demoRoot, { recursive: true, force: true });
-  };
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await setWindowSize(app, WIDE);
+    const app = scope.own(await electron.launch(electronOptions(isolatedHome, {
+      ...baseEnv(),
+      HOME: isolatedHome,
+      ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
+      METAIDE_TEST_MODE: '1',
+      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [claudeShim], env: {} }),
+      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [claudeShim, '--continue'], env: {} }),
+    })));
+    const cleanup = () => {
+      rmSync(isolatedHome, { recursive: true, force: true });
+      rmSync(demoRoot, { recursive: true, force: true });
+    };
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await setWindowSize(app, WIDE);
 
-  await win.evaluate(async ({ path, claudeShim }: { path: string; claudeShim: string }) => {
-    const api = (window as unknown as { api: Api }).api;
-    await api.invoke('settings:set', { key: 'default_cli_profiles', value: [{ name: 'Claude', argv: [claudeShim] }] });
-    await api.invoke('roots:add', { path });
-  }, { path: demoRoot, claudeShim });
-  const projectButton = win.getByRole('button', { name: 'demo', exact: true });
-  await expect(projectButton).toBeVisible({ timeout: 5000 });
-  await projectButton.click();
+    await win.evaluate(async ({ path, claudeShim }: { path: string; claudeShim: string }) => {
+      const api = (window as unknown as { api: Api }).api;
+      await api.invoke('settings:set', { key: 'default_cli_profiles', value: [{ name: 'Claude', argv: [claudeShim] }] });
+      await api.invoke('roots:add', { path });
+    }, { path: demoRoot, claudeShim });
+    const projectButton = win.getByRole('button', { name: 'demo', exact: true });
+    await expect(projectButton).toBeVisible({ timeout: 5000 });
+    await projectButton.click();
 
-  await expect(win.locator('.xterm').first()).toBeVisible({ timeout: 10000 });
-  await expect.poll(() => snapshotOutput(win, 'demo'), { timeout: 10000 }).toContain('mock-claude ready');
-  return { app, win, cleanup };
+    await expect(win.locator('.xterm').first()).toBeVisible({ timeout: 10000 });
+    await expect.poll(() => snapshotOutput(win, 'demo'), { timeout: 10000 }).toContain('mock-claude ready');
+    return { app, win, cleanup };
+  });
 }
 
 /** Settles the PTY size, floods Claude past the old 256 KiB tail, and checks the live tab. */
@@ -315,7 +316,7 @@ test('Claude tab shows its input box and status line after a long session when y
 
     await expectRemountedClaudeTab(win, flood);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -340,7 +341,7 @@ test('Claude tab shows its input box and status line after a long session when y
     await win.locator('[data-testid="shell-tab-button"][data-shell-index="0"]').click();
     await expectRemountedClaudeTab(win, flood);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -392,7 +393,7 @@ test('Claude tab keeps its first row and cursor after a remount when the screen 
 
     expectTruecolorScreen(await replaySnapshot(await snapshotOutput(win, 'demo'), size), size, 'shells:snapshot replay');
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
