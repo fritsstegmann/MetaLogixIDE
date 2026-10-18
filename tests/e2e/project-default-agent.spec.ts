@@ -18,6 +18,7 @@ import {
   installGate,
   ipc,
   killPrimary,
+  AGENT_SHELL,
   launchAgents,
   enterSettingsTab,
   openShellMenu,
@@ -904,7 +905,7 @@ test('E5 live primary survives named save/reset, reattaches on return, then new 
     (s) => s.projectId === a.id && s.shellIndex !== 0 && s.shellIndex !== explicit.shellIndex,
   );
   if (!plain) throw new Error('plain-terminal shortcut did not spawn a shell');
-  expect(plain.launchArgv[0]).toBe('/bin/sh');
+  expect(plain.launchArgv[0]).toBe(AGENT_SHELL);
   expect(plain.launchArgv).not.toContain(h.executable);
   await ipc(h.win, 'shells:write', {
     projectId: a.id,

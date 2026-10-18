@@ -2,10 +2,12 @@
  * Palette search: turns the parsed query and every provider's items into the `PaletteView` the
  * palette renders. The mode picks the providers (normal: projects, commands and Settings; "#":
  * projects; ">": commands and Settings; "@": files). Projects split into `running` (a live shell) and
- * `projects` (the rest), each keeping list or match order. Each provider is fuzzy-matched with fuse.js;
- * groups keep the fixed `GROUP_ORDER` with empty ones dropped, rows keep list order on an empty
- * query and match order otherwise, and the total is capped (50 rows, 40 in files mode). Pure; the
- * fuse indexes are cached per source array so a keystroke does not rebuild them.
+ * `projects` (the rest). Each provider is fuzzy-matched with fuse.js (project names weigh more than
+ * paths, and a name equal to or starting with the query outranks any other); groups keep the fixed
+ * `GROUP_ORDER` with empty ones dropped, except that with a query the project group holding the best
+ * match comes first so Enter picks it. Rows keep list order on an empty query and match order otherwise, and the
+ * total is capped (50 rows, 40 in files mode). Pure; the fuse indexes are cached per source array so
+ * a keystroke does not rebuild them.
  */
 import Fuse, { type IFuseOptions } from 'fuse.js';
 import {
@@ -41,7 +43,7 @@ function cachedMatcher<T>(options: IFuseOptions<T>): (items: readonly T[], text:
   };
 }
 
-const matchProjects = cachedMatcher<Project>({ keys: ['name', 'path'], ...MATCH });
+const matchProjects = cachedMatcher<Project>({ keys: [{ name: 'name', weight: 2 }, { name: 'path', weight: 1 }], ...MATCH });
 const matchCommands = cachedMatcher<PaletteCommand>({ keys: ['title', 'category', 'hint'], ...MATCH });
 const matchFiles = cachedMatcher<PaletteFileEntry>({ keys: ['name', 'relPath'], ...MATCH });
 
@@ -49,7 +51,7 @@ function group(id: PaletteGroupId, rows: readonly PaletteRow[]): PaletteGroup {
   return { id, title: PALETTE_COPY.groupTitles[id], rows };
 }
 
-/** Keeps `GROUP_ORDER`, drops empty groups and trims rows so the total stays within `cap`. */
+/** Keeps the given group order, drops empty groups and trims rows so the total stays within `cap`. */
 function capGroups(groups: readonly PaletteGroup[], cap: number): PaletteGroup[] {
   const out: PaletteGroup[] = [];
   let left = cap;
@@ -61,12 +63,23 @@ function capGroups(groups: readonly PaletteGroup[], cap: number): PaletteGroup[]
   return out;
 }
 
+/** Fuse's match order, with projects whose name equals or starts with the query lifted above the rest (stable). */
+function rankProjects(projects: readonly Project[], text: string): readonly Project[] {
+  const matched = matchProjects(projects, text);
+  if (!text) return matched;
+  const query = text.toLowerCase();
+  const byName = (project: Project): boolean => project.name.toLowerCase().startsWith(query);
+  return [...matched.filter(byName), ...matched.filter((p) => !byName(p))];
+}
+
 function projectGroups(text: string, input: PaletteSearchInput): PaletteGroup[] {
-  const rows = matchProjects(input.projects, text).map(
+  const rows = rankProjects(input.projects, text).map(
     (project): PaletteRow & { kind: 'project' } => ({ kind: 'project', project, current: project.id === input.currentProjectId }),
   );
   const running = (row: { project: Project }): boolean => input.aliveIds.has(row.project.id);
-  return [group('running', rows.filter(running)), group('projects', rows.filter((r) => !running(r)))];
+  const groups = [group('running', rows.filter(running)), group('projects', rows.filter((r) => !running(r)))];
+  const best = rows[0];
+  return text && best && !running(best) ? groups.reverse() : groups;
 }
 
 function commandGroups(text: string, input: PaletteSearchInput): PaletteGroup[] {
