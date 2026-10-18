@@ -182,6 +182,25 @@ describe('TasksPanel request gate', () => {
     expect(g?.props.notices).toEqual([]);
   });
 
+  const markup = (projectId: number) =>
+    renderToStaticMarkup(rt.render(() => TasksPanel({ projectId, onLaunched: () => undefined })) as ReactElement);
+
+  it('shows the empty-state copy when no source has tasks and there is no notice (AC18)', async () => {
+    markup(1);
+    call(0).resolve({ tasks: [], notices: [] });
+    await flush();
+    expect(markup(1)).toContain(TASKS_COPY.empty);
+  });
+
+  it('shows the notice instead of the empty-state copy when only a mise notice came back', async () => {
+    markup(1);
+    call(0).resolve({ tasks: [], notices: [{ source: 'mise', kind: 'not-found' }] });
+    await flush();
+    const html = markup(1);
+    expect(html).toContain(TASKS_COPY.notice['not-found']);
+    expect(html).not.toContain(TASKS_COPY.empty);
+  });
+
   it('ignores a late reply from the previous project', async () => {
     const h = mount(1);
     h.rerender(2);

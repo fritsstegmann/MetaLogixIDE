@@ -42,7 +42,8 @@ function toResult(error: ExecFileException | null, stdout: string, stderr: strin
 /**
  * Run `mise tasks ls --json --local` in `cwd` with exactly `env` (its PATH is what finds `mise`), stdin
  * closed. Resolves `not-found` on ENOENT, `timed-out` when mise is killed at `MISE_LIST_TIMEOUT_MS` or
- * has not reported shortly after, and `failed` with mise's stderr (or the spawn error) otherwise. Never
+ * has not reported shortly after, `failed` with "output is too large" when either stream passes
+ * `MISE_LIST_MAX_BUFFER`, and `failed` with mise's stderr (or the spawn error) otherwise. Never
  * rejects. `exec` is injectable for tests only.
  */
 export function listMiseTasks(cwd: string, env: NodeJS.ProcessEnv, exec: MiseExecFn = nodeExecFile): Promise<MiseListResult> {

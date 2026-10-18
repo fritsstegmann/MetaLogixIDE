@@ -21,7 +21,7 @@ export interface TaskDef {
 /** Why mise tasks could not be listed. */
 export type TaskNoticeKind = 'not-found' | 'untrusted' | 'timed-out' | 'failed' | 'unexpected';
 
-/** A source that could not be listed. `detail` is set only for `failed` (first line of mise's stderr). */
+/** A source that could not be listed. `detail` is set only for `failed`: the first `mise ERROR` line of stderr, else its first non-empty line. */
 export interface TaskNotice {
   source: 'mise';
   kind: TaskNoticeKind;

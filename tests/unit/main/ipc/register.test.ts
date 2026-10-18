@@ -1551,6 +1551,18 @@ describe('tasks:discover and tasks:run with mise tasks', () => {
     expect(rig.listMise.mock.calls[0]![1]).toStrictEqual({ ...process.env, ...rig.spawned(0).env });
   });
 
+  it('lets a project variable override an inherited one when listing (AC6)', async () => {
+    vi.stubEnv('MISE_ENV', 'inherited');
+    try {
+      const rig = miseRig(miseTasks('a'));
+      rig.setEnv(rig.a.id, { MISE_ENV: 'staging' });
+      await rig.call('tasks:discover', { projectId: rig.a.id });
+      expect(rig.listMise.mock.calls[0]![1].MISE_ENV).toBe('staging');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('starts no mise process for a project without a mise marker (AC4)', async () => {
     const rig = envRig();
     writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));

@@ -1113,9 +1113,10 @@ Rules:
   `not-found` (ENOENT), `untrusted` (mise's error text contains
   "not trusted"), `timed-out`, `unexpected` (bad output) and `failed`.
   A `failed` notice shows the first `mise ERROR` line of stderr, else its
-  first line, without ANSI codes and capped at 200 characters. mise also
-  reports a TOML syntax error as "not trusted", so a malformed config
-  shows the `mise trust` notice.
+  first line, without ANSI codes and capped at 200 characters. A TOML
+  syntax error in a config that is not trusted is reported as "not
+  trusted", so the panel shows the `mise trust` notice. In a trusted
+  config, the same error gives a `failed` notice with mise's parse error.
 - The notice shows as one muted line in the mise group. It raises no
   toast. The other groups still show.
 - **Trust boundary.** `mise run` marks the config it runs as trusted. The
