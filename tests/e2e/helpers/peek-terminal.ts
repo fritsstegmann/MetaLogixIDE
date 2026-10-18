@@ -100,3 +100,50 @@ export async function staysFor<T>(read: () => Promise<T>, expected: T, ms: numbe
     await new Promise((r) => setTimeout(r, 100));
   }
 }
+
+type RemovalGlobals = { __peekRemovals?: string[]; __peekObserver?: MutationObserver; __peekSelector?: string };
+
+/**
+ * Starts recording every removal of an element matching `selector` (itself or inside a removed subtree) from the
+ * document, however briefly. Polling cannot see an unmount that is followed by a remount within the poll interval;
+ * a MutationObserver sees every one. Read with {@link stopWatchingRemovals}.
+ */
+export async function watchRemovals(page: Page, selector: string): Promise<void> {
+  await page.evaluate((sel: string) => {
+    const g = window as unknown as RemovalGlobals;
+    g.__peekObserver?.disconnect();
+    const removals: string[] = [];
+    g.__peekRemovals = removals;
+    g.__peekSelector = sel;
+    const t0 = performance.now();
+    const obs = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.removedNodes) {
+          if (n instanceof Element && (n.matches(sel) || n.querySelector(sel))) {
+            removals.push(`${sel} removed at +${Math.round(performance.now() - t0)} ms`);
+          }
+        }
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    g.__peekObserver = obs;
+  }, selector);
+}
+
+/** Stops the recorder started by {@link watchRemovals} and returns the removals it saw. */
+export async function stopWatchingRemovals(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const g = window as unknown as RemovalGlobals;
+    const obs = g.__peekObserver;
+    if (obs) {
+      // Deliver records still queued for the callback before disconnecting.
+      const sel = g.__peekSelector ?? '';
+      for (const r of obs.takeRecords()) for (const n of r.removedNodes) {
+        if (n instanceof Element && (n.matches(sel) || n.querySelector(sel))) g.__peekRemovals?.push(`${sel} removed (pending record)`);
+      }
+      obs.disconnect();
+    }
+    g.__peekObserver = undefined;
+    return g.__peekRemovals ?? [];
+  });
+}

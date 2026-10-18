@@ -27,12 +27,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { launch, openProject, newShellTab, projectIdByName, projectRow } from './helpers/focus';
 import { closeApp, sendLine } from './helpers/claude-harness';
-import { hoverPath, pathPoint, previewCard, staysFor } from './helpers/peek-terminal';
+import { hoverPath, pathPoint, previewCard, staysFor, stopWatchingRemovals, watchRemovals } from './helpers/peek-terminal';
 import { PEEK_COPY, PEEK_TESTIDS } from '../../src/renderer/peek-open';
 
 const NOTHING_MS = 1500;
 const OPEN_TIMEOUT = 10000;
 const MAIN_PANE = '.split-left';
+const CARD_SELECTOR = `[data-testid="${PEEK_TESTIDS.card}"]`;
 
 interface World {
   app: ElectronApplication;
@@ -263,10 +264,15 @@ test.describe('terminal hover preview click routing', () => {
         const onCard = { x: box!.x + 6, y: box!.y + 1 };
         expect(onCard.y, 'the card overlaps the path row, so the route below never leaves the path').toBeLessThan(at.rowTop + at.cellH);
         expect(onCard.x, 'the route stays within the path columns').toBeLessThan(at.x + 4 * at.cellW);
+        // Record every removal of the card from here until the click: an unmount the app immediately undoes (the pointer
+        // re-hovers the path and the card remounts) is still a card the user lost, and polling would miss it.
+        await watchRemovals(w.win, CARD_SELECTOR);
         await w.win.mouse.move(onCard.x, at.y, { steps: 4 });
-        await expect(previewCard(w.win), 'moving along the path keeps the card').toBeVisible();
         await w.win.mouse.move(onCard.x, onCard.y, { steps: 2 });
-        await staysFor(() => previewCard(w.win).count(), 1, 500, 'the card is still there once the pointer is on it');
+        await w.win.mouse.move(box!.x + box!.width / 2, box!.y + Math.min(60, box!.height / 2), { steps: 6 });
+        await w.win.waitForTimeout(500); // dwell on the card; the observer, not this wait, is the assertion
+        expect(await stopWatchingRemovals(w.win), 'the card is never removed while the pointer travels onto it').toEqual([]);
+        await expect(previewCard(w.win), 'the card is there to click').toHaveCount(1);
         await w.win.mouse.down();
         await w.win.mouse.up();
         await expect(w.win.getByTestId('file-preview').filter({ visible: true })).toContainText(w.content.alphaHere, { timeout: OPEN_TIMEOUT });
