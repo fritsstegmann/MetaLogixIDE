@@ -10,11 +10,11 @@
  */
 
 import { test, expect, _electron as electron, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { rmSync } from 'node:fs';
 import { PALETTE_COPY, PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Reads the shell's terminal state via `shells:snapshot` (main's headless
@@ -37,40 +37,43 @@ async function shellOutput(win: Page, projectName: string): Promise<string> {
 }
 
 test('Phase 1 smoke: multi-root, switcher, shell, alive panel, files tab', async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-smoke-home-'));
+  const { app, win, isolatedHome, rootA, rootB } = await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-smoke-home-');
 
-  // Root A — two projects
-  const rootA = mkdtempSync(join(tmpdir(), 'metaide-smoke-rootA-'));
-  const projA1 = join(rootA, 'alpha');
-  const projA2 = join(rootA, 'beta');
-  mkdirSync(projA1); mkdirSync(join(projA1, '.git'));
-  mkdirSync(projA2); mkdirSync(join(projA2, '.git'));
+    // Root A — two projects
+    const rootA = scope.tempDir('metaide-smoke-rootA-');
+    const projA1 = join(rootA, 'alpha');
+    const projA2 = join(rootA, 'beta');
+    mkdirSync(projA1); mkdirSync(join(projA1, '.git'));
+    mkdirSync(projA2); mkdirSync(join(projA2, '.git'));
 
-  // Root B — two projects
-  const rootB = mkdtempSync(join(tmpdir(), 'metaide-smoke-rootB-'));
-  const projB1 = join(rootB, 'gamma');
-  const projB2 = join(rootB, 'delta');
-  mkdirSync(projB1); mkdirSync(join(projB1, '.git'));
-  mkdirSync(projB2); mkdirSync(join(projB2, '.git'));
+    // Root B — two projects
+    const rootB = scope.tempDir('metaide-smoke-rootB-');
+    const projB1 = join(rootB, 'gamma');
+    const projB2 = join(rootB, 'delta');
+    mkdirSync(projB1); mkdirSync(join(projB1, '.git'));
+    mkdirSync(projB2); mkdirSync(join(projB2, '.git'));
 
-  const app = await electron.launch({
-    // Own user-data dir: Electron's default userData path is not reliably
-    // isolated by HOME alone (see root-removal.spec.ts), so persisted
-    // renderer state (localStorage — e.g. the mainTab toggle) and the
-    // single-instance lock can leak across launches without this.
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+    const app = scope.own(await electron.launch({
+      // Own user-data dir: Electron's default userData path is not reliably
+      // isolated by HOME alone (see root-removal.spec.ts), so persisted
+      // renderer state (localStorage — e.g. the mainTab toggle) and the
+      // single-instance lock can leak across launches without this.
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+
+    const win = await app.firstWindow();
+    return { app, win, isolatedHome, rootA, rootB };
   });
-
-  const win = await app.firstWindow();
 
   // ── 1. Boot without console errors ────────────────────────────────────────
   const pageErrors: string[] = [];
@@ -157,7 +160,7 @@ test('Phase 1 smoke: multi-root, switcher, shell, alive panel, files tab', async
   expect(pageErrors, `Page errors: ${pageErrors.join('; ')}`).toHaveLength(0);
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
-  await app.close();
+  await closeApp(app);
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(rootA, { recursive: true, force: true });
   rmSync(rootB, { recursive: true, force: true });

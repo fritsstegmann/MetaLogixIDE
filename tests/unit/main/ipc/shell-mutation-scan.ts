@@ -2,10 +2,35 @@
  * Static scanner for the IPC handler map: finds every channel whose handler
  * spawns, kills, removes or records a shell (`ptyManager.spawn/kill`,
  * `shells.upsert/remove`), directly or through any same-file helper it
- * references, transitively. Spreads in the map (`...dropHandlers`) are
- * followed into same-file constants or imported modules; a spread or handler
- * shape it cannot read throws, so the guard fails closed instead of silently
- * skipping a channel.
+ * references, transitively. A mutation is recognised when the method is
+ * read off a receiver named `ptyManager`/`shells` (an identifier, a property
+ * access, or a string- or template-literal element access), through any mix
+ * of `?.`, `!`, parentheses, `as` and `satisfies`, whether or not it is
+ * called on the spot. Shapes that hide the receiver or method make the scan
+ * throw instead of passing the handler: (1) a non-string key (computed or
+ * numeric) on a `ptyManager`/`shells` receiver, or on ANY object when the
+ * next member is `spawn`, `kill`, `upsert` or `remove`, so `procs[0]?.kill()`
+ * throws "cannot analyse procs[0]" (remedy: bind the element to a local
+ * first, `const p = procs[0]; p?.kill()`); (2) a `ptyManager`/`shells` member
+ * used as a value rather than as the object of a member access (aliased,
+ * passed to a function, stored, returned, truth-tested); (3) an object
+ * destructuring pattern in a declaration (nested patterns included) or a
+ * parameter, or an object pattern written directly on the left of `=`, whose
+ * key names `ptyManager`/`shells` (plain, quoted, or a string/template
+ * literal computed key such as `{ ['ptyManager']: p }`), or whose computed
+ * key is not a literal (`{ [k]: p }`), whatever object is destructured.
+ * Such a shape only throws when a handler reaches it, so code outside the
+ * handlers' helper closure may use it freely. Spreads in the map
+ * (`...dropHandlers`) are followed into same-file constants or imported
+ * modules; a spread or handler key it cannot read throws. Not covered:
+ * helpers imported from other modules and called by a handler (only spreads
+ * are followed across files), a services object whose receivers live under
+ * property names other than `ptyManager`/`shells`, assignment patterns that
+ * are nested, array-shaped or in a loop head (`({ a: { ptyManager: p } } = x)`,
+ * `[{ ptyManager: p }] = [s]`, `for ({ ptyManager: p } of xs)`), a computed
+ * key on the services object bound to a local before use (`const pm = s[k];
+ * pm.spawn()`, including template and `as const` keys) or `Object.values(s)`,
+ * and dynamic access such as `Reflect.get` or `eval`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -15,6 +40,8 @@ const MUTATIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   ptyManager: new Set(['spawn', 'kill']),
   shells: new Set(['upsert', 'remove']),
 };
+const RECEIVERS: ReadonlySet<string> = new Set(Object.keys(MUTATIONS));
+const MUTATING_METHODS: ReadonlySet<string> = new Set(Object.values(MUTATIONS).flatMap((m) => [...m]));
 
 /** Result of scanning one handler map: every channel seen, and those that mutate shells. */
 export interface HandlerScan {
@@ -25,36 +52,108 @@ export interface HandlerScan {
 /** Maps a module specifier to a source path; returns null for packages the scan cannot follow. */
 export type ModuleResolver = (specifier: string, fromFile: string) => string | null;
 
+interface BodyScan {
+  readonly direct: boolean;
+  readonly refs: ReadonlySet<string>;
+  readonly unreadable: string | null;
+}
+
 interface ParsedFile {
   readonly file: string;
   readonly source: ts.SourceFile;
   readonly locals: ReadonlyMap<string, ts.Node>;
   readonly imports: ReadonlyMap<string, { specifier: string; name: string }>;
   readonly mutatingLocals: ReadonlySet<string>;
+  readonly unreadableLocals: ReadonlyMap<string, string>;
+}
+
+type Member = ts.PropertyAccessExpression | ts.ElementAccessExpression;
+
+function isWrapper(node: ts.Node): node is ts.NonNullExpression | ts.ParenthesizedExpression | ts.AsExpression | ts.SatisfiesExpression | ts.TypeAssertion {
+  return ts.isNonNullExpression(node) || ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node);
+}
+
+function unwrap(expr: ts.Expression): ts.Expression {
+  return isWrapper(expr) ? unwrap(expr.expression) : expr;
+}
+
+function isMember(node: ts.Node): node is Member {
+  return ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
+}
+
+function memberName(node: Member): string | null {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  const key = node.argumentExpression;
+  return ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key) ? key.text : null;
 }
 
 function receiverName(expr: ts.Expression): string | null {
-  if (ts.isIdentifier(expr)) return expr.text;
-  if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
-  return null;
+  const inner = unwrap(expr);
+  if (ts.isIdentifier(inner)) return inner.text;
+  return isMember(inner) ? memberName(inner) : null;
 }
 
 function isShellMutation(node: ts.Node): boolean {
-  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return false;
-  const receiver = receiverName(node.expression.expression);
-  return receiver !== null && (MUTATIONS[receiver]?.has(node.expression.name.text) ?? false);
+  if (!isMember(node)) return false;
+  const method = memberName(node);
+  const receiver = receiverName(node.expression);
+  return method !== null && receiver !== null && (MUTATIONS[receiver]?.has(method) ?? false);
 }
 
-function scanBody(body: ts.Node, localNames: ReadonlySet<string>): { direct: boolean; refs: Set<string> } {
+function usedAsMemberObject(node: ts.Node): boolean {
+  let outer = node;
+  while (isWrapper(outer.parent)) outer = outer.parent;
+  return isMember(outer.parent) && outer.parent.expression === outer;
+}
+
+const UNKNOWN_KEY = Symbol('unknown key');
+type KeyText = string | typeof UNKNOWN_KEY | null;
+
+function keyText(name: ts.Node | undefined): KeyText {
+  if (!name) return null;
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text;
+  if (!ts.isComputedPropertyName(name)) return null;
+  const expr = unwrap(name.expression);
+  return ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr) ? expr.text : UNKNOWN_KEY;
+}
+
+function isAssignmentTarget(obj: ts.ObjectLiteralExpression): boolean {
+  const parent = obj.parent;
+  return ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === obj;
+}
+
+function destructuredKey(node: ts.Node): KeyText {
+  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) return keyText(node.propertyName ?? node.name);
+  if (!ts.isObjectLiteralElement(node) || !ts.isObjectLiteralExpression(node.parent) || !isAssignmentTarget(node.parent)) return null;
+  return keyText(node.name);
+}
+
+function memberHides(node: Member): boolean {
+  const name = memberName(node);
+  if (name === null) return RECEIVERS.has(receiverName(node.expression) ?? '') || (isMember(node.parent) && MUTATING_METHODS.has(memberName(node.parent) ?? ''));
+  return RECEIVERS.has(name) && !usedAsMemberObject(node);
+}
+
+function unreadableShape(node: ts.Node): string | null {
+  const key = destructuredKey(node);
+  if (key === UNKNOWN_KEY) return `computed destructuring key ${node.getText().slice(0, 60)}`;
+  if (key !== null && RECEIVERS.has(key)) return `destructured ${key}`;
+  if (isMember(node) && memberHides(node)) return node.getText().slice(0, 60);
+  return null;
+}
+
+function scanBody(body: ts.Node, localNames: ReadonlySet<string>): BodyScan {
   const refs = new Set<string>();
   let direct = false;
+  let unreadable: string | null = null;
   const visit = (node: ts.Node): void => {
     if (isShellMutation(node)) direct = true;
+    unreadable ??= unreadableShape(node);
     if (ts.isIdentifier(node) && localNames.has(node.text)) refs.add(node.text);
     ts.forEachChild(node, visit);
   };
   visit(body);
-  return { direct, refs };
+  return { direct, refs, unreadable };
 }
 
 function collectLocals(source: ts.SourceFile): Map<string, ts.Node> {
@@ -83,26 +182,38 @@ function collectImports(source: ts.SourceFile): Map<string, { specifier: string;
   return imports;
 }
 
-function mutatingClosure(locals: ReadonlyMap<string, ts.Node>): Set<string> {
-  const names = new Set(locals.keys());
-  const scans = new Map([...locals].map(([name, node]) => [name, scanBody(node, names)]));
-  const mutating = new Set([...scans].filter(([, s]) => s.direct).map(([name]) => name));
+function transitiveClosure(scans: ReadonlyMap<string, BodyScan>, seed: (s: BodyScan) => string | null): Map<string, string> {
+  const reached = new Map<string, string>();
+  for (const [name, s] of scans) {
+    const reason = seed(s);
+    if (reason !== null) reached.set(name, reason);
+  }
   let grew = true;
   while (grew) {
     grew = false;
     for (const [name, s] of scans) {
-      if (mutating.has(name) || ![...s.refs].some((r) => mutating.has(r))) continue;
-      mutating.add(name);
+      const via = reached.has(name) ? undefined : [...s.refs].find((r) => reached.has(r));
+      if (via === undefined) continue;
+      reached.set(name, `${via}: ${reached.get(via)}`);
       grew = true;
     }
   }
-  return mutating;
+  return reached;
 }
 
 function parseFile(file: string, text: string): ParsedFile {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const locals = collectLocals(source);
-  return { file, source, locals, imports: collectImports(source), mutatingLocals: mutatingClosure(locals) };
+  const names = new Set(locals.keys());
+  const scans = new Map([...locals].map(([name, node]) => [name, scanBody(node, names)]));
+  return {
+    file,
+    source,
+    locals,
+    imports: collectImports(source),
+    mutatingLocals: new Set(transitiveClosure(scans, (s) => (s.direct ? 'mutates' : null)).keys()),
+    unreadableLocals: transitiveClosure(scans, (s) => s.unreadable),
+  };
 }
 
 function propertyKey(prop: ts.ObjectLiteralElementLike, file: string): string {
@@ -111,8 +222,11 @@ function propertyKey(prop: ts.ObjectLiteralElementLike, file: string): string {
   throw new Error(`${file}: unreadable handler key at ${prop.getText().slice(0, 60)}`);
 }
 
-function handlerMutates(node: ts.Node, parsed: ParsedFile): boolean {
+function handlerMutates(channel: string, node: ts.Node, parsed: ParsedFile): boolean {
   const s = scanBody(node, new Set(parsed.locals.keys()));
+  if (s.unreadable !== null) throw new Error(`${parsed.file}: ${channel}: cannot analyse ${s.unreadable}`);
+  const helper = [...s.refs].find((r) => parsed.unreadableLocals.has(r));
+  if (helper !== undefined) throw new Error(`${parsed.file}: ${channel}: cannot analyse helper ${helper}: ${parsed.unreadableLocals.get(helper)}`);
   return s.direct || [...s.refs].some((r) => parsed.mutatingLocals.has(r));
 }
 
@@ -128,10 +242,11 @@ function scanObject(obj: ts.ObjectLiteralExpression, parsed: ParsedFile, ctx: Sc
       continue;
     }
     if (ts.isShorthandPropertyAssignment(prop)) {
-      out.set(prop.name.text, handlerMutates(prop.name, parsed));
+      out.set(prop.name.text, handlerMutates(prop.name.text, prop.name, parsed));
       continue;
     }
-    out.set(propertyKey(prop, parsed.file), handlerMutates(prop, parsed));
+    const channel = propertyKey(prop, parsed.file);
+    out.set(channel, handlerMutates(channel, prop, parsed));
   }
 }
 

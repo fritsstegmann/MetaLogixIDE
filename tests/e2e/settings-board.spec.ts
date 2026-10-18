@@ -1,11 +1,11 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { resolveColour } from './helpers/mermaid-palette';
 import { effectiveColours, backgroundLuminance, paintedOver, textContrast, type Theme } from './helpers/contrast';
 import { isMacPlatform } from './helpers/chrome-colour';
 import { FROSTED_GLASS_COPY, FROSTED_GLASS_TESTIDS } from '../../src/renderer/frosted-chrome-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Settings General board restyle (docs/specs/2026-10-06-settings-board-restyle.md).
@@ -62,34 +62,36 @@ let win: Page;
 let home: string;
 
 test.beforeAll(async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  home = mkdtempSync(join(tmpdir(), 'metaide-settings-board-'));
-  app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(home, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    home = scope.tempDir('metaide-settings-board-');
+    app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(home, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: home,
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      w?.setContentSize(1440, 900);
+      w?.webContents.setZoomFactor(1);
+    });
+    await expect.poll(() => win.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([1440, 900]);
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.getZoomFactor())).toBe(1);
+    await mockLocalFonts();
   });
-  win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows()[0];
-    w?.setContentSize(1440, 900);
-    w?.webContents.setZoomFactor(1);
-  });
-  await expect.poll(() => win.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([1440, 900]);
-  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.getZoomFactor())).toBe(1);
-  await mockLocalFonts();
 });
 
 test.afterAll(async () => {
-  await app?.close();
+  if (app) await closeApp(app);
   rmSync(home, { recursive: true, force: true });
 });
 

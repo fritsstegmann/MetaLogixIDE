@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APP_ENV_COPY, APP_ENV_TESTIDS, ENV_COPY, ENV_TESTIDS } from '../../src/renderer/project-env-copy';
-import { baseEnv, launch, openProject, projectId, sendLine, type Api, type Harness } from './helpers/claude-harness';
+import { baseEnv, closeApp, guardedLaunch, launch, openProject, projectId, sendLine, type Api, type Harness } from './helpers/claude-harness';
 
 /**
  * App-wide environment variables, masked values and copy (docs/specs/app-env-settings.md).
@@ -29,7 +29,7 @@ const PROJECT_B = 'appenvb';
 let h: Harness | undefined;
 
 test.afterEach(async () => {
-  await h?.app.close();
+  if (h) await closeApp(h.app);
   h?.cleanup();
   h = undefined;
 });
@@ -93,22 +93,24 @@ async function runInShell(win: Page, projId: number, shellIndex: number, tag: st
 /** Relaunches against the same HOME + userData (same env as `launch`), replacing the harness app and window. */
 async function relaunch(cur: Harness): Promise<Harness> {
   await cur.app.close();
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(cur.isolatedHome, 'userData')}`],
-    env: {
-      ...baseEnv(),
-      HOME: cur.isolatedHome,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: [cur.shimPath], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [cur.shimPath, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(cur.isolatedHome, 'userData')}`],
+      env: {
+        ...baseEnv(),
+        HOME: cur.isolatedHome,
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: [cur.shimPath], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [cur.shimPath, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
+    return { ...cur, app, win };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
-  return { ...cur, app, win };
 }
 
 // ── Settings → Environment ───────────────────────────────────────────────────

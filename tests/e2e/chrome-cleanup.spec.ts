@@ -1,8 +1,8 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PROJECT_SETTINGS_COPY, PROJECT_SETTINGS_TESTIDS } from '../../src/renderer/project-settings-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Chrome cleanup: the frame around the terminal separates panes by tone and
@@ -16,37 +16,39 @@ let isolatedHome: string;
 let demoRoot: string;
 
 test.beforeAll(async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-chrome-home-'));
-  demoRoot = mkdtempSync(join(tmpdir(), 'metaide-chrome-root-'));
-  const proj = join(demoRoot, 'chromed');
-  mkdirSync(proj); mkdirSync(join(proj, '.git'));
+  await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    isolatedHome = scope.tempDir('metaide-chrome-home-');
+    demoRoot = scope.tempDir('metaide-chrome-root-');
+    const proj = join(demoRoot, 'chromed');
+    mkdirSync(proj); mkdirSync(join(proj, '.git'));
 
-  app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+    app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await win.evaluate(async (path: string) => {
+      const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
+      await api.invoke('roots:add', { path });
+    }, demoRoot);
+    const row = win.locator('[data-testid="project-row"]', { hasText: 'chromed' }).first();
+    await expect(row).toBeVisible({ timeout: 5000 });
+    await row.click();
+    await expect(win.locator('[data-testid="shell-tab"]')).toBeVisible({ timeout: 5000 });
   });
-  win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await win.evaluate(async (path: string) => {
-    const api = (window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }).api;
-    await api.invoke('roots:add', { path });
-  }, demoRoot);
-  const row = win.locator('[data-testid="project-row"]', { hasText: 'chromed' }).first();
-  await expect(row).toBeVisible({ timeout: 5000 });
-  await row.click();
-  await expect(win.locator('[data-testid="shell-tab"]')).toBeVisible({ timeout: 5000 });
 });
 
 test.afterAll(async () => {
-  await app?.close();
+  if (app) await closeApp(app);
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(demoRoot, { recursive: true, force: true });
 });

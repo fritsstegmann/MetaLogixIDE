@@ -15,10 +15,10 @@
  */
 
 import { test, expect, _electron as electron, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PALETTE_COPY } from '../../src/renderer/command-palette-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Reads the shell's terminal state via `shells:snapshot` (main's headless
@@ -40,37 +40,42 @@ async function shellOutput(win: Page, projectName: string): Promise<string> {
 }
 
 test('Claude permission mode: first-run modal, blocking, argv rewrite, persistence, Settings control', async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-permmode-home-'));
-  const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-permmode-root-'));
-  const proj = join(demoRoot, 'permproj');
-  mkdirSync(proj);
-  mkdirSync(join(proj, '.git'));
+  const setup = await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-permmode-home-');
+    const demoRoot = scope.tempDir('metaide-permmode-root-');
+    const proj = join(demoRoot, 'permproj');
+    mkdirSync(proj);
+    mkdirSync(join(proj, '.git'));
 
-  // ── Shim: a binary literally named `claude` that execs mock-claude.mjs ────
-  const binDir = mkdtempSync(join(tmpdir(), 'metaide-permmode-bin-'));
-  const shimPath = join(binDir, 'claude');
-  writeFileSync(shimPath, `#!/bin/sh\nexec node ${mockClaude} "$@"\n`);
-  chmodSync(shimPath, 0o755);
+    // ── Shim: a binary literally named `claude` that execs mock-claude.mjs ────
+    const binDir = scope.tempDir('metaide-permmode-bin-');
+    const shimPath = join(binDir, 'claude');
+    writeFileSync(shimPath, `#!/bin/sh\nexec node ${mockClaude} "$@"\n`);
+    chmodSync(shimPath, 0o755);
 
-  const launchEnv = {
-    ...process.env,
-    HOME: isolatedHome,
-    METAIDE_TEST_MODE: '1',
-    METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
-    METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
-  };
-  // No METAIDE_CLAUDE_PERMISSION_MODE override — mode starts unchosen (AC1).
-  delete (launchEnv as Record<string, string | undefined>).METAIDE_CLAUDE_PERMISSION_MODE;
+    const launchEnv = {
+      ...process.env,
+      HOME: isolatedHome,
+      METAIDE_TEST_MODE: '1',
+      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
+      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
+    };
+    // No METAIDE_CLAUDE_PERMISSION_MODE override — mode starts unchosen (AC1).
+    delete (launchEnv as Record<string, string | undefined>).METAIDE_CLAUDE_PERMISSION_MODE;
 
-  // Own user-data dir: Electron's default userData path is not reliably
-  // isolated by HOME alone (see root-removal.spec.ts), so persisted
-  // renderer state and the single-instance lock can leak across launches
-  // without this.
-  const userDataArg = `--user-data-dir=${join(isolatedHome, 'userData')}`;
-  let app = await electron.launch({ args: ['.', userDataArg], env: launchEnv });
-  let win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
+    // Own user-data dir: Electron's default userData path is not reliably
+    // isolated by HOME alone (see root-removal.spec.ts), so persisted
+    // renderer state and the single-instance lock can leak across launches
+    // without this.
+    const userDataArg = `--user-data-dir=${join(isolatedHome, 'userData')}`;
+    const app = scope.own(await electron.launch({ args: ['.', userDataArg], env: launchEnv }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    return { app, win, isolatedHome, demoRoot, binDir, userDataArg, launchEnv };
+  });
+  const { isolatedHome, demoRoot, binDir, userDataArg, launchEnv } = setup;
+  let { app, win } = setup;
 
   // ── AC1 / AC4a: dialog visible, Auto preselected + "Recommended", Bypass not ──
   // The test-id lands on the <input type="radio"> itself (PermissionModeDialog.tsx
@@ -169,9 +174,12 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
   await app.close();
 
   // ── AC3: relaunching with the same HOME does not show the dialog again ────
-  app = await electron.launch({ args: ['.', userDataArg], env: launchEnv });
-  win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
+  ({ app, win } = await guardedLaunch(async (scope) => {
+    const app = scope.own(await electron.launch({ args: ['.', userDataArg], env: launchEnv }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    return { app, win };
+  }));
   await expect(win.getByTestId('permission-mode-dialog')).toHaveCount(0);
 
   // ── AC17/AC18: Settings → Launch commands reflects the mode and updates live ──
@@ -208,7 +216,7 @@ test('Claude permission mode: first-run modal, blocking, argv rewrite, persisten
 
   await win.getByTestId('settings-done').click();
 
-  await app.close();
+  await closeApp(app);
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(demoRoot, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });

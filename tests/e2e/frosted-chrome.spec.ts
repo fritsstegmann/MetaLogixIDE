@@ -58,6 +58,7 @@ import type { TerminalFrostLevel } from '../../src/shared/frosted-glass';
 import { backgroundAlpha, isMacPlatform } from './helpers/chrome-colour';
 import { newShellTab } from './helpers/focus';
 import { SPLIT_TESTIDS } from '../../src/renderer/split-copy';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 const PROJECT = 'frostproj';
 type Api = { invoke: (c: string, r: unknown) => Promise<unknown> };
@@ -80,55 +81,57 @@ interface Launched {
  * new, default-valued settings DB.
  */
 async function launchFrostApp(opts: { terminalFrost?: TerminalFrostLevel; home?: string; userDataDir?: string } = {}): Promise<Launched> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const home = opts.home ?? mkdtempSync(join(tmpdir(), 'metaide-frost-home-'));
-  const root = mkdtempSync(join(tmpdir(), 'metaide-frost-root-'));
-  const proj = join(root, PROJECT);
-  mkdirSync(proj);
-  mkdirSync(join(proj, '.git'));
-  const userDataDir = opts.userDataDir ?? join(home, 'userData');
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      // Plain POSIX shell: with the isolated HOME, the user's own shell
-      // (zsh) prints its own prompt/setup instead of the `$` the AC8 new-tab
-      // check (helpers/focus.ts newShellTab) waits for (same as helpers/focus.ts `launch`).
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const home = opts.home ?? scope.tempDir('metaide-frost-home-');
+    const root = scope.tempDir('metaide-frost-root-');
+    const proj = join(root, PROJECT);
+    mkdirSync(proj);
+    mkdirSync(join(proj, '.git'));
+    const userDataDir = opts.userDataDir ?? join(home, 'userData');
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${userDataDir}`],
+      env: {
+        ...process.env,
+        HOME: home,
+        // Plain POSIX shell: with the isolated HOME, the user's own shell
+        // (zsh) prints its own prompt/setup instead of the `$` the AC8 new-tab
+        // check (helpers/focus.ts newShellTab) waits for (same as helpers/focus.ts `launch`).
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    if (opts.terminalFrost !== undefined) {
+      // terminal_frost_level is a validated key: the generic settings:set
+      // channel refuses it (register.ts:627), so seeding goes through its own
+      // channel, same as the UI's write path (FrostedGlassGroup -> useFrostedGlassSettings.setTerminalFrostLevel).
+      await win.evaluate(async (level: TerminalFrostLevel) => {
+        await (window as unknown as { api: Api }).api.invoke('settings:set-terminal-frost-level', { level });
+      }, opts.terminalFrost);
+    }
+    await win.evaluate(async (path: string) => {
+      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+    }, root);
+    const projectRow = win.getByTestId('project-row').filter({ hasText: PROJECT }).first();
+    await expect(projectRow).toBeVisible({ timeout: 10000 });
+    await projectRow.click();
+    await expect(win.getByTestId('shell-tab')).toBeVisible({ timeout: 10000 });
+    return {
+      app,
+      win,
+      home,
+      root,
+      cleanup: () => {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  if (opts.terminalFrost !== undefined) {
-    // terminal_frost_level is a validated key: the generic settings:set
-    // channel refuses it (register.ts:627), so seeding goes through its own
-    // channel, same as the UI's write path (FrostedGlassGroup -> useFrostedGlassSettings.setTerminalFrostLevel).
-    await win.evaluate(async (level: TerminalFrostLevel) => {
-      await (window as unknown as { api: Api }).api.invoke('settings:set-terminal-frost-level', { level });
-    }, opts.terminalFrost);
-  }
-  await win.evaluate(async (path: string) => {
-    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-  }, root);
-  const projectRow = win.getByTestId('project-row').filter({ hasText: PROJECT }).first();
-  await expect(projectRow).toBeVisible({ timeout: 10000 });
-  await projectRow.click();
-  await expect(win.getByTestId('shell-tab')).toBeVisible({ timeout: 10000 });
-  return {
-    app,
-    win,
-    home,
-    root,
-    cleanup: () => {
-      rmSync(home, { recursive: true, force: true });
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
 }
 
 /** `chrome-root`, `main`/`popout` sheet and chat/split locators, by the assumed attribute contract. */
@@ -226,7 +229,7 @@ test.describe('AC17: computed alpha relationships (default palette, dark+light, 
         // Positive control: the two settings states actually differ (guards against a no-op toggle).
         expect(sheetOff, 'positive control: OFF and ON differ').not.toBeCloseTo(await backgroundAlpha(win, s.sheet), 2);
       } finally {
-        await l.app.close();
+        await closeApp(l.app);
         l.cleanup();
       }
     });
@@ -263,7 +266,7 @@ test('AC27: popout sheet is frosted only on the Shell tab, never on Files', asyn
 
     await Promise.all([popout.waitForEvent('close'), (await app.browserWindow(popout)).evaluate((w) => w.close())]);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -314,7 +317,7 @@ test('AC8: toggling the setting updates the main window and an open popout withi
     const popout2Sheet = popout2.locator(`[${FROST_ATTR.sheetContent}]`).first();
     expect(await backgroundAlpha(popout2, popout2Sheet), 'a popout opened after the toggle starts frosted').toBeLessThan(mainBefore);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -359,11 +362,11 @@ test('AC7: the setting persists across relaunch, from first paint, with no flash
       const freshAlpha = await backgroundAlpha(fresh.win, surfaces(fresh.win).sheet);
       expect(alpha, 'positive control: relaunched-ON differs from a fresh OFF profile').toBeLessThan(freshAlpha);
     } finally {
-      await fresh.app.close();
+      await closeApp(fresh.app);
       fresh.cleanup();
     }
   } finally {
-    await second.app.close();
+    await closeApp(second.app);
     second.cleanup(); // removes the shared `home`, used by both launches
   }
 });
@@ -408,7 +411,7 @@ test('AC21: emulated prefers-reduced-transparency makes every surface alpha 1, w
       await cdp.detach();
     }
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -457,7 +460,7 @@ test('AC25(c): stripping data-platform restores the original (non-mac) palette a
     const panelMac = await win.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--panel').trim());
     expect(panelMac, 'positive control: re-applying mac changes --panel away from the baseline literal').not.toBe(BASELINE['--panel']);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -499,7 +502,7 @@ test('AC28: window opacity still applies to main and popout with terminal frost 
 
     await Promise.all([popout.waitForEvent('close'), popoutHandle.evaluate((w) => w.close())]);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });

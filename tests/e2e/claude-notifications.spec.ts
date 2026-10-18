@@ -44,7 +44,7 @@ import { join } from 'node:path';
 import {
   type Api, MOCK_CLAUDE, makeClaudeShim, launch, projectId, openProject, sendLine, waitForShell, aliveShells,
   installNotificationSpy, notifications, clickNotification, baseEnv, sendAndConfirmUserPrompt,
-  hookCredentials, postRawHook,
+  hookCredentials, postRawHook, closeApp, guardedLaunch,
 } from './helpers/claude-harness';
 import { electronOptions } from './helpers/agent-status-harness';
 
@@ -189,7 +189,7 @@ test.describe('Claude Code system notifications', () => {
       const afterShells = await aliveShells(h.win);
       expect(afterShells.length, 'AC13 no new shell launched').toBe(beforeShells.length);
     } finally {
-      await h.app.close();
+      await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -279,7 +279,7 @@ test.describe('Claude Code system notifications', () => {
       ).toBe(true);
       await h.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.restore(); });
     } finally {
-      await h.app.close();
+      await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -313,7 +313,7 @@ test.describe('Claude Code system notifications', () => {
       await clickNotification(h.app, 0);
       await expect.poll(() => popout.evaluate(() => document.hasFocus()), { timeout: 5000 }).toBe(true);
     } finally {
-      await h.app.close();
+      await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -390,7 +390,7 @@ test.describe('Claude Code system notifications', () => {
       appClosed = true;
       expect(existsSync(hookFilePath), 'settings file removed after quit').toBe(false);
     } finally {
-      if (!appClosed) await h.app.close();
+      if (!appClosed) await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -502,7 +502,7 @@ test.describe('Claude Code system notifications', () => {
 
       rmSync(userSettingsDir, { recursive: true, force: true });
     } finally {
-      await h.app.close();
+      await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -569,7 +569,7 @@ test.describe('Claude Code system notifications', () => {
       await expect.poll(() => notifications(h.app), { timeout: 2000 }).toHaveLength(2);
       expect((await notifications(h.app))[1]!.title).toBe(`proja — shell ${cliIdx}`);
     } finally {
-      await h.app.close();
+      await closeApp(h.app);
       h.cleanup();
     }
   });
@@ -617,17 +617,20 @@ test.describe('Claude Code system notifications', () => {
 
       // AC20 persistence: relaunch with the same HOME, toggle still off.
       await h.app.close();
-      const app2 = await electron.launch(electronOptions(h.isolatedHome, {
-        ...baseEnv(),
-        HOME: h.isolatedHome,
-        ...(process.platform === 'win32' ? { USERPROFILE: h.isolatedHome } : { SHELL: '/bin/bash' }),
-        METAIDE_TEST_MODE: '1',
-        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [h.shimPath], env: {} }),
-        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [h.shimPath, '--continue'], env: {} }),
-      }));
-      const win2 = await app2.firstWindow();
-      await win2.waitForLoadState('domcontentloaded');
+      const { app: app2, win: win2 } = await guardedLaunch(async (scope) => {
+        const app = scope.own(await electron.launch(electronOptions(h.isolatedHome, {
+          ...baseEnv(),
+          HOME: h.isolatedHome,
+          ...(process.platform === 'win32' ? { USERPROFILE: h.isolatedHome } : { SHELL: '/bin/bash' }),
+          METAIDE_TEST_MODE: '1',
+          METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+          METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [h.shimPath], env: {} }),
+          METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [h.shimPath, '--continue'], env: {} }),
+        })));
+        const win = await app.firstWindow();
+        await win.waitForLoadState('domcontentloaded');
+        return { app, win };
+      });
       await win2.getByTestId('settings-open').click();
       const modal2 = win2.getByTestId('settings-modal');
       await expect(modal2).toBeVisible({ timeout: 5000 });
@@ -636,20 +639,20 @@ test.describe('Claude Code system notifications', () => {
       await win2.getByTestId('settings-done').click();
       await app2.close();
     } finally {
-      try { await h.app.close(); } catch { /* already closed above */ }
+      await closeApp(h.app);
       h.cleanup();
     }
   });
 
   /* ── Robustness: receiver unavailable, auth, shell-exit cleanup ───────*/
   test('AC22/AC23/AC24/AC26: receiver unavailable falls back cleanly, unauthenticated POSTs are rejected, exit cleans up', async () => {
-    const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-notif-robust-home-'));
-    const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-notif-robust-root-'));
-    const proj = join(demoRoot, 'proja');
-    mkdirSync(proj);
-    mkdirSync(join(proj, '.git'));
-    const shimPath = makeClaudeShim(isolatedHome);
-    try {
+    const { app, win, isolatedHome, demoRoot } = await guardedLaunch(async (scope) => {
+      const isolatedHome = scope.tempDir('metaide-notif-robust-home-');
+      const demoRoot = scope.tempDir('metaide-notif-robust-root-');
+      const proj = join(demoRoot, 'proja');
+      mkdirSync(proj);
+      mkdirSync(join(proj, '.git'));
+      const shimPath = makeClaudeShim(isolatedHome);
       // AC22: make the hook settings file unwritable by pre-creating its
       // parent directory as a plain FILE (mkdirSync then throws ENOTDIR
       // regardless of which port the receiver ends up on) — no production
@@ -659,7 +662,7 @@ test.describe('Claude Code system notifications', () => {
       mkdirSync(metaideDir, { recursive: true });
       writeFileSync(join(metaideDir, 'claude-hooks'), 'not a directory');
 
-      const app = await electron.launch(electronOptions(isolatedHome, {
+      const app = scope.own(await electron.launch(electronOptions(isolatedHome, {
         ...baseEnv(),
         HOME: isolatedHome,
         ...(process.platform === 'win32' ? { USERPROFILE: isolatedHome } : { SHELL: '/bin/bash' }),
@@ -667,49 +670,49 @@ test.describe('Claude Code system notifications', () => {
         METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
         METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: [shimPath], env: {} }),
         METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: [shimPath, '--continue'], env: {} }),
-      }));
-      try {
-        const win = await app.firstWindow();
-        await win.waitForLoadState('domcontentloaded');
-        await installNotificationSpy(app);
-        let dialogShown = false;
-        win.on('dialog', (d) => { dialogShown = true; void d.dismiss(); });
-        await win.evaluate(async (path: string) => {
-          await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-        }, demoRoot);
-        await openProject(win, 'proja');
-        const projA = await projectId(win, 'proja');
-        // AC22: Claude still launches and runs normally, no error dialog.
-        await waitForShell(win, projA, 0, 'mock-claude ready');
-        expect(dialogShown, 'AC22 no error dialog when the receiver is unavailable').toBe(false);
-        // Never decorated (no working settings path to inject).
-        const alive = await aliveShells(win);
-        expect(alive[0]!.launchArgv).not.toContain('--settings');
+      })));
+      const win = await app.firstWindow();
+      await win.waitForLoadState('domcontentloaded');
+      return { app, win, isolatedHome, demoRoot };
+    });
+    try {
+      await installNotificationSpy(app);
+      let dialogShown = false;
+      win.on('dialog', (d) => { dialogShown = true; void d.dismiss(); });
+      await win.evaluate(async (path: string) => {
+        await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+      }, demoRoot);
+      await openProject(win, 'proja');
+      const projA = await projectId(win, 'proja');
+      // AC22: Claude still launches and runs normally, no error dialog.
+      await waitForShell(win, projA, 0, 'mock-claude ready');
+      expect(dialogShown, 'AC22 no error dialog when the receiver is unavailable').toBe(false);
+      // Never decorated (no working settings path to inject).
+      const alive = await aliveShells(win);
+      expect(alive[0]!.launchArgv).not.toContain('--settings');
 
-        // AC22/AC18 corollary: the shell was never hook-confirmed, so the
-        // generic notifier still covers it. Minimise for real (main-process
-        // BrowserWindow, not a renderer document.activeElement blur, which
-        // does not touch the generic notifier's own "is main focused" rule
-        // at all — src/main/index.ts's done-poll loop).
-        await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.minimize(); });
-        await sendLine(win, projA, 0, '/work 9');
-        await waitForShell(win, projA, 0, 'work done (9s)');
-        await expect.poll(
-          async () => (await notifications(app)).some((n) => n.body.startsWith('Command finished')),
-          { timeout: 5000, message: 'AC22 generic notifier covers a shell whose hooks never connected' },
-        ).toBe(true);
+      // AC22/AC18 corollary: the shell was never hook-confirmed, so the
+      // generic notifier still covers it. Minimise for real (main-process
+      // BrowserWindow, not a renderer document.activeElement blur, which
+      // does not touch the generic notifier's own "is main focused" rule
+      // at all — src/main/index.ts's done-poll loop).
+      await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.minimize(); });
+      await sendLine(win, projA, 0, '/work 9');
+      await waitForShell(win, projA, 0, 'work done (9s)');
+      await expect.poll(
+        async () => (await notifications(app)).some((n) => n.body.startsWith('Command finished')),
+        { timeout: 5000, message: 'AC22 generic notifier covers a shell whose hooks never connected' },
+      ).toBe(true);
 
-        // AC23: the app's own echo behaviour is unaffected by hook reporting
-        // (which is a no-op here since there is no receiver) — round trip
-        // stays fast.
-        const start = Date.now();
-        await sendLine(win, projA, 0, 'ping-after-fallback');
-        await waitForShell(win, projA, 0, 'echo: ping-after-fallback');
-        expect(Date.now() - start, 'AC23 turn not delayed').toBeLessThan(5000);
-      } finally {
-        await app.close();
-      }
+      // AC23: the app's own echo behaviour is unaffected by hook reporting
+      // (which is a no-op here since there is no receiver) — round trip
+      // stays fast.
+      const start = Date.now();
+      await sendLine(win, projA, 0, 'ping-after-fallback');
+      await waitForShell(win, projA, 0, 'echo: ping-after-fallback');
+      expect(Date.now() - start, 'AC23 turn not delayed').toBeLessThan(5000);
     } finally {
+      await closeApp(app);
       rmSync(isolatedHome, { recursive: true, force: true });
       rmSync(demoRoot, { recursive: true, force: true });
     }
@@ -794,7 +797,7 @@ test.describe('Claude Code system notifications', () => {
       await h2.win.waitForTimeout(1000);
       expect(await notifications(h2.app), 'AC26 no new notification from a stray event').toHaveLength(1);
     } finally {
-      await h2.app.close();
+      await closeApp(h2.app);
       h2.cleanup();
     }
   });

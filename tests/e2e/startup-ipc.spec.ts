@@ -1,8 +1,8 @@
-import { expect, test, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { expect, test, _electron as electron } from '@playwright/test';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 interface StartupSettingsResult {
   readyStateAtInvoke: DocumentReadyState;
@@ -34,13 +34,11 @@ const STARTUP_RENDERER = `<!doctype html>
 </html>`;
 
 test('settings IPC is registered before the initial renderer can invoke it', async () => {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-startup-ipc-home-'));
-  const rendererPath = join(isolatedHome, 'startup-renderer.html');
-  writeFileSync(rendererPath, STARTUP_RENDERER);
-  let app: ElectronApplication | undefined;
-
-  try {
-    app = await electron.launch({
+  const { app, isolatedHome } = await guardedLaunch(async (scope) => {
+    const isolatedHome = scope.tempDir('metaide-startup-ipc-home-');
+    const rendererPath = join(isolatedHome, 'startup-renderer.html');
+    writeFileSync(rendererPath, STARTUP_RENDERER);
+    const app = scope.own(await electron.launch({
       args: [`--user-data-dir=${join(isolatedHome, 'userData')}`, '.'],
       env: {
         ...process.env,
@@ -48,8 +46,11 @@ test('settings IPC is registered before the initial renderer can invoke it', asy
         METAIDE_TEST_MODE: '1',
         ELECTRON_RENDERER_URL: pathToFileURL(rendererPath).href,
       },
-    });
+    }));
+    return { app, isolatedHome };
+  });
 
+  try {
     const win = await app.firstWindow();
     const result = await win.evaluate(() => window.startupSettingsResult);
 
@@ -61,7 +62,7 @@ test('settings IPC is registered before the initial renderer can invoke it', asy
       result.outcome.status === 'rejected' ? result.outcome.error : undefined,
     ).toEqual({ status: 'fulfilled', value: 1 });
   } finally {
-    await app?.close();
+    await closeApp(app);
     rmSync(isolatedHome, { recursive: true, force: true });
   }
 });

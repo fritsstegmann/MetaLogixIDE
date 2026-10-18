@@ -15,46 +15,48 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { SIDEBAR_TESTIDS } from '../../src/renderer/sidebar-copy';
 import { sampleDuring, frameLog, type Frame } from './helpers/frames';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 type Api = { invoke: (c: string, r: unknown) => Promise<never> };
 
 async function launch(): Promise<{ app: ElectronApplication; win: Page; cleanup: () => void }> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-home-'));
-  const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-demo-'));
-  mkdirSync(join(demoRoot, 'demo'));
-  mkdirSync(join(demoRoot, 'demo', '.git'));
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-home-');
+    const demoRoot = scope.tempDir('metaide-demo-');
+    mkdirSync(join(demoRoot, 'demo'));
+    mkdirSync(join(demoRoot, 'demo', '.git'));
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1400, 900); });
+    await win.evaluate(async (path: string) => {
+      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+    }, demoRoot);
+    await win.getByRole('button', { name: 'demo', exact: true }).click();
+    await expect(win.locator('[data-testid="shell-tab"] .xterm-screen')).toBeVisible({ timeout: 10000 });
+    return {
+      app, win,
+      cleanup: () => {
+        rmSync(isolatedHome, { recursive: true, force: true });
+        rmSync(demoRoot, { recursive: true, force: true });
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1400, 900); });
-  await win.evaluate(async (path: string) => {
-    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-  }, demoRoot);
-  await win.getByRole('button', { name: 'demo', exact: true }).click();
-  await expect(win.locator('[data-testid="shell-tab"] .xterm-screen')).toBeVisible({ timeout: 10000 });
-  return {
-    app, win,
-    cleanup: () => {
-      rmSync(isolatedHome, { recursive: true, force: true });
-      rmSync(demoRoot, { recursive: true, force: true });
-    },
-  };
 }
 
 /** The first four ancestors of `split-right`, nearest first, as frame targets (`animatedLevels` drops the row and above). */
@@ -119,7 +121,7 @@ test('split open/close animates the right pane and keeps the left terminal mount
     });
     expect(Math.abs(widths.left - widths.row)).toBeLessThan(1);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });
@@ -146,7 +148,7 @@ test('sidebar animates on click but toggles instantly from the keyboard', async 
     expect(positions(keyHide), `⌘B never animates (two positions, nothing between)\n${frameLog(keyHide, [['main', 'x']])}`).toBe(2);
     expect(positions(keyShow), `⌘B never animates (two positions, nothing between)\n${frameLog(keyShow, [['main', 'x']])}`).toBe(2);
   } finally {
-    await app.close();
+    await closeApp(app);
     cleanup();
   }
 });

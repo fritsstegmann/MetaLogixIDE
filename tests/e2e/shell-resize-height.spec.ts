@@ -13,9 +13,9 @@
  */
 
 import { test, expect, _electron as electron, type Page, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 const WIDTH = 1400;
 const TALL = 1000;
@@ -61,21 +61,24 @@ async function settledGeometry(win: Page, from: number): Promise<Geometry> {
 }
 
 test('shrinking the window keeps the shell tab and its last terminal row above the status bar', async () => {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-home-'));
-  const demoRoot = mkdtempSync(join(tmpdir(), 'metaide-demo-'));
-  mkdirSync(join(demoRoot, 'demo'));
-  mkdirSync(join(demoRoot, 'demo', '.git'));
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: isolatedHome,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  const { app, isolatedHome, demoRoot } = await guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const isolatedHome = scope.tempDir('metaide-home-');
+    const demoRoot = scope.tempDir('metaide-demo-');
+    mkdirSync(join(demoRoot, 'demo'));
+    mkdirSync(join(demoRoot, 'demo', '.git'));
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: isolatedHome,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],               env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    return { app, isolatedHome, demoRoot };
   });
   try {
     const win = await app.firstWindow();
@@ -101,7 +104,7 @@ test('shrinking the window keeps the shell tab and its last terminal row above t
       last = g;
     }
   } finally {
-    await app.close();
+    await closeApp(app);
     rmSync(isolatedHome, { recursive: true, force: true });
     rmSync(demoRoot, { recursive: true, force: true });
   }
