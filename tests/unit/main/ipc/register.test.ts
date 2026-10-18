@@ -11,6 +11,7 @@ import { ShellsRepo } from '@main/repos/shells-repo';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
 import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
+import type { MiseLister, MiseListResult } from '@main/domain/mise-cli';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -968,6 +969,7 @@ function envRig() {
   const a = projects.upsert(root.id, pathA, 'alpha');
   const b = projects.upsert(root.id, pathB, 'beta');
   const ptyManager = fakePtyManager();
+  const listMise = vi.fn<MiseLister>(async () => ({ kind: 'ok', stdout: '[]' }));
   const events: string[] = [];
   const ipc = fakeIpcMain();
   const services = {
@@ -975,6 +977,7 @@ function envRig() {
     projects,
     shells,
     ptyManager,
+    listMise,
     homeDir: '/home/u',
   } as unknown as Parameters<typeof registerIpc>[1];
   registerIpc(ipc as unknown as IpcMain, services, ((channel: string) => {
@@ -991,6 +994,7 @@ function envRig() {
     projects,
     shells,
     ptyManager,
+    listMise,
     events,
     call,
     spawned,
@@ -1497,6 +1501,131 @@ describe('app-wide env at every spawn site (AC9, AC10, AC16)', () => {
     await rig.call('shells:launch-plain', { projectId: rig.a.id });
     expect(rig.spawned(0).env).toStrictEqual({ X: 'before' });
     expect(rig.spawned(1).env).toStrictEqual({ X: 'after' });
+  });
+});
+
+describe('tasks:discover and tasks:run with mise tasks', () => {
+  const OLD = '2020-01-01 00:00:00';
+  const miseTasks = (...names: string[]): MiseListResult => ({ kind: 'ok', stdout: JSON.stringify(names.map((name) => ({ name, description: '' }))) });
+  const untrusted: MiseListResult = { kind: 'failed', stderr: 'mise ERROR Config files in ~/p/mise.toml are not trusted.\nTrust them with `mise trust`.\n' };
+
+  function miseRig(result: MiseListResult) {
+    const rig = envRig();
+    writeFileSync(join(rig.pathA, 'mise.toml'), '[tasks.a]\nrun = "echo"\n');
+    rig.listMise.mockResolvedValue(result);
+    return rig;
+  }
+
+  it('tasks:discover returns the mise tasks after the other sources, with no notice (AC1, AC7)', async () => {
+    const rig = miseRig(miseTasks('build', 'a:b'));
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    const r = (await rig.call('tasks:discover', { projectId: rig.a.id })) as { tasks: { id: string }[]; notices: unknown[] };
+    expect(r.tasks.map((t) => t.id)).toEqual(['npm:dev', 'mise:build', 'mise:a:b']);
+    expect(r.notices).toEqual([]);
+  });
+
+  it('tasks:discover returns the listing notice alongside the other sources (AC10–AC13, AC16)', async () => {
+    const rig = miseRig({ kind: 'not-found' });
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    const r = (await rig.call('tasks:discover', { projectId: rig.a.id })) as { tasks: { id: string }[]; notices: unknown[] };
+    expect(r.tasks.map((t) => t.id)).toEqual(['npm:dev']);
+    expect(r.notices).toEqual([{ source: 'mise', kind: 'not-found' }]);
+  });
+
+  it.each(['tasks:discover', 'tasks:run'])('%s lists mise in the project root with the inherited env plus the project and app vars (AC6)', async (channel) => {
+    const rig = miseRig(miseTasks('a'));
+    rig.settings.set('app_env', { APP_VAR: 'app' });
+    rig.setEnv(rig.a.id, { MISE_ENV: 'staging', API_URL: 'http://localhost:4000' });
+    await rig.call(channel, { projectId: rig.a.id, taskId: 'mise:a' });
+    expect(rig.listMise).toHaveBeenCalledTimes(1);
+    const [cwd, env] = rig.listMise.mock.calls[0]!;
+    expect(cwd).toBe(rig.pathA);
+    expect(env).toStrictEqual({ ...process.env, APP_VAR: 'app', MISE_ENV: 'staging', API_URL: 'http://localhost:4000' });
+    expect(env.PATH).toBe(process.env.PATH);
+  });
+
+  it('lists with the same env overlay the task is then spawned with (AC6)', async () => {
+    const rig = miseRig(miseTasks('a'));
+    rig.setEnv(rig.a.id, { MISE_ENV: 'staging' });
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a' });
+    expect(rig.listMise.mock.calls[0]![1]).toStrictEqual({ ...process.env, ...rig.spawned(0).env });
+  });
+
+  it('starts no mise process for a project without a mise marker (AC4)', async () => {
+    const rig = envRig();
+    writeFileSync(join(rig.pathA, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }));
+    const r = (await rig.call('tasks:discover', { projectId: rig.a.id })) as { notices: unknown[] };
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'npm:dev' });
+    expect(rig.listMise).not.toHaveBeenCalled();
+    expect(r.notices).toEqual([]);
+  });
+
+  it('tasks:run mise:a:b spawns `mise run a:b` as one argv element, in the project root, with the project env (AC8)', async () => {
+    const rig = miseRig(miseTasks('a:b'));
+    rig.setEnv(rig.a.id, { API_URL: 'http://localhost:4000' });
+    const r = await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a:b' });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(1);
+    expect(rig.spawned(0)).toEqual({ argv: ['mise', 'run', 'a:b'], cwd: rig.pathA, env: { API_URL: 'http://localhost:4000' }, variant: 'first' });
+    expect(r).toEqual({ shellIndex: 0 });
+    expect(rig.shells.list()).toEqual([expect.objectContaining({ projectId: rig.a.id, shellIndex: 0, launchArgv: ['mise', 'run', 'a:b'] })]);
+  });
+
+  it('tasks:run mise: takes the first free slot of the project, like other tasks (AC8)', async () => {
+    const rig = miseRig(miseTasks('a'));
+    rig.shells.upsert({ projectId: rig.a.id, shellIndex: 0, model: null, launchArgv: ['zsh'], startedAt: OLD, lastActiveAt: OLD, pinned: false });
+    expect(await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a' })).toEqual({ shellIndex: 1 });
+  });
+
+  it('tasks:run mise: evicts the least recently used shell of another project at the cap, like other tasks (AC8)', async () => {
+    const rig = miseRig(miseTasks('a'));
+    rig.settings.set('keep_alive_cap', 1);
+    rig.shells.upsert({ projectId: rig.b.id, shellIndex: 0, model: null, launchArgv: ['zsh'], startedAt: OLD, lastActiveAt: OLD, pinned: false });
+    await rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a' });
+    expect(rig.ptyManager.kill).toHaveBeenCalledWith(rig.b.id, 0);
+    expect(rig.shells.list().map((r) => r.projectId)).toEqual([rig.a.id]);
+  });
+
+  it('tasks:run mise: refuses when every shell is pinned at the cap, like other tasks (AC8)', async () => {
+    const rig = miseRig(miseTasks('a'));
+    rig.settings.set('keep_alive_cap', 1);
+    rig.shells.upsert({ projectId: rig.b.id, shellIndex: 0, model: null, launchArgv: ['zsh'], startedAt: OLD, lastActiveAt: OLD, pinned: true });
+    await expect(rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a' })).rejects.toThrow(/all shells are pinned/);
+    expect(rig.ptyManager.spawn).not.toHaveBeenCalled();
+  });
+
+  it('tasks:run with a mise: id the current listing no longer reports fails with "no task" and spawns nothing (AC9)', async () => {
+    const rig = miseRig(miseTasks('other'));
+    await expect(rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:gone' })).rejects.toThrow('no task mise:gone');
+    expect(rig.ptyManager.spawn).not.toHaveBeenCalled();
+  });
+
+  it('re-lists on every tasks:run, so a task removed since the last discover is refused (AC9, AC22)', async () => {
+    const rig = miseRig(miseTasks('a'));
+    await rig.call('tasks:discover', { projectId: rig.a.id });
+    rig.listMise.mockResolvedValue(miseTasks());
+    await expect(rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:a' })).rejects.toThrow('no task mise:a');
+    expect(rig.listMise).toHaveBeenCalledTimes(2);
+  });
+
+  it('an untrusted listing shows no mise tasks, only the untrusted notice (AC11, AC22)', async () => {
+    const rig = miseRig(untrusted);
+    const r = await rig.call('tasks:discover', { projectId: rig.a.id });
+    expect(r).toEqual({ tasks: [], notices: [{ source: 'mise', kind: 'untrusted' }] });
+  });
+
+  it('tasks:run of a mise: id while the listing is untrusted throws "no task" and never spawns mise run (AC21, AC22, S4)', async () => {
+    const rig = miseRig(miseTasks('x'));
+    await rig.call('tasks:discover', { projectId: rig.a.id });
+    rig.listMise.mockResolvedValue(untrusted);
+    await expect(rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:x' })).rejects.toThrow('no task mise:x');
+    expect(rig.ptyManager.spawn).not.toHaveBeenCalled();
+    expect(rig.shells.list()).toEqual([]);
+  });
+
+  it('tasks:run never spawns a flag-like mise task name, even when asked for it by id (S1, AC3)', async () => {
+    const rig = miseRig(miseTasks('-C'));
+    await expect(rig.call('tasks:run', { projectId: rig.a.id, taskId: 'mise:-C' })).rejects.toThrow('no task mise:-C');
+    expect(rig.ptyManager.spawn).not.toHaveBeenCalled();
   });
 });
 

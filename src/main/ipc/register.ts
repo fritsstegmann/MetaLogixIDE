@@ -5,7 +5,7 @@ import type { Services } from '@main/services';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { pruneMissingProjects } from '@main/domain/prune-missing';
-import { discoverTasks } from '@main/domain/tasks';
+import { discoverAllTasks } from '@main/domain/tasks';
 import { randomUUID } from 'node:crypto';
 import { parseMetaproject } from '@shared/parse-metaproject';
 import type { VibrancyMaterial } from '@shared/frosted-glass';
@@ -15,6 +15,7 @@ import { parseProjectDefaultAgent, setProjectDefaultAgent } from '@main/domain/p
 import { resolveSpawnEnv } from '@main/domain/spawn-env';
 import { parseProjectEnv, parseAppEnv } from '@shared/project-env';
 import type { Project, ProjectConfig, SettingsMap } from '@shared/types';
+import type { TasksDiscovery } from '@shared/tasks-contract';
 import { defaultShellArgv, defaultShellBin } from '@main/domain/shell';
 import { chooseEvictee } from '@main/pty/keep-alive';
 import { applyClaudePermissionMode } from '@main/domain/claude-permission-mode';
@@ -53,6 +54,18 @@ function projectSpawnEnv(
 ): Record<string, string> {
   const appEnv = s.settings.get('app_env');
   return resolveSpawnEnv({ project, templateEnv, inherited: process.env, homeDir: s.homeDir, appEnv }).env;
+}
+
+/**
+ * Every task of `project`, listing mise with the exact env its tasks are spawned with (spec AC6) and
+ * logging the kind of any listing failure. `tasks:run` calls this on every run, never a cache, so an id
+ * the current listing does not report, including any mise id while the config is untrusted, is refused (AC9, AC22).
+ */
+async function discoverProjectTasks(s: Services, project: Project): Promise<TasksDiscovery> {
+  const env = { ...process.env, ...projectSpawnEnv(s, project, {}) };
+  const discovery = await discoverAllTasks(project.path, { env, listMise: s.listMise });
+  for (const n of discovery.notices) log.warn('[tasks] mise listing failed', { projectId: project.id, kind: n.kind });
+  return discovery;
 }
 
 /**
@@ -1240,12 +1253,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'tasks:discover': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    return { tasks: discoverTasks(p.path), notices: [] };
+    return discoverProjectTasks(s, p);
   },
   'tasks:run': async (s, { projectId, taskId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const task = discoverTasks(p.path).find(t => t.id === taskId);
+    const task = (await discoverProjectTasks(s, p)).tasks.find(t => t.id === taskId);
     if (!task) throw new Error(`no task ${taskId}`);
     // Reuse the same shell-slot policy the plain launcher uses.
     const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
