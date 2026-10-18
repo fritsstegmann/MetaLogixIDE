@@ -22,6 +22,13 @@ import {
 } from '../../../src/renderer/project-settings-contract';
 import { baseEnv, closeApp, guardedLaunch, launch, type Harness } from './claude-harness';
 
+/**
+ * Login shell every app launch in this harness runs with, so a plain terminal's argv is known. The
+ * first boot gets it from `claude-harness`'s `launch` (pinned there since daa3006) and the seed
+ * self-check fails loudly if that ever drifts; `restartAgents` sets it directly.
+ */
+export const AGENT_SHELL = '/bin/bash';
+
 export interface AgentHarness extends Harness {
   readonly executable: string;
 }
@@ -55,6 +62,9 @@ async function seedAgents(h: Harness): Promise<AgentHarness> {
   );
   chmodSync(executable, 0o755);
   const result = { ...h, executable };
+  expect(await loginShell(h.app), 'seed: app must run with the harness login shell').toBe(
+    AGENT_SHELL,
+  );
   await setSetting(h.win, 'default_cli_profiles', []);
   await setSetting(h.win, 'keep_alive_cap', 16);
   await setGlobals(result, 'global-first', 'global-subsequent');
@@ -90,7 +100,7 @@ export async function restartAgents(h: AgentHarness): Promise<void> {
           env: {
             ...baseEnv(),
             HOME: h.isolatedHome,
-            SHELL: '/bin/sh',
+            SHELL: AGENT_SHELL,
             METAIDE_TEST_MODE: '1',
             METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
           },
@@ -99,11 +109,18 @@ export async function restartAgents(h: AgentHarness): Promise<void> {
       h.win = await h.app.firstWindow();
       await h.win.waitForLoadState('domcontentloaded');
       await resize(h.app, 1400, 900);
+      expect(await loginShell(h.app), 'restart: app must run with the harness login shell').toBe(
+        AGENT_SHELL,
+      );
     });
   } catch (error) {
     h.cleanup();
     throw error;
   }
+}
+
+async function loginShell(app: ElectronApplication): Promise<string | undefined> {
+  return app.evaluate(() => process.env.SHELL);
 }
 
 export async function resize(
