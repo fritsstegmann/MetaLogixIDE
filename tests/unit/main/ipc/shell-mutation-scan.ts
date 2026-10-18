@@ -14,7 +14,8 @@
  * first, `const p = procs[0]; p?.kill()`); (2) a `ptyManager`/`shells` member
  * used as a value rather than as the object of a member access (aliased,
  * passed to a function, stored, returned, truth-tested); (3) an object
- * destructuring pattern, in a declaration, parameter or assignment, whose
+ * destructuring pattern in a declaration (nested patterns included) or a
+ * parameter, or an object pattern written directly on the left of `=`, whose
  * key names `ptyManager`/`shells` (plain, quoted, or a string/template
  * literal computed key such as `{ ['ptyManager']: p }`), or whose computed
  * key is not a literal (`{ [k]: p }`), whatever object is destructured.
@@ -24,8 +25,12 @@
  * modules; a spread or handler key it cannot read throws. Not covered:
  * helpers imported from other modules and called by a handler (only spreads
  * are followed across files), a services object whose receivers live under
- * property names other than `ptyManager`/`shells`, and dynamic access
- * such as `Reflect.get` or `eval`.
+ * property names other than `ptyManager`/`shells`, assignment patterns that
+ * are nested, array-shaped or in a loop head (`({ a: { ptyManager: p } } = x)`,
+ * `[{ ptyManager: p }] = [s]`, `for ({ ptyManager: p } of xs)`), a computed
+ * key on the services object bound to a local before use (`const pm = s[k];
+ * pm.spawn()`, including template and `as const` keys) or `Object.values(s)`,
+ * and dynamic access such as `Reflect.get` or `eval`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
