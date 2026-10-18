@@ -548,7 +548,7 @@ function MainApp() {
   // resolve after the user has clicked a DIFFERENT project. Without this
   // ref the stale earlier setSelected would win, reverting the click.
   const lastPickIdRef = useRef<number | null>(null);
-  async function pick(p: Project) {
+  async function pick(p: Pick<Project, 'id'>) {
     setProjectSettingsTarget(null);
     lastPickIdRef.current = p.id;
     terminalFocus.cancelRequest();
@@ -566,6 +566,22 @@ function MainApp() {
       }
       console.error(e);
     }
+  }
+
+  /**
+   * Opens a file a hover preview found in another project: selects that project through the sidebar's `pick` path, then
+   * opens `relPath` in its Files tab once the selection has landed. Does nothing further when the pick failed or was
+   * superseded by a newer selection.
+   */
+  async function openFileInProject(projectId: number, relPath: string, line: number | null): Promise<void> {
+    // Set synchronously so pick() queues no terminal focus; the next render restores the ref if the pick fails.
+    mainTabRef.current = 'files';
+    await pick({ id: projectId });
+    requestAnimationFrame(() => {
+      if (selectedRef.current?.id !== projectId) return;
+      setMainTab('files');
+      setOpenInFiles({ relPath, line });
+    });
   }
 
   function editEnv(p: Project) {
@@ -615,7 +631,11 @@ function MainApp() {
             }}
             ratio={splitRatio}
             onRatioChange={setSplitRatio}
-            onOpenFile={(relPath, line) => {
+            onOpenFile={(relPath, line, targetProjectId) => {
+              if (targetProjectId !== undefined && targetProjectId !== project.id) {
+                void openFileInProject(targetProjectId, relPath, line);
+                return;
+              }
               setMainTab('files');
               setOpenInFiles({ relPath, line });
             }}
@@ -1177,7 +1197,9 @@ function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
             projectId={projectId}
             shellIndex={shellIndex}
             primary
-            onOpenFile={(relPath, line) => {
+            popout
+            onOpenFile={(relPath, line, targetProjectId) => {
+              if (targetProjectId !== undefined && targetProjectId !== projectId) return;
               // Open the editor inline in this popout window instead of
               // dropping the user back to Finder.
               setTab('files');

@@ -35,7 +35,7 @@ interface Props {
   panes: SplitPanes;
   ratio: number;
   onRatioChange: (r: number) => void;
-  onOpenFile: (relPath: string, line: number | null) => void;
+  onOpenFile: (relPath: string, line: number | null, projectId?: number) => void;
 }
 
 type Side = 'left' | 'right';

@@ -15,7 +15,7 @@ import { DROP_COPY } from '@shared/terminal-drop-contract';
 import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
-import { HoverPreview, type HoverPreviewState } from './HoverPreview';
+import { HoverPreview, type HoverPreviewOpen, type HoverPreviewState } from './HoverPreview';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
@@ -77,13 +77,16 @@ const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out
 };
 
 export function ShellTab({
-  projectId, shellIndex, onOpenFile, primary = false,
+  projectId, shellIndex, onOpenFile, primary = false, popout = false,
 }: {
   projectId: number;
   shellIndex: number;
-  onOpenFile?: (relPath: string, line: number | null) => void;
+  /** Opens a file from terminal output; `projectId` is set only when a hover preview found it in another project. */
+  onOpenFile?: HoverPreviewOpen;
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
+  /** Popout window: hover previews of another project's file cannot be opened from here. */
+  popout?: boolean;
 }) {
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
@@ -551,7 +554,8 @@ export function ShellTab({
       )}
       <HoverPreview
         state={hover}
-        onOpen={(relPath, line) => { setHover(null); onOpenFileRef.current?.(relPath, line); }}
+        popout={popout}
+        onOpen={(relPath, line, targetProjectId) => { setHover(null); onOpenFileRef.current?.(relPath, line, targetProjectId); }}
       />
       <AnimatePresence>
         {menu && (() => {
