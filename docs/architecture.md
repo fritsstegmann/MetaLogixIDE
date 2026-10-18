@@ -464,9 +464,14 @@ switches its mode. The status bar keeps one hint, a button that opens the
 palette. The palette opens above any other open modal; Esc closes only the
 palette.
 
-Groups keep a fixed order (projects, then the command categories Go, Project,
-View, Shell, Theme, App, then Settings); within a group, rows are ordered by
-match quality. At most 50 rows render (40 in file mode). Commands that need a
+Project rows come first, in two groups: Running (projects with a live shell)
+and Projects. With an empty query, Running comes first. With a query, a
+project whose name starts with the query (case-insensitive) ranks above
+every project whose name does not, and the group that holds the
+best match comes first, so Enter picks it. Name counts twice as much as path
+in the fuzzy match. The command categories follow in a fixed order: Go,
+Project, View, Shell, Theme, App, then Settings. Within a group, rows are
+ordered by match quality. At most 50 rows render (40 in file mode). Commands that need a
 selected project are hidden when there is none. Choosing a project uses the
 same pick path as the sidebar; choosing the current one closes the palette and
 focuses its terminal. A command runs after the palette closes, and a failure
