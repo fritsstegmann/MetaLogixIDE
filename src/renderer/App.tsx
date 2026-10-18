@@ -39,6 +39,7 @@ import { diffTabCount } from './diff/diff-selection';
 import { isMainTab, type MainTab } from './main-tab';
 import { useEnvDrafts } from './hooks/useEnvDrafts';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
+import { useTaskCount } from './hooks/useTaskCount';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
@@ -211,19 +212,7 @@ function MainApp() {
     setOpenInFiles(open);
     if (open) setMainTab('files');
   }, [selected?.id, pendingFileOpen, setMainTab]);
-  // Refresh task count for the ActivityBar pip whenever the project changes.
-  // Cheap: it's a filesystem read of package.json + Makefile + compose.
-  useEffect(() => {
-    if (!selected) { setTaskCount(0); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const { tasks } = await api.invoke('tasks:discover', { projectId: selected.id });
-        if (!cancelled) setTaskCount(tasks.length);
-      } catch { if (!cancelled) setTaskCount(0); }
-    })();
-    return () => { cancelled = true; };
-  }, [selected]);
+  const taskCount = useTaskCount(selected?.id ?? null);
   // Which shellIndex is currently visible in the Shell tab. Default 0 (the
   // Claude/primary shell); ad-hoc terminals opened as tabs bump this to
   // their fresh index so the user immediately sees the new shell.
@@ -296,7 +285,6 @@ function MainApp() {
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
   const envDrafts = useEnvDrafts();
   const envDirty = selected != null && envDrafts.isDirty(selected.id);
-  const [taskCount, setTaskCount] = useState(0);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);

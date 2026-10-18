@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { TaskDef, TasksDiscovery } from '@shared/tasks-contract';
+import type { MiseLister } from './mise-cli';
+import { discoverMiseTasks } from './mise-tasks';
 
-export interface TaskDef {
-  id: string;                             // stable id used by the run RPC
-  source: 'npm' | 'make' | 'compose';
-  name: string;
-  command: string[];                      // argv to spawn
-  description?: string;
-}
+export type { TaskDef };
+
+/** What mise discovery needs from the caller: the spawn env tasks run with, and the injected lister. */
+export interface MiseDeps { env: NodeJS.ProcessEnv; listMise: MiseLister }
 
 /**
  * Discover runnable tasks for a project's root directory. Detects:
@@ -107,4 +107,13 @@ export function discoverTasks(projectPath: string): TaskDef[] {
   }
 
   return out;
+}
+
+/**
+ * Every task of a project: `discoverTasks`' npm, make and compose tasks unchanged and in their order,
+ * followed by its mise tasks. A failed mise listing never hides the other sources; it adds one notice.
+ */
+export async function discoverAllTasks(projectPath: string, deps: MiseDeps): Promise<TasksDiscovery> {
+  const mise = await discoverMiseTasks(projectPath, deps.env, deps.listMise);
+  return { tasks: [...discoverTasks(projectPath), ...mise.tasks], notices: mise.notice ? [mise.notice] : [] };
 }
