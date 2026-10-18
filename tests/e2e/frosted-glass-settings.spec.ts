@@ -29,6 +29,7 @@ import electronBinaryPath from 'electron';
 import { FROST_ATTR, FROSTED_GLASS_COPY, FROSTED_GLASS_TESTIDS } from '../../src/renderer/frosted-chrome-contract';
 import type { ChromeFrostLevel, TerminalFrostLevel } from '../../src/shared/frosted-glass';
 import { isMacPlatform, resolveColour } from './helpers/chrome-colour';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 const PROJECT = 'glassproj';
 type Api = { invoke: (c: string, r: unknown) => Promise<unknown> };
@@ -43,44 +44,46 @@ interface Launched {
 
 /** Launches an isolated-profile app with one project and a shell tab already open. */
 async function launchGlassApp(opts: { home?: string; userDataDir?: string } = {}): Promise<Launched> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const home = opts.home ?? mkdtempSync(join(tmpdir(), 'metaide-glass-home-'));
-  const root = mkdtempSync(join(tmpdir(), 'metaide-glass-root-'));
-  const proj = join(root, PROJECT);
-  mkdirSync(proj);
-  mkdirSync(join(proj, '.git'));
-  const userDataDir = opts.userDataDir ?? join(home, 'userData');
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const home = opts.home ?? scope.tempDir('metaide-glass-home-');
+    const root = scope.tempDir('metaide-glass-root-');
+    const proj = join(root, PROJECT);
+    mkdirSync(proj);
+    mkdirSync(join(proj, '.git'));
+    const userDataDir = opts.userDataDir ?? join(home, 'userData');
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${userDataDir}`],
+      env: {
+        ...process.env,
+        HOME: home,
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await win.evaluate(async (path: string) => {
+      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+    }, root);
+    const projectRow = win.getByTestId('project-row').filter({ hasText: PROJECT }).first();
+    await expect(projectRow).toBeVisible({ timeout: 10000 });
+    await projectRow.click();
+    await expect(win.getByTestId('shell-tab')).toBeVisible({ timeout: 10000 });
+    return {
+      app,
+      win,
+      home,
+      root,
+      cleanup: () => {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await win.evaluate(async (path: string) => {
-    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-  }, root);
-  const projectRow = win.getByTestId('project-row').filter({ hasText: PROJECT }).first();
-  await expect(projectRow).toBeVisible({ timeout: 10000 });
-  await projectRow.click();
-  await expect(win.getByTestId('shell-tab')).toBeVisible({ timeout: 10000 });
-  return {
-    app,
-    win,
-    home,
-    root,
-    cleanup: () => {
-      rmSync(home, { recursive: true, force: true });
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
 }
 
 async function openSettings(win: Page): Promise<void> {
@@ -189,7 +192,7 @@ test('AC4: changing each setting reaches the main window and an open popout live
 
     await Promise.all([popout.waitForEvent('close'), (await app.browserWindow(popout)).evaluate((w) => w.close())]);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -227,11 +230,11 @@ test('AC5: a relaunched window renders the stored chrome/level flags on first pa
       }), FROST_ATTR);
       expect(freshFlags, 'control: a fresh profile starts at Subtle/Off (no attrs)').toEqual({ chrome: null, terminal: null });
     } finally {
-      await fresh.app.close();
+      await closeApp(fresh.app);
       fresh.cleanup();
     }
   } finally {
-    await second.app.close();
+    await closeApp(second.app);
     second.cleanup();
   }
 });
@@ -268,7 +271,7 @@ test('AC8: Frosted chrome OFF then ON restores the previously chosen levels; oth
     expect(await win.evaluate((a: string) => document.documentElement.getAttribute(a), FROST_ATTR.terminalFrost), 'terminal frost restores to medium').toBe('medium');
     expect(await storedValue(win, 'vibrancy_material'), 'material is unchanged by the OFF/ON round trip').toBe('hud');
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -303,7 +306,7 @@ test('AC9: with Frosted chrome OFF, the level controls are disabled, say why, an
     await expect(levelRadio(win, FROSTED_GLASS_TESTIDS.chromeFrost, FROSTED_GLASS_COPY.levels.medium)).not.toBeDisabled();
     await closeSettings(win);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -352,7 +355,7 @@ test('AC19: changing the material calls setVibrancy exactly once on every open, 
 
     await Promise.all([popout.waitForEvent('close'), (await app.browserWindow(popout)).evaluate((w) => w.close())]);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });
@@ -389,7 +392,7 @@ test('AC2: an upgrading profile with a stored frost_terminal=true migrates to te
   try {
     expect(await storedValue(after.win, 'terminal_frost_level'), 'the migration does not rerun and overwrite a later user choice').toBe('off');
   } finally {
-    await after.app.close();
+    await closeApp(after.app);
     after.cleanup();
   }
 });
@@ -455,7 +458,7 @@ test('AC31: switching chrome to Strong with terminal Subtle repaints a running t
       return reverted.r === before.r && reverted.g === before.g && reverted.b === before.b;
     }, { timeout: 3000, message: 'switching back restores the original colour' }).toBe(true);
   } finally {
-    await l.app.close();
+    await closeApp(l.app);
     l.cleanup();
   }
 });

@@ -133,7 +133,12 @@ export interface LaunchScope {
  * spawns it detached on POSIX, so `-pid` also reaches its PTY children).
  */
 export async function closeApp(app: ElectronApplication): Promise<void> {
-  const proc = app.process();
+  let proc: ReturnType<ElectronApplication['process']> | undefined;
+  try {
+    proc = app.process();
+  } catch {
+    // An already-closed app has no connection left and `process()` throws.
+  }
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
@@ -145,7 +150,7 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   } finally {
     clearTimeout(timer);
   }
-  if (proc.exitCode !== null || proc.signalCode !== null || proc.pid === undefined) return;
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null || proc.pid === undefined) return;
   try {
     if (process.platform === 'win32') proc.kill('SIGKILL');
     else process.kill(-proc.pid, 'SIGKILL');

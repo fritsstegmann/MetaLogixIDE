@@ -21,6 +21,7 @@ import {
   restoreHandler,
   type TermProbe,
 } from './helpers/terminal-probe';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Terminal font size setting (docs/specs/terminal-font-size.md, AC1-AC14).
@@ -56,9 +57,11 @@ interface Harness {
   close: (remove?: boolean) => Promise<void>;
 }
 
-function createFixture(): { home: string; root: string; projectDir: string } {
-  const home = mkdtempSync(join(tmpdir(), 'metaide-termsize-home-'));
-  const root = mkdtempSync(join(tmpdir(), 'metaide-termsize-root-'));
+function createFixture(
+  tempDir: (prefix: string) => string = (prefix) => mkdtempSync(join(tmpdir(), prefix)),
+): { home: string; root: string; projectDir: string } {
+  const home = tempDir('metaide-termsize-home-');
+  const root = tempDir('metaide-termsize-root-');
   const projectDir = join(root, PROJECT);
   mkdirSync(projectDir);
   mkdirSync(join(projectDir, '.git'));
@@ -67,43 +70,46 @@ function createFixture(): { home: string; root: string; projectDir: string } {
 }
 
 async function launchHarness(
-  fixture = createFixture(),
+  fixture?: { home: string; root: string; projectDir: string },
   options: { addRoot?: boolean } = {},
 ): Promise<Harness> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(fixture.home, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: fixture.home,
-      SHELL: '/bin/sh',
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-    },
+  return guardedLaunch(async (scope) => {
+    const fx = fixture ?? createFixture(scope.tempDir);
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(fx.home, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: fx.home,
+        SHELL: '/bin/sh',
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+      },
+    }));
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1400, 900));
+    if (options.addRoot !== false) {
+      await win.evaluate(async (path: string) => {
+        const rendererWindow = window as unknown as RendererWindow;
+        await rendererWindow.api.invoke('roots:add', { path });
+      }, fx.root);
+    }
+    return {
+      app,
+      win,
+      ...fx,
+      close: async (remove = true) => {
+        await (remove ? closeApp(app) : app.close());
+        if (remove) {
+          rmSync(fx.home, { recursive: true, force: true });
+          rmSync(fx.root, { recursive: true, force: true });
+        }
+      },
+    };
   });
-  const win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1400, 900));
-  if (options.addRoot !== false) {
-    await win.evaluate(async (path: string) => {
-      const rendererWindow = window as unknown as RendererWindow;
-      await rendererWindow.api.invoke('roots:add', { path });
-    }, fixture.root);
-  }
-  return {
-    app,
-    win,
-    ...fixture,
-    close: async (remove = true) => {
-      await app.close();
-      if (remove) {
-        rmSync(fixture.home, { recursive: true, force: true });
-        rmSync(fixture.root, { recursive: true, force: true });
-      }
-    },
-  };
 }
 
 async function openProject(win: Page): Promise<void> {

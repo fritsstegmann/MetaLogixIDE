@@ -1,8 +1,8 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Modifier and arrow glyphs in keyboard hints keep the proportions macOS draws them at. The
@@ -24,17 +24,19 @@ let home: string;
 test.skip(process.platform !== 'darwin', 'modifier glyphs are mac-only labels');
 
 test.beforeAll(async () => {
-  home = mkdtempSync(join(tmpdir(), 'metaide-kbd-home-'));
-  app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(home, 'userData')}`],
-    env: { ...process.env, HOME: home, METAIDE_TEST_MODE: '1' },
+  await guardedLaunch(async (scope) => {
+    home = scope.tempDir('metaide-kbd-home-');
+    app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(home, 'userData')}`],
+      env: { ...process.env, HOME: home, METAIDE_TEST_MODE: '1' },
+    }));
+    win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
   });
-  win = await app.firstWindow();
-  await win.waitForLoadState('domcontentloaded');
 });
 
 test.afterAll(async () => {
-  await app?.close();
+  if (app) await closeApp(app);
   rmSync(home, { recursive: true, force: true });
 });
 

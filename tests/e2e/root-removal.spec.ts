@@ -1,21 +1,24 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 test('removing a root in Settings drops it from the sidebar "Projects" list', async () => {
-  const isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-rootrm-home-'));
-  const keptRoot     = mkdtempSync(join(tmpdir(), 'metaide-rootrm-kept-'));
-  const goneRoot     = mkdtempSync(join(tmpdir(), 'metaide-rootrm-gone-'));
-  for (const [root, name] of [[keptRoot, 'kept-proj'], [goneRoot, 'gone-proj']] as const) {
-    mkdirSync(join(root, name)); mkdirSync(join(root, name, '.git'));
-  }
+  const { app, isolatedHome, keptRoot, goneRoot } = await guardedLaunch(async (scope) => {
+    const isolatedHome = scope.tempDir('metaide-rootrm-home-');
+    const keptRoot     = scope.tempDir('metaide-rootrm-kept-');
+    const goneRoot     = scope.tempDir('metaide-rootrm-gone-');
+    for (const [root, name] of [[keptRoot, 'kept-proj'], [goneRoot, 'gone-proj']] as const) {
+      mkdirSync(join(root, name)); mkdirSync(join(root, name, '.git'));
+    }
 
-  const app = await electron.launch({
-    // Own user-data dir: the single-instance lock is keyed on it, so a
-    // running dev copy of the app would otherwise make this launch quit.
-    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-    env: { ...process.env, HOME: isolatedHome, METAIDE_TEST_MODE: '1', METAIDE_CLAUDE_PERMISSION_MODE: 'bypass' },
+    const app = scope.own(await electron.launch({
+      // Own user-data dir: the single-instance lock is keyed on it, so a
+      // running dev copy of the app would otherwise make this launch quit.
+      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+      env: { ...process.env, HOME: isolatedHome, METAIDE_TEST_MODE: '1', METAIDE_CLAUDE_PERMISSION_MODE: 'bypass' },
+    }));
+    return { app, isolatedHome, keptRoot, goneRoot };
   });
   try {
     const win = await app.firstWindow();
@@ -48,7 +51,7 @@ test('removing a root in Settings drops it from the sidebar "Projects" list', as
     await expect(allSection.locator(`[title="${keptRoot}"]`)).toBeVisible();
     await expect(allSection.locator(`[title="${goneRoot}"]`)).toHaveCount(0, { timeout: 5000 });
   } finally {
-    await app.close();
+    await closeApp(app);
     for (const dir of [isolatedHome, keptRoot, goneRoot]) rmSync(dir, { recursive: true, force: true });
   }
 });

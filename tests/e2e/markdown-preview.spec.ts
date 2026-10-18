@@ -22,8 +22,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   MARKDOWN_PREVIEW_TESTID,
@@ -38,6 +37,7 @@ import {
   MERMAID_THEME_ATTR,
 } from '../../src/renderer/markdown/contract';
 import { PALETTE_COPY, PALETTE_TESTIDS } from '../../src/renderer/command-palette-contract';
+import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 const PROJECT = 'mdproj';
 const FIXTURES = resolve(process.cwd(), 'tests/e2e/fixtures/markdown');
@@ -91,91 +91,93 @@ interface Ide {
 }
 
 async function launchIde(label: string): Promise<Ide> {
-  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-  const home = mkdtempSync(join(tmpdir(), `metaide-md-${label}-home-`));
-  const root = mkdtempSync(join(tmpdir(), `metaide-md-${label}-root-`));
-  const projDir = join(root, PROJECT);
-  mkdirSync(projDir);
-  mkdirSync(join(projDir, '.git'));
-  cpSync(FIXTURES, projDir, { recursive: true });
-  rmSync(join(projDir, '.gitkeep'), { force: true });
-  writeFileSync(join(projDir, 'perf.md'), diagramDoc('PERFDOC', 20, 10));
-  writeFileSync(join(projDir, 'race-old.md'), diagramDoc('OLDDOC', 20, 0));
-  writeFileSync(join(projDir, 'race-new.md'), diagramDoc('NEWDOC', 20, 0));
-  mkdirSync(join(projDir, 'sub'));
-  writeFileSync(join(projDir, 'sub', 'inside.txt'), 'inside\n');
+  return guardedLaunch(async (scope) => {
+    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+    const home = scope.tempDir(`metaide-md-${label}-home-`);
+    const root = scope.tempDir(`metaide-md-${label}-root-`);
+    const projDir = join(root, PROJECT);
+    mkdirSync(projDir);
+    mkdirSync(join(projDir, '.git'));
+    cpSync(FIXTURES, projDir, { recursive: true });
+    rmSync(join(projDir, '.gitkeep'), { force: true });
+    writeFileSync(join(projDir, 'perf.md'), diagramDoc('PERFDOC', 20, 10));
+    writeFileSync(join(projDir, 'race-old.md'), diagramDoc('OLDDOC', 20, 0));
+    writeFileSync(join(projDir, 'race-new.md'), diagramDoc('NEWDOC', 20, 0));
+    mkdirSync(join(projDir, 'sub'));
+    writeFileSync(join(projDir, 'sub', 'inside.txt'), 'inside\n');
 
-  const app = await electron.launch({
-    args: ['.', `--user-data-dir=${join(home, 'userData')}`],
-    env: {
-      ...process.env,
-      HOME: home,
-      METAIDE_TEST_MODE: '1',
-      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-      METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
-      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({
-        argv: ['node', mockClaude, '--continue'],
-        env: {},
-      }),
-    },
-  });
-  const win = await app.firstWindow();
-  const ide: Ide = {
-    app,
-    win,
-    projDir,
-    pageErrors: [],
-    cspConsole: [],
-    requests: [],
-    cleanup: async () => {
-      await app.close();
-      rmSync(home, { recursive: true, force: true });
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
-  win.on('pageerror', (err) => ide.pageErrors.push(err.message));
-  win.on('console', (msg) => {
-    if (CSP_TEXT.test(msg.text())) ide.cspConsole.push(msg.text());
-  });
-  win.on('request', (req) => ide.requests.push(req.url()));
-  await win.waitForLoadState('domcontentloaded');
-
-  // Second CSP signal besides the console: the DOM violation event. The
-  // resource-timing buffer (250 entries by default) is widened because the
-  // shared instance loads many mermaid chunks and fonts before AC16 reads it.
-  await win.evaluate(() => {
-    performance.setResourceTimingBufferSize(100000);
-    const w = window as unknown as { __csp: string[] };
-    w.__csp = [];
-    document.addEventListener('securitypolicyviolation', (e) => {
-      w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`);
-    });
-  });
-
-  // Record shell.openExternal instead of opening a browser. The main-process
-  // handler rejects non-allow-listed schemes before calling it, so an empty
-  // list proves no external open happened for any scheme.
-  await app.evaluate(({ shell }) => {
-    const g = globalThis as unknown as { __opened: string[] };
-    g.__opened = [];
-    shell.openExternal = async (url: string) => {
-      g.__opened.push(url);
+    const app = scope.own(await electron.launch({
+      args: ['.', `--user-data-dir=${join(home, 'userData')}`],
+      env: {
+        ...process.env,
+        HOME: home,
+        METAIDE_TEST_MODE: '1',
+        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+        METAIDE_DEFAULT_LAUNCH_FIRST: JSON.stringify({ argv: ['node', mockClaude], env: {} }),
+        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({
+          argv: ['node', mockClaude, '--continue'],
+          env: {},
+        }),
+      },
+    }));
+    const win = await app.firstWindow();
+    const ide: Ide = {
+      app,
+      win,
+      projDir,
+      pageErrors: [],
+      cspConsole: [],
+      requests: [],
+      cleanup: async () => {
+        await closeApp(app);
+        rmSync(home, { recursive: true, force: true });
+        rmSync(root, { recursive: true, force: true });
+      },
     };
-  });
+    win.on('pageerror', (err) => ide.pageErrors.push(err.message));
+    win.on('console', (msg) => {
+      if (CSP_TEXT.test(msg.text())) ide.cspConsole.push(msg.text());
+    });
+    win.on('request', (req) => ide.requests.push(req.url()));
+    await win.waitForLoadState('domcontentloaded');
 
-  // Seed the root through IPC (dialogs are no-ops under METAIDE_TEST_MODE).
-  await win.evaluate(async (path: string) => {
-    const api = (
-      window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }
-    ).api;
-    await api.invoke('roots:add', { path });
-  }, root);
-  const projectButton = win.getByRole('button', { name: PROJECT, exact: true });
-  await expect(projectButton).toBeVisible({ timeout: 10000 });
-  await projectButton.click();
-  await win.getByRole('button', { name: 'Files', exact: true }).click();
-  await expect(fileEntry(win, 'flowchart.md')).toBeVisible({ timeout: 10000 });
-  return ide;
+    // Second CSP signal besides the console: the DOM violation event. The
+    // resource-timing buffer (250 entries by default) is widened because the
+    // shared instance loads many mermaid chunks and fonts before AC16 reads it.
+    await win.evaluate(() => {
+      performance.setResourceTimingBufferSize(100000);
+      const w = window as unknown as { __csp: string[] };
+      w.__csp = [];
+      document.addEventListener('securitypolicyviolation', (e) => {
+        w.__csp.push(`${e.violatedDirective} ${e.blockedURI}`);
+      });
+    });
+
+    // Record shell.openExternal instead of opening a browser. The main-process
+    // handler rejects non-allow-listed schemes before calling it, so an empty
+    // list proves no external open happened for any scheme.
+    await app.evaluate(({ shell }) => {
+      const g = globalThis as unknown as { __opened: string[] };
+      g.__opened = [];
+      shell.openExternal = async (url: string) => {
+        g.__opened.push(url);
+      };
+    });
+
+    // Seed the root through IPC (dialogs are no-ops under METAIDE_TEST_MODE).
+    await win.evaluate(async (path: string) => {
+      const api = (
+        window as unknown as { api: { invoke: (c: string, r: unknown) => Promise<unknown> } }
+      ).api;
+      await api.invoke('roots:add', { path });
+    }, root);
+    const projectButton = win.getByRole('button', { name: PROJECT, exact: true });
+    await expect(projectButton).toBeVisible({ timeout: 10000 });
+    await projectButton.click();
+    await win.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(fileEntry(win, 'flowchart.md')).toBeVisible({ timeout: 10000 });
+    return ide;
+  });
 }
 
 function fileEntry(win: Page, name: string): Locator {
