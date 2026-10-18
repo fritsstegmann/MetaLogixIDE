@@ -70,6 +70,10 @@ stay cheap and must never wait on a child process.
   skips a poll tick while a request is in flight. Git commands that the user
   starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
   use `spawnSync`; this is a known gap, recorded as a follow-up.
+- **mise task listing is asynchronous.** `tasks:discover` and `tasks:run`
+  list mise tasks through the async `execFile` in `listMiseTasks`
+  (`src/main/domain/mise-cli.ts:48`). mise is killed after 5 s. A project
+  without a mise config file or task directory starts no mise process.
 
 ## Components
 
@@ -1077,6 +1081,58 @@ Rules:
 - The Git panel uses the same `git:panel-status` and `git:file-diff`
   handlers. It keeps its own unified diff, without highlighting.
 
+### Tasks panel
+
+The Tasks panel lists the runnable tasks of the selected project in four
+groups, in this order: npm scripts, Makefile, docker compose and mise
+(`TASK_SOURCES`, `src/shared/tasks-contract.ts:11`). A click on a row runs
+the task in a new shell tab. The ActivityBar badge shows the task count.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/tasks-contract.ts` | `TaskSource`, `TaskDef`, `TaskNotice`, `TasksDiscovery` (the `tasks:discover` response) and `TASKS_COPY`, which holds every string of the panel. Main sends a notice kind. The renderer maps the kind to text. |
+| Logic | `src/main/domain/tasks.ts` | `discoverTasks` reads package.json, the Makefile and the compose file synchronously. `discoverAllTasks` returns those tasks, then the mise tasks, plus at most one notice. |
+| Logic | `src/main/domain/mise-tasks.ts` | The marker check (`MISE_MARKERS`, project root only), the parser of mise's JSON output, and the mapping of a listing failure to a notice. |
+| IO | `src/main/domain/mise-cli.ts` | `listMiseTasks` runs `mise tasks ls --json --local`. It never rejects: every outcome is one `MiseListResult` value. Same shape as `runGit`. |
+| IO | `src/main/services.ts` | `listMise`, the injected lister. Tests replace it, so no test needs a mise binary. |
+| IO | `src/main/ipc/register.ts` | `discoverProjectTasks` lists with `{ ...process.env, ...projectSpawnEnv }`. `tasks:run` calls it again on every run and spawns the task's argv. |
+| Logic | `src/renderer/tasks-view.ts` | Filter, grouping, and the project-keyed discovery state. |
+| Presentation | `src/renderer/components/TasksPanel.tsx` | The panel, `TaskGroups` and `TaskNoticeLine`. A request gate drops a reply that is not the latest. |
+| Presentation | `src/renderer/hooks/useTaskCount.ts` | The badge count, keyed by project. |
+
+Rules:
+
+- mise tasks are listed only when the project root holds one of the
+  `MISE_MARKERS` (`src/main/domain/mise-tasks.ts:13-17`). Parent folders
+  are not checked. When the root has a marker, mise also reports tasks from
+  non-global configs in parent folders, and the panel shows them.
+- Listing runs in the project root with the environment the task is spawned
+  with, so `MISE_ENV` or a PATH set in the project variables applies to
+  both.
+- The parser drops hidden tasks, global tasks, tasks with an empty name and
+  tasks whose name starts with `-`. `mise run` reads a leading `-` as its
+  own option (`-C` is `--cd`), and `--` does not prevent that. Output that
+  is not a JSON array of objects with a string `name` is rejected as a
+  whole. The panel never shows a partial list.
+- A listing failure gives no mise tasks and one notice. The kinds are
+  `not-found` (ENOENT), `untrusted` (mise's error text contains
+  "not trusted"), `timed-out`, `unexpected` (bad output) and `failed`.
+  A `failed` notice shows the first `mise ERROR` line of stderr, else its
+  first line, without ANSI codes and capped at 200 characters. A TOML
+  syntax error in a config that is not trusted is reported as "not
+  trusted", so the panel shows the `mise trust` notice. In a trusted
+  config, the same error gives a `failed` notice with mise's parse error.
+- The notice shows as one muted line in the mise group. It raises no
+  toast. The other groups still show.
+- **Trust boundary.** `mise run` marks the config it runs as trusted. The
+  panel never runs a task from a config that listing reported as not
+  trusted: such a listing yields no mise tasks, and `tasks:run` lists again
+  before every run, so a `mise:` id fails with "no task" and nothing is
+  spawned. A config that holds only tasks lists without trust. A run from
+  the panel then records it as trusted, the same as a run in a terminal.
+- On a project switch the panel and the badge clear at once. A reply for a
+  project the user has left is dropped.
+
 ## Data Flow
 
 1. `MarkdownPreview` calls `renderMarkdown(source)`. This is synchronous.
@@ -1206,6 +1262,22 @@ The user saves the project Env tab, and a shell starts:
    side over its full content. The highlighting is memoised on the content
    and the language, so an unchanged side is not highlighted again.
 
+### Tasks discovery
+
+1. `TasksPanel` and `useTaskCount` each call `tasks:discover` when the
+   selected project changes. Both render at once with an empty list or no
+   count.
+2. The handler reads package.json, the Makefile and the compose file.
+3. If the project root holds a mise marker, `listMiseTasks` runs
+   `mise tasks ls --json --local` in the project root with the project
+   spawn environment, for at most 5 s.
+4. `discoverMiseTasks` parses the output into tasks, or maps the failure to
+   one notice.
+5. The handler returns `{ tasks, notices }`. The renderer drops the reply if
+   the user has switched project since the request.
+6. On a click, `tasks:run` discovers again, finds the task by id, and spawns
+   its argv (`mise run <name>` for a mise task) in a new shell tab.
+
 ## Authorization Model
 
 Not applicable to the preview. It reads only the local file buffer.
@@ -1282,6 +1354,7 @@ the whole side falls back to escaped plain text.
 | `highlight.js` | lockfile | Code block highlighting, and both sides of the Diff tab. |
 | `katex` | 0.16.47, exact pin | Math. Also the version `mermaid` depends on, so the bundle has one copy. |
 | `mermaid` | 11.17.2, exact pin | Diagrams. Version 12 requires Node 22, and the repo uses Node 20. |
+| mise CLI | external, user-installed; developed against 2026.10.4 | Tasks panel listing and running. Only the `name`, `description`, `hide` and `global` fields of `mise tasks ls --json` are read. The JSON format is not documented by mise. |
 
 ## Architectural Decisions
 
