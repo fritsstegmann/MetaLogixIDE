@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@renderer/api';
 import type { IpcResponse } from '@shared/ipc-contract';
 import { PEEK_COPY, PEEK_TESTIDS, peekOpenAction, peekOpenRequest, type PeekOpenAction } from '@renderer/peek-open';
@@ -18,19 +18,15 @@ type PeekData = IpcResponse<'files:peek'>;
  * clamps to viewport. Not dismissible from inside — the parent controls open/close via its own hover / leave logic on the
  * terminal link. `popout` marks a popout window, where a file from another project previews but cannot be opened.
  */
-export function HoverPreview({ state, popout = false, onOpen, onPeek, hold }: {
+export function HoverPreview({ state, popout = false, onOpen, hold }: {
   state: HoverPreviewState | null;
   popout?: boolean;
   onOpen: HoverPreviewOpen;
-  /** Receives each peek result for `state`, so a click on the path itself can reuse it. */
-  onPeek?: (state: HoverPreviewState, data: PeekData) => void;
   /** Pointer enter/leave on the card, so the parent keeps the card open while the pointer is on it. */
   hold?: HoverPreviewHold;
 }) {
   const [data, setData] = useState<PeekData | null>(null);
   const [loading, setLoading] = useState(false);
-  const onPeekRef = useRef(onPeek);
-  onPeekRef.current = onPeek;
 
   useEffect(() => {
     if (!state) { setData(null); return; }
@@ -40,7 +36,7 @@ export function HoverPreview({ state, popout = false, onOpen, onPeek, hold }: {
     (async () => {
       try {
         const res = await api.invoke('files:peek', { projectId: state.projectId, relPath: state.path });
-        if (!cancelled) { setData(res); onPeekRef.current?.(state, res); }
+        if (!cancelled) setData(res);
       } catch {
         if (!cancelled) setData({ relPath: state.path, projectId: null, found: false, kind: 'text', head: '', sizeBytes: 0, totalLines: null });
       } finally {

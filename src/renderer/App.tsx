@@ -43,6 +43,7 @@ import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
 import { api } from './api';
+import { createPendingFileOpen } from './pending-file-open';
 import { useTheme, type ThemeMode } from './hooks/useTheme';
 import { usePersistedNumber } from './hooks/usePersistedNumber';
 import { usePersistedState } from './hooks/usePersistedState';
@@ -201,8 +202,15 @@ function MainApp() {
   useEffect(() => { if (activeView === 'chat') setChatUnread(0); }, [activeView]);
   // Clear any pending "open this file" request when the project changes —
   // otherwise a relPath captured from project A would fire in project B's
-  // FilesTab and either open the wrong file or 404.
-  useEffect(() => { setOpenInFiles(null); }, [selected?.id]);
+  // FilesTab and either open the wrong file or 404. The one exception is a
+  // file opened from another project's terminal path, recorded for exactly
+  // this project before the switch.
+  const [pendingFileOpen] = useState(createPendingFileOpen);
+  useEffect(() => {
+    const open = pendingFileOpen.take(selected?.id ?? null);
+    setOpenInFiles(open);
+    if (open) setMainTab('files');
+  }, [selected?.id, pendingFileOpen, setMainTab]);
   // Refresh task count for the ActivityBar pip whenever the project changes.
   // Cheap: it's a filesystem read of package.json + Makefile + compose.
   useEffect(() => {
@@ -548,15 +556,18 @@ function MainApp() {
   // resolve after the user has clicked a DIFFERENT project. Without this
   // ref the stale earlier setSelected would win, reverting the click.
   const lastPickIdRef = useRef<number | null>(null);
-  async function pick(p: Pick<Project, 'id'>) {
+  /** Selects `p` as the sidebar does and launches its shell; resolves true when it selected `p`, false when the open failed or a newer pick superseded it. */
+  async function pick(p: Pick<Project, 'id'>): Promise<boolean> {
     setProjectSettingsTarget(null);
     lastPickIdRef.current = p.id;
     terminalFocus.cancelRequest();
+    let selectedIt = false;
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
-      if (lastPickIdRef.current !== p.id) return;    // superseded by a newer click
+      if (lastPickIdRef.current !== p.id) return false;    // superseded by a newer click
       if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
+      selectedIt = true;
       await api.invoke('shells:launch', { projectId: project.id });
     } catch (e) {
       // Only surface the toast when the failure is for the current pick —
@@ -566,22 +577,22 @@ function MainApp() {
       }
       console.error(e);
     }
+    return selectedIt;
   }
 
   /**
-   * Opens a file a hover preview found in another project: selects that project through the sidebar's `pick` path, then
-   * opens `relPath` in its Files tab once the selection has landed. Does nothing further when the pick failed or was
-   * superseded by a newer selection.
+   * Opens a file a terminal path or hover preview found in another project: records it as pending for that project,
+   * then selects the project through the sidebar's `pick` path. The project-change effect opens it in the Files tab
+   * when the selection lands; a failed or superseded pick drops it and restores the tab ref.
    */
   async function openFileInProject(projectId: number, relPath: string, line: number | null): Promise<void> {
-    // Set synchronously so pick() queues no terminal focus; the next render restores the ref if the pick fails.
+    pendingFileOpen.request(projectId, { relPath, line });
+    const previousTab = mainTabRef.current;
+    // Set synchronously so pick() queues no terminal focus for a tab that is about to become Files.
     mainTabRef.current = 'files';
-    await pick({ id: projectId });
-    requestAnimationFrame(() => {
-      if (selectedRef.current?.id !== projectId) return;
-      setMainTab('files');
-      setOpenInFiles({ relPath, line });
-    });
+    const selectedIt = await pick({ id: projectId });
+    pendingFileOpen.pickSettled(projectId, selectedIt);
+    if (!selectedIt) mainTabRef.current = previousTab;
   }
 
   function editEnv(p: Project) {

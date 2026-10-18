@@ -16,7 +16,8 @@ import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewOpen, type HoverPreviewState } from './HoverPreview';
-import { createHoverHold, resolvePathClick, type PeekResult } from '@renderer/peek-open';
+import { resolvePathClick } from '@renderer/peek-open';
+import { createHoverHold } from '@renderer/hover-hold';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
@@ -82,7 +83,7 @@ export function ShellTab({
 }: {
   projectId: number;
   shellIndex: number;
-  /** Opens a file from terminal output; `projectId` is set only when a hover preview found it in another project. */
+  /** Opens a file from terminal output; a click on the preview card or on the printed path passes `projectId` only when the peek found the file in another project. */
   onOpenFile?: HoverPreviewOpen;
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
@@ -136,16 +137,11 @@ export function ShellTab({
   onOpenFileRef.current = onOpenFile;
   const [hoverHold] = useState(() => createHoverHold(() => setHover(null)));
   useEffect(() => hoverHold.dispose, [hoverHold]);
-  const peekCacheRef = useRef<{ path: string; peek: PeekResult } | null>(null);
-  const cachePeek = useCallback((state: HoverPreviewState, peek: PeekResult) => {
-    peekCacheRef.current = { path: state.path, peek };
-  }, []);
   const openPeekedPathRef = useRef<(path: string, line: number | null) => Promise<void>>(async () => undefined);
   openPeekedPathRef.current = async (path, line) => {
     const req = await resolvePathClick(path, line, {
       currentProjectId: projectId,
       popout,
-      cached: peekCacheRef.current,
       peek: (relPath) => api.invoke('files:peek', { projectId, relPath }),
     });
     if (req) onOpenFileRef.current?.(req.relPath, req.line, req.projectId);
@@ -574,7 +570,6 @@ export function ShellTab({
       <HoverPreview
         state={hover}
         popout={popout}
-        onPeek={cachePeek}
         hold={hoverHold}
         onOpen={(relPath, line, targetProjectId) => { hoverHold.dispose(); setHover(null); onOpenFileRef.current?.(relPath, line, targetProjectId); }}
       />

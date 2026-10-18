@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PEEK_CLOSE_DELAY_MS, PEEK_COPY, createHoverHold, peekClickRequest, resolvePathClick, peekOpenAction, peekOpenRequest, type PeekOpenInput } from '@renderer/peek-open';
+import { describe, it, expect, vi } from 'vitest';
+import { PEEK_COPY, peekClickRequest, resolvePathClick, peekOpenAction, peekOpenRequest, type PeekOpenInput } from '@renderer/peek-open';
 
 const base: PeekOpenInput = { found: true, projectId: 1, currentProjectId: 1, popout: false };
 
@@ -70,125 +70,30 @@ describe('peekClickRequest (click on the printed path)', () => {
   });
 });
 
-describe('createHoverHold', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
-
-  it('closes once the delay passes after the pointer leaves the path', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.linkEnter();
-    hold.linkLeave();
-    vi.advanceTimersByTime(199);
-    expect(close).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('stays open when the card is entered within the delay after leaving the path', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.linkEnter();
-    hold.linkLeave();
-    vi.advanceTimersByTime(150);
-    hold.cardEnter();
-    vi.advanceTimersByTime(1000);
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it('stays open when the card enter arrives before the path leave (pointer events precede mouse events)', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.linkEnter();
-    hold.cardEnter();
-    hold.linkLeave();
-    vi.advanceTimersByTime(1000);
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it('closes after the pointer leaves the card, unless it returns to the path', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.cardEnter();
-    hold.linkLeave();
-    hold.cardLeave();
-    vi.advanceTimersByTime(100);
-    hold.linkEnter();
-    vi.advanceTimersByTime(1000);
-    expect(close).not.toHaveBeenCalled();
-    hold.linkLeave();
-    vi.advanceTimersByTime(200);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes only once for repeated leaves', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.linkLeave();
-    vi.advanceTimersByTime(100);
-    hold.cardLeave();
-    vi.advanceTimersByTime(199);
-    expect(close).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1000);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('drops a pending close on dispose and forgets the pointer was on the card', () => {
-    const close = vi.fn();
-    const hold = createHoverHold(close, 200);
-    hold.cardEnter();
-    hold.dispose();
-    hold.linkEnter();
-    hold.linkLeave();
-    vi.advanceTimersByTime(200);
-    expect(close).toHaveBeenCalledTimes(1);
-    hold.linkLeave();
-    hold.dispose();
-    vi.advanceTimersByTime(1000);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it('defaults to PEEK_CLOSE_DELAY_MS and accepts injected timers', () => {
-    const set = vi.fn((): ReturnType<typeof setTimeout> => 7 as unknown as ReturnType<typeof setTimeout>);
-    const clear = vi.fn();
-    const hold = createHoverHold(() => undefined, undefined, { set, clear });
-    hold.linkLeave();
-    expect(set).toHaveBeenCalledWith(expect.any(Function), PEEK_CLOSE_DELAY_MS);
-    hold.linkEnter();
-    expect(clear).toHaveBeenCalledWith(7);
-  });
-});
-
 describe('resolvePathClick', () => {
-  const other = { relPath: 'f', projectId: 2, found: true };
-
-  it('reuses the card peek for the same path without peeking again', async () => {
-    const peek = vi.fn();
-    await expect(resolvePathClick('/b/f', 3, { currentProjectId: 1, popout: false, cached: { path: '/b/f', peek: other }, peek }))
-      .resolves.toEqual({ relPath: 'f', line: 3, projectId: 2 });
-    expect(peek).not.toHaveBeenCalled();
+  it('peeks the clicked path at click time and routes by the result', async () => {
+    const peek = vi.fn(async () => ({ relPath: 'f', projectId: 2, found: true }));
+    await expect(resolvePathClick('/b/f', 3, { currentProjectId: 1, popout: false, peek })).resolves.toEqual({ relPath: 'f', line: 3, projectId: 2 });
+    expect(peek).toHaveBeenCalledWith('/b/f');
   });
 
-  it('peeks afresh when the cached peek is for another path', async () => {
+  it('opens a current-project hit here', async () => {
     const peek = vi.fn(async () => ({ relPath: 'g', projectId: 1, found: true }));
-    await expect(resolvePathClick('g', null, { currentProjectId: 1, popout: false, cached: { path: '/b/f', peek: other }, peek }))
-      .resolves.toEqual({ relPath: 'g', line: null });
-    expect(peek).toHaveBeenCalledWith('g');
+    await expect(resolvePathClick('g', null, { currentProjectId: 1, popout: false, peek })).resolves.toEqual({ relPath: 'g', line: null });
   });
 
-  it('peeks afresh with no cache and routes by the result', async () => {
+  it('opens nothing for a hit outside every project', async () => {
     const peek = vi.fn(async () => ({ relPath: '/x', projectId: null, found: true }));
-    await expect(resolvePathClick('/x', null, { currentProjectId: 1, popout: false, cached: null, peek })).resolves.toBeNull();
-    expect(peek).toHaveBeenCalledTimes(1);
+    await expect(resolvePathClick('/x', null, { currentProjectId: 1, popout: false, peek })).resolves.toBeNull();
   });
 
   it('applies the popout rule to the peek result', async () => {
-    await expect(resolvePathClick('/b/f', 1, { currentProjectId: 1, popout: true, cached: { path: '/b/f', peek: other }, peek: vi.fn() }))
-      .resolves.toBeNull();
+    const peek = vi.fn(async () => ({ relPath: 'f', projectId: 2, found: true }));
+    await expect(resolvePathClick('/b/f', 1, { currentProjectId: 1, popout: true, peek })).resolves.toBeNull();
   });
 
   it('opens nothing when the peek fails', async () => {
     const peek = vi.fn(async () => { throw new Error('boom'); });
-    await expect(resolvePathClick('a', 1, { currentProjectId: 1, popout: false, cached: null, peek })).resolves.toBeNull();
+    await expect(resolvePathClick('a', 1, { currentProjectId: 1, popout: false, peek })).resolves.toBeNull();
   });
 });
