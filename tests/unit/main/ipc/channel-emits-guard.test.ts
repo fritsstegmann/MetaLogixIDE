@@ -119,6 +119,13 @@ describe('shell mutation scanner', () => {
     ['a renamed destructured receiver', `const { ptyManager: pty } = s; pty.spawn(1, 0, {})`],
     ['a destructured method', `const { kill } = s.ptyManager; kill(1, 0)`],
     ['a destructuring assignment', `let pty; ({ ptyManager: pty } = s); pty.kill(1, 0)`],
+    ['a string-literal computed destructuring key', `const { ['ptyManager']: p } = s; p.spawn(1, 0, {})`],
+    ['a template-literal computed destructuring key', `const { [\`shells\`]: sh } = s; sh.remove(1, 0)`],
+    ['a non-literal computed destructuring key', `const { [key]: p } = s; p.spawn(1, 0, {})`],
+    ['a computed key in a destructuring assignment', `let p; ({ ['ptyManager']: p } = s); p.kill(1, 0)`],
+    ['a non-literal computed key in a destructuring assignment', `let p; ({ [key]: p } = s); p.kill(1, 0)`],
+    ['a computed key in the handler parameter destructuring', `(({ ['shells']: sh }) => sh.upsert({}))(s)`],
+    ['a numeric index followed by a mutating method on any object', `r.procs[0]?.kill()`],
   ])('throws on %s instead of passing the handler', (_label, body) => {
     const files = { 'main.ts': `const handlers = { 'g:hidden': async (s, { method, key }) => { ${body}; } };` };
     expect(() => scanSynthetic(files)).toThrow(/g:hidden: cannot analyse/);
@@ -135,6 +142,13 @@ describe('shell mutation scanner', () => {
     expect(() => scanSynthetic({ 'main.ts': `${helper} const run = (s) => evict(s); const handlers = { 'h:via': async (s) => run(s) };` }))
       .toThrow(/h:via: cannot analyse helper run/);
     const scan = scanSynthetic({ 'main.ts': `${helper} ${boot} const handlers = { 'h:clean': async (s) => s.shells.list() };` });
+    expect(scan.mutating).toEqual([]);
+  });
+
+  it('passes an indexed element bound to a local first, and literal computed keys naming other services', () => {
+    const scan = scanSynthetic({
+      'main.ts': `const handlers = { 'j:bound': async (s, r) => { const p = r.procs[0]; p?.kill(); const { ['projects']: pr } = s; pr.remove(1); } };`,
+    });
     expect(scan.mutating).toEqual([]);
   });
 

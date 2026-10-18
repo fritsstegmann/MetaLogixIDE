@@ -3,22 +3,29 @@
  * spawns, kills, removes or records a shell (`ptyManager.spawn/kill`,
  * `shells.upsert/remove`), directly or through any same-file helper it
  * references, transitively. A mutation is recognised when the method is
- * read off a receiver named `ptyManager`/`shells` (an identifier, or a
- * property or string-literal element access), through any mix of `?.`, `!`,
- * parentheses, `as` and `satisfies`, whether or not it is called on the
- * spot. Shapes that hide the receiver or method make the scan throw instead
- * of passing the handler: a computed key on the receiver or method, the
- * receiver used as a value rather than as the object of a member access
- * (aliased, passed to a function, stored, returned, truth-tested), and any
- * destructuring of a receiver name (declaration, parameter or assignment).
+ * read off a receiver named `ptyManager`/`shells` (an identifier, a property
+ * access, or a string- or template-literal element access), through any mix
+ * of `?.`, `!`, parentheses, `as` and `satisfies`, whether or not it is
+ * called on the spot. Shapes that hide the receiver or method make the scan
+ * throw instead of passing the handler: (1) a non-string key (computed or
+ * numeric) on a `ptyManager`/`shells` receiver, or on ANY object when the
+ * next member is `spawn`, `kill`, `upsert` or `remove`, so `procs[0]?.kill()`
+ * throws "cannot analyse procs[0]" (remedy: bind the element to a local
+ * first, `const p = procs[0]; p?.kill()`); (2) a `ptyManager`/`shells` member
+ * used as a value rather than as the object of a member access (aliased,
+ * passed to a function, stored, returned, truth-tested); (3) an object
+ * destructuring pattern, in a declaration, parameter or assignment, whose
+ * key names `ptyManager`/`shells` (plain, quoted, or a string/template
+ * literal computed key such as `{ ['ptyManager']: p }`), or whose computed
+ * key is not a literal (`{ [k]: p }`), whatever object is destructured.
  * Such a shape only throws when a handler reaches it, so code outside the
  * handlers' helper closure may use it freely. Spreads in the map
  * (`...dropHandlers`) are followed into same-file constants or imported
  * modules; a spread or handler key it cannot read throws. Not covered:
  * helpers imported from other modules and called by a handler (only spreads
  * are followed across files), a services object whose receivers live under
- * property names other than `ptyManager`/`shells`, and dynamic access such
- * as `Reflect.get` or `eval`.
+ * property names other than `ptyManager`/`shells`, and dynamic access
+ * such as `Reflect.get` or `eval`.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -94,9 +101,15 @@ function usedAsMemberObject(node: ts.Node): boolean {
   return isMember(outer.parent) && outer.parent.expression === outer;
 }
 
-function bindingKey(node: ts.BindingElement): string | null {
-  const key = node.propertyName ?? node.name;
-  return ts.isIdentifier(key) || ts.isStringLiteral(key) ? key.text : null;
+const UNKNOWN_KEY = Symbol('unknown key');
+type KeyText = string | typeof UNKNOWN_KEY | null;
+
+function keyText(name: ts.Node | undefined): KeyText {
+  if (!name) return null;
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text;
+  if (!ts.isComputedPropertyName(name)) return null;
+  const expr = unwrap(name.expression);
+  return ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr) ? expr.text : UNKNOWN_KEY;
 }
 
 function isAssignmentTarget(obj: ts.ObjectLiteralExpression): boolean {
@@ -104,11 +117,10 @@ function isAssignmentTarget(obj: ts.ObjectLiteralExpression): boolean {
   return ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && parent.left === obj;
 }
 
-function destructuredKey(node: ts.Node): string | null {
-  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) return bindingKey(node);
+function destructuredKey(node: ts.Node): KeyText {
+  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) return keyText(node.propertyName ?? node.name);
   if (!ts.isObjectLiteralElement(node) || !ts.isObjectLiteralExpression(node.parent) || !isAssignmentTarget(node.parent)) return null;
-  const name = node.name;
-  return name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : null;
+  return keyText(node.name);
 }
 
 function memberHides(node: Member): boolean {
@@ -119,6 +131,7 @@ function memberHides(node: Member): boolean {
 
 function unreadableShape(node: ts.Node): string | null {
   const key = destructuredKey(node);
+  if (key === UNKNOWN_KEY) return `computed destructuring key ${node.getText().slice(0, 60)}`;
   if (key !== null && RECEIVERS.has(key)) return `destructured ${key}`;
   if (isMember(node) && memberHides(node)) return node.getText().slice(0, 60);
   return null;
