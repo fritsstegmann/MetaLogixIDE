@@ -2003,3 +2003,80 @@ describe('project file handlers keep every path inside the project root', () => 
     });
   });
 });
+
+describe('files:read', () => {
+  /** Project 1 rooted at a fresh temp dir, plus a caller for the real files:read handler. */
+  function readRig() {
+    const root = mkdtempSync(join(tmpdir(), 'reg-read-'));
+    const projects = { get: (id: number) => (id === 1 ? { id: 1, path: root } : undefined), list: () => [{ id: 1, path: root }] };
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    const read = (req: Record<string, unknown>) => ipc.handlers.get('files:read')!({}, { projectId: 1, ...req });
+    return { root, read };
+  }
+
+  /** A buffer of `size` printable bytes with a single NUL at `nulAt`. */
+  function withNulAt(size: number, nulAt: number): Buffer {
+    const buf = Buffer.alloc(size, 0x61);
+    buf[nulAt] = 0;
+    return buf;
+  }
+
+  it('returns a text file inside a subdirectory as utf8 text with its size', async () => {
+    const { root, read } = readRig();
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub', 'code.ts'), 'export const x = "é";');
+    await expect(read({ relPath: 'sub/code.ts' })).resolves.toEqual({ content: 'export const x = "é";', kind: 'text', sizeBytes: 22 });
+  });
+
+  it('rejects an unknown project', async () => {
+    const { read } = readRig();
+    await expect(read({ projectId: 9, relPath: 'x' })).rejects.toThrow('no project 9');
+  });
+
+  it('rejects parent-climbing and absolute paths outside the root', async () => {
+    const { read } = readRig();
+    await expect(read({ relPath: '../../etc/passwd' })).rejects.toThrow('path escapes project root');
+    await expect(read({ relPath: '/etc/passwd' })).rejects.toThrow('path escapes project root');
+  });
+
+  it('rejects a directory', async () => {
+    const { root, read } = readRig();
+    mkdirSync(join(root, 'sub'));
+    await expect(read({ relPath: 'sub' })).rejects.toThrow('sub is a directory');
+  });
+
+  it('reports a NUL byte in the scanned head as binary with empty content', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([1, 0, 2]));
+    await expect(read({ relPath: 'bin' })).resolves.toEqual({ content: '', kind: 'binary', sizeBytes: 3 });
+  });
+
+  it('scans exactly the first 8192 bytes: a NUL at offset 8191 is binary, at 8192 is text', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'last-in'), withNulAt(9000, 8191));
+    writeFileSync(join(root, 'first-out'), withNulAt(9000, 8192));
+    await expect(read({ relPath: 'last-in' })).resolves.toMatchObject({ kind: 'binary', content: '' });
+    const outside = await read({ relPath: 'first-out' }) as { kind: string; content: string };
+    expect(outside.kind).toBe('text');
+    expect(outside.content).toHaveLength(9000);
+  });
+
+  it('forceText returns a NUL-bearing file as text instead of the binary placeholder', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([0x61, 0, 0x62]));
+    await expect(read({ relPath: 'bin', forceText: true })).resolves.toEqual({ content: 'a\u0000b', kind: 'text', sizeBytes: 3 });
+  });
+
+  it('caps the preview at 2 MB: 2_000_000 bytes are read, 2_000_001 return the size message', async () => {
+    const { root, read } = readRig();
+    writeFileSync(join(root, 'at-cap'), Buffer.alloc(2_000_000, 0x61));
+    writeFileSync(join(root, 'over-cap'), Buffer.alloc(2_000_001, 0x61));
+    const atCap = await read({ relPath: 'at-cap' }) as { content: string; kind: string; sizeBytes: number };
+    expect(atCap.kind).toBe('text');
+    expect(atCap.content).toHaveLength(2_000_000);
+    await expect(read({ relPath: 'over-cap' })).resolves.toEqual({
+      content: 'File too large (2000001 bytes) — preview capped at 2 MB.', kind: 'text', sizeBytes: 2_000_001,
+    });
+  });
+});
