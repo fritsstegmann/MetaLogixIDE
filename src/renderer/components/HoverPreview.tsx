@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import type { IpcResponse } from '@shared/ipc-contract';
 import { PEEK_COPY, PEEK_TESTIDS, peekOpenAction, peekOpenRequest, type PeekOpenAction } from '@renderer/peek-open';
@@ -18,9 +18,19 @@ type PeekData = IpcResponse<'files:peek'>;
  * clamps to viewport. Not dismissible from inside — the parent controls open/close via its own hover / leave logic on the
  * terminal link. `popout` marks a popout window, where a file from another project previews but cannot be opened.
  */
-export function HoverPreview({ state, popout = false, onOpen }: { state: HoverPreviewState | null; popout?: boolean; onOpen: HoverPreviewOpen }) {
+export function HoverPreview({ state, popout = false, onOpen, onPeek, hold }: {
+  state: HoverPreviewState | null;
+  popout?: boolean;
+  onOpen: HoverPreviewOpen;
+  /** Receives each peek result for `state`, so a click on the path itself can reuse it. */
+  onPeek?: (state: HoverPreviewState, data: PeekData) => void;
+  /** Pointer enter/leave on the card, so the parent keeps the card open while the pointer is on it. */
+  hold?: HoverPreviewHold;
+}) {
   const [data, setData] = useState<PeekData | null>(null);
   const [loading, setLoading] = useState(false);
+  const onPeekRef = useRef(onPeek);
+  onPeekRef.current = onPeek;
 
   useEffect(() => {
     if (!state) { setData(null); return; }
@@ -30,7 +40,7 @@ export function HoverPreview({ state, popout = false, onOpen }: { state: HoverPr
     (async () => {
       try {
         const res = await api.invoke('files:peek', { projectId: state.projectId, relPath: state.path });
-        if (!cancelled) setData(res);
+        if (!cancelled) { setData(res); onPeekRef.current?.(state, res); }
       } catch {
         if (!cancelled) setData({ relPath: state.path, projectId: null, found: false, kind: 'text', head: '', sizeBytes: 0, totalLines: null });
       } finally {
@@ -41,19 +51,23 @@ export function HoverPreview({ state, popout = false, onOpen }: { state: HoverPr
   }, [state]);
 
   if (!state) return null;
-  return <HoverPreviewCard state={state} data={data} loading={loading} popout={popout} onOpen={onOpen} />;
+  return <HoverPreviewCard state={state} data={data} loading={loading} popout={popout} onOpen={onOpen} hold={hold} />;
 }
+
+/** Pointer enter/leave callbacks for the preview card. */
+export interface HoverPreviewHold { cardEnter: () => void; cardLeave: () => void }
 
 /** Opens a previewed file; `projectId` is set only when the file belongs to a project other than the terminal's. */
 export type HoverPreviewOpen = (relPath: string, line: number | null, projectId?: number) => void;
 
 /** The preview card for a fetched (or loading) peek result, with its click affordance decided by {@link peekOpenAction}. */
-export function HoverPreviewCard({ state, data, loading, popout, onOpen }: {
+export function HoverPreviewCard({ state, data, loading, popout, onOpen, hold }: {
   state: HoverPreviewState;
   data: PeekData | null;
   loading: boolean;
   popout: boolean;
   onOpen: HoverPreviewOpen;
+  hold?: HoverPreviewHold;
 }) {
   const maxX = window.innerWidth  - 480 - 8;
   const maxY = window.innerHeight - 280 - 8;
@@ -71,6 +85,8 @@ export function HoverPreviewCard({ state, data, loading, popout, onOpen }: {
       className={`popover fixed z-50 w-[480px] max-h-[300px] rounded-md border border-[--border] bg-[--panel-strong] shadow-2xl backdrop-blur-md overflow-hidden text-[12px] pointer-events-auto ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
       style={{ left, top, transformOrigin: `${state.x - left}px ${state.y - top}px` }}
       onClick={open}
+      onPointerEnter={hold?.cardEnter}
+      onPointerLeave={hold?.cardLeave}
       onMouseDown={(e) => e.preventDefault()}
       role="tooltip"
       data-testid={PEEK_TESTIDS.card}
@@ -83,7 +99,7 @@ export function HoverPreviewCard({ state, data, loading, popout, onOpen }: {
       <div className="max-h-[240px] overflow-hidden">
         {loading && <div className="p-4 text-[--text-muted]">Loading…</div>}
         {!loading && data && !data.found && (
-          <div className="p-3 text-[--text-muted]">File not found in this project.</div>
+          <div className="p-3 text-[--text-muted]">{PEEK_COPY.notFound}</div>
         )}
         {!loading && data?.found && data.kind === 'binary' && (
           <div className="p-3 text-[--text-muted]">Binary file — no preview.</div>

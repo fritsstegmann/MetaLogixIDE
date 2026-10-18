@@ -16,6 +16,7 @@ import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import { HoverPreview, type HoverPreviewOpen, type HoverPreviewState } from './HoverPreview';
+import { createHoverHold, resolvePathClick, type PeekResult } from '@renderer/peek-open';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
@@ -133,6 +134,22 @@ export function ShellTab({
   const [relaunching, setRelaunching] = useState(false);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
+  const [hoverHold] = useState(() => createHoverHold(() => setHover(null)));
+  useEffect(() => hoverHold.dispose, [hoverHold]);
+  const peekCacheRef = useRef<{ path: string; peek: PeekResult } | null>(null);
+  const cachePeek = useCallback((state: HoverPreviewState, peek: PeekResult) => {
+    peekCacheRef.current = { path: state.path, peek };
+  }, []);
+  const openPeekedPathRef = useRef<(path: string, line: number | null) => Promise<void>>(async () => undefined);
+  openPeekedPathRef.current = async (path, line) => {
+    const req = await resolvePathClick(path, line, {
+      currentProjectId: projectId,
+      popout,
+      cached: peekCacheRef.current,
+      peek: (relPath) => api.invoke('files:peek', { projectId, relPath }),
+    });
+    if (req) onOpenFileRef.current?.(req.relPath, req.line, req.projectId);
+  };
   const primaryRef = useRef(primary);
   primaryRef.current = primary;
   const shellExitedRef = useRef(false);
@@ -206,13 +223,15 @@ export function ShellTab({
           },
           text: h.raw,
           activate: () => {
+            hoverHold.dispose();
             setHover(null);
-            onOpenFileRef.current?.(h.path, h.line);
+            void openPeekedPathRef.current(h.path, h.line);
           },
           hover: (ev: MouseEvent) => {
+            hoverHold.linkEnter();
             setHover({ x: ev.clientX, y: ev.clientY, projectId, path: h.path, line: h.line });
           },
-          leave: () => { setHover(null); },
+          leave: hoverHold.linkLeave,
         })));
       },
     };
@@ -397,7 +416,7 @@ export function ShellTab({
     };
     // Font metric changes must not recreate the terminal. Dedicated effects below
     // apply font size, weight and family updates to the live instance instead.
-  }, [projectId, shellIndex, pasteFromText]);
+  }, [projectId, shellIndex, pasteFromText, hoverHold]);
 
   const findNext = useCallback((q: string) => {
     if (!q || !searchRef.current) return;
@@ -555,7 +574,9 @@ export function ShellTab({
       <HoverPreview
         state={hover}
         popout={popout}
-        onOpen={(relPath, line, targetProjectId) => { setHover(null); onOpenFileRef.current?.(relPath, line, targetProjectId); }}
+        onPeek={cachePeek}
+        hold={hoverHold}
+        onOpen={(relPath, line, targetProjectId) => { hoverHold.dispose(); setHover(null); onOpenFileRef.current?.(relPath, line, targetProjectId); }}
       />
       <AnimatePresence>
         {menu && (() => {

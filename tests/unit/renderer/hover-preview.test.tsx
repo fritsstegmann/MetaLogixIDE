@@ -51,4 +51,8 @@ describe('HoverPreviewCard click affordance', () => {
     expect(html).not.toContain(PEEK_COPY.openHere);
     expect(html).not.toMatch(note);
   });
+
+  it('says a miss was searched for across every project', () => {
+    expect(render({ ...hit, found: false, projectId: null })).toContain(`>${PEEK_COPY.notFound}<`);
+  });
 });
