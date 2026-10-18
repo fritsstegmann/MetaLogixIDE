@@ -1,13 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { TaskDef } from '@shared/tasks-contract';
 
-export interface TaskDef {
-  id: string;                             // stable id used by the run RPC
-  source: 'npm' | 'make' | 'compose';
-  name: string;
-  command: string[];                      // argv to spawn
-  description?: string;
-}
+export type { TaskDef };
 
 /**
  * Discover runnable tasks for a project's root directory. Detects:

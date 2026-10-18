@@ -1240,7 +1240,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'tasks:discover': async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    return { tasks: discoverTasks(p.path) };
+    return { tasks: discoverTasks(p.path), notices: [] };
   },
   'tasks:run': async (s, { projectId, taskId }) => {
     const p = s.projects.get(projectId);

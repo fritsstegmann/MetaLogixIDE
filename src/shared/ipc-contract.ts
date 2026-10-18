@@ -6,6 +6,7 @@ import type { FontFamilyPreference, FontSettingKey } from './font-settings';
 import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
+import type { TasksDiscovery } from './tasks-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -326,8 +327,8 @@ export interface IpcContract {
    */
   'prompts:paste':  { request: { projectId: number; shellIndex: number; text: string; submit?: boolean }; response: { ok: true } };
 
-  /* ─── Task runner (npm scripts / Makefile targets / compose services) ─── */
-  'tasks:discover': { request: { projectId: number }; response: { tasks: Array<{ id: string; source: 'npm' | 'make' | 'compose'; name: string; command: string[]; description?: string }> } };
+  /* ─── Task runner (npm scripts / Makefile targets / compose services / mise tasks) ─── */
+  'tasks:discover': { request: { projectId: number }; response: TasksDiscovery };
   /** Spawns the task as a new shell tab (auto-picked shellIndex). */
   'tasks:run':      { request: { projectId: number; taskId: string }; response: { shellIndex: number } };
 

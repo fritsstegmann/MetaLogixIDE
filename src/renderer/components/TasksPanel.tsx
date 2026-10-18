@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
-
-interface TaskDef {
-  id: string;
-  source: 'npm' | 'make' | 'compose';
-  name: string;
-  command: string[];
-  description?: string;
-}
+import type { TaskDef } from '@shared/tasks-contract';
 
 interface Props {
   projectId: number | null;
@@ -51,7 +44,7 @@ export function TasksPanel({ projectId, onLaunched }: Props) {
   }, [tasks, filter]);
 
   const grouped = useMemo(() => {
-    const g: Record<TaskDef['source'], TaskDef[]> = { npm: [], make: [], compose: [] };
+    const g: Record<TaskDef['source'], TaskDef[]> = { npm: [], make: [], compose: [], mise: [] };
     for (const t of filtered) g[t.source].push(t);
     return g;
   }, [filtered]);
