@@ -13,7 +13,7 @@ import type { ProjectConfig } from '@shared/types';
 import type { ResolvedLaunch } from '@main/domain/launch';
 import { defaultShellArgv } from '@main/domain/shell';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
@@ -1914,7 +1914,7 @@ describe('project file handlers keep every path inside the project root', () => 
   it('files:peek attributes a sibling-prefix path to the sibling project, not the current one', async () => {
     const { call } = containmentRig();
     await expect(call('files:peek', { projectId: 1, relPath: SIBLING })).resolves.toMatchObject({
-      found: true, relPath: 'f', head: 'secret',
+      found: true, relPath: 'f', head: 'secret', projectId: 2,
     });
   });
 
@@ -1923,7 +1923,83 @@ describe('project file handlers keep every path inside the project root', () => 
     const outside = join(base, 'loose.txt');
     writeFileSync(outside, 'loose');
     await expect(call('files:peek', { projectId: 1, relPath: outside })).resolves.toMatchObject({
-      found: true, relPath: outside, head: 'loose',
+      found: true, relPath: outside, head: 'loose', projectId: null,
+    });
+  });
+
+  it('files:peek attributes a relative hit in the current project to the current project first', async () => {
+    const { call } = containmentRig();
+    await expect(call('files:peek', { projectId: 1, relPath: 'f' })).resolves.toMatchObject({
+      found: true, relPath: 'f', head: 'mine', projectId: 1,
+    });
+  });
+
+  it('files:peek attributes a relative hit found only in another project to that project', async () => {
+    const { evil, call } = containmentRig();
+    writeFileSync(join(evil, 'only-evil'), 'theirs');
+    await expect(call('files:peek', { projectId: 1, relPath: 'only-evil' })).resolves.toMatchObject({
+      found: true, relPath: 'only-evil', head: 'theirs', projectId: 2,
+    });
+  });
+
+  it('files:peek never resolves a relative path against the process working directory', async () => {
+    const { call } = containmentRig();
+    expect(existsSync(resolve('package.json'))).toBe(true);
+    await expect(call('files:peek', { projectId: 1, relPath: 'package.json' })).resolves.toEqual({
+      relPath: 'package.json', found: false, kind: 'text', head: '', sizeBytes: 0, totalLines: null, projectId: null,
+    });
+  });
+
+  it('files:peek attributes an absolute path inside another project to that project with a root-relative path', async () => {
+    const { evil, call } = containmentRig();
+    await expect(call('files:peek', { projectId: 1, relPath: join(evil, 'f') })).resolves.toMatchObject({
+      found: true, relPath: 'f', head: 'secret', projectId: 2,
+    });
+  });
+
+  it('files:peek skips a directory match and tries the next project root', async () => {
+    const { root, evil, call } = containmentRig();
+    mkdirSync(join(root, 'd'));
+    writeFileSync(join(evil, 'd'), 'file in evil');
+    await expect(call('files:peek', { projectId: 1, relPath: 'd' })).resolves.toMatchObject({
+      found: true, relPath: 'd', head: 'file in evil', projectId: 2,
+    });
+  });
+
+  it('files:peek reports a binary file without a head, keeping its project', async () => {
+    const { root, call } = containmentRig();
+    writeFileSync(join(root, 'bin'), Buffer.from([1, 0, 2]));
+    await expect(call('files:peek', { projectId: 1, relPath: 'bin' })).resolves.toEqual({
+      relPath: 'bin', projectId: 1, found: true, kind: 'binary', head: '', sizeBytes: 3, totalLines: null,
+    });
+  });
+
+  it('files:peek reports an oversized file by size only, keeping its project', async () => {
+    const { evil, call } = containmentRig();
+    truncateSync(join(evil, 'f'), 2_000_001);
+    await expect(call('files:peek', { projectId: 1, relPath: join(evil, 'f') })).resolves.toEqual({
+      relPath: 'f', projectId: 2, found: true, kind: 'text', head: 'File too large (2000001 bytes).', sizeBytes: 2_000_001, totalLines: null,
+    });
+  });
+
+  it('files:peek returns the first maxLines lines and the total line count', async () => {
+    const { root, call } = containmentRig();
+    writeFileSync(join(root, 'lines'), 'a\nb\r\nc');
+    await expect(call('files:peek', { projectId: 1, relPath: 'lines', maxLines: 2 })).resolves.toMatchObject({
+      head: 'a\nb', totalLines: 3, projectId: 1,
+    });
+  });
+
+  it('files:peek attributes an absolute path to the longest matching project root', async () => {
+    const { root } = containmentRig();
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub', 'n'), 'nested');
+    const all = [{ id: 1, path: root }, { id: 3, path: join(root, 'sub') }];
+    const projects = { get: (id: number) => all.find((p) => p.id === id), list: () => all };
+    const ipc = fakeIpcMain();
+    registerIpc(ipc as unknown as IpcMain, { projects } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    await expect(ipc.handlers.get('files:peek')!({}, { projectId: 1, relPath: join(root, 'sub', 'n') })).resolves.toMatchObject({
+      found: true, relPath: 'n', projectId: 3,
     });
   });
 });

@@ -15,7 +15,9 @@ import { DROP_COPY } from '@shared/terminal-drop-contract';
 import { terminalFocus } from '@renderer/hooks/useWindowTerminalFocus';
 import { detectPaths } from '@shared/detect-paths';
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
-import { HoverPreview, type HoverPreviewState } from './HoverPreview';
+import { HoverPreview, type HoverPreviewOpen, type HoverPreviewState } from './HoverPreview';
+import { resolvePathClick } from '@renderer/peek-open';
+import { createHoverHold } from '@renderer/hover-hold';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
@@ -77,13 +79,16 @@ const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out
 };
 
 export function ShellTab({
-  projectId, shellIndex, onOpenFile, primary = false,
+  projectId, shellIndex, onOpenFile, primary = false, popout = false,
 }: {
   projectId: number;
   shellIndex: number;
-  onOpenFile?: (relPath: string, line: number | null) => void;
+  /** Opens a file from terminal output; a click on the preview card or on the printed path passes `projectId` only when the peek found the file in another project. */
+  onOpenFile?: HoverPreviewOpen;
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
+  /** Popout window: hover previews of another project's file cannot be opened from here. */
+  popout?: boolean;
 }) {
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
@@ -130,6 +135,17 @@ export function ShellTab({
   const [relaunching, setRelaunching] = useState(false);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
+  const [hoverHold] = useState(() => createHoverHold(() => setHover(null)));
+  useEffect(() => hoverHold.dispose, [hoverHold]);
+  const openPeekedPathRef = useRef<(path: string, line: number | null) => Promise<void>>(async () => undefined);
+  openPeekedPathRef.current = async (path, line) => {
+    const req = await resolvePathClick(path, line, {
+      currentProjectId: projectId,
+      popout,
+      peek: (relPath) => api.invoke('files:peek', { projectId, relPath }),
+    });
+    if (req) onOpenFileRef.current?.(req.relPath, req.line, req.projectId);
+  };
   const primaryRef = useRef(primary);
   primaryRef.current = primary;
   const shellExitedRef = useRef(false);
@@ -203,13 +219,15 @@ export function ShellTab({
           },
           text: h.raw,
           activate: () => {
+            hoverHold.dispose();
             setHover(null);
-            onOpenFileRef.current?.(h.path, h.line);
+            void openPeekedPathRef.current(h.path, h.line);
           },
           hover: (ev: MouseEvent) => {
+            hoverHold.linkEnter();
             setHover({ x: ev.clientX, y: ev.clientY, projectId, path: h.path, line: h.line });
           },
-          leave: () => { setHover(null); },
+          leave: hoverHold.linkLeave,
         })));
       },
     };
@@ -394,7 +412,7 @@ export function ShellTab({
     };
     // Font metric changes must not recreate the terminal. Dedicated effects below
     // apply font size, weight and family updates to the live instance instead.
-  }, [projectId, shellIndex, pasteFromText]);
+  }, [projectId, shellIndex, pasteFromText, hoverHold]);
 
   const findNext = useCallback((q: string) => {
     if (!q || !searchRef.current) return;
@@ -551,7 +569,9 @@ export function ShellTab({
       )}
       <HoverPreview
         state={hover}
-        onOpen={(relPath, line) => { setHover(null); onOpenFileRef.current?.(relPath, line); }}
+        popout={popout}
+        hold={hoverHold}
+        onOpen={(relPath, line, targetProjectId) => { hoverHold.dispose(); setHover(null); onOpenFileRef.current?.(relPath, line, targetProjectId); }}
       />
       <AnimatePresence>
         {menu && (() => {

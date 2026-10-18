@@ -1294,6 +1294,25 @@ the whole side falls back to escaped plain text.
   `/proj`. `files:peek` still reads absolute paths by design; it uses
   `isInsideRoot` only to choose which root a path is shown under.
 
+- **A terminal path opens in the project it was found in.** `files:peek`
+  returns `projectId`: the project whose root holds the file, or null when
+  the file is outside every project. A relative path is tried in the current
+  project first, then the other projects, and never against the app's working
+  directory. An absolute path goes to the project with the longest containing
+  root. `peekOpenAction` (`src/renderer/peek-open.ts`) makes one decision for
+  both the hover card and a click on the printed path:
+  - same project: open the file here;
+  - another project, in the main window: select that project, then open the
+    file in its Files tab. The open is held as a pending request and applied
+    when the selection lands on that project; a failed or superseded switch
+    drops it (`src/renderer/pending-file-open.ts`);
+  - outside every project, or another project from a popout: preview only, with
+    a note. Nothing is opened and no project is added.
+
+  The hover card stays open while the pointer is on the path or on the card,
+  and closes 200 ms after the pointer leaves both (`createHoverHold`,
+  `src/renderer/hover-hold.ts`).
+
 - **Motion library.** `motion@14.0.0` is pinned exactly. It was five days
   old when added, inside the usual release-age window; it was accepted
   because 14.0.0 equals 13.5.1 minus internal APIs, and older 13.x
