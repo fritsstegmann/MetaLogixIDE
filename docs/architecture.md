@@ -16,7 +16,7 @@ dots. The product design is in
 
 After services are constructed, `src/main/index.ts` registers every generic
 IPC handler before creating the initial `BrowserWindow`. `startApp`
-(`src/main/index.ts:503-518`) runs the startup steps in order, and
+(`src/main/index.ts:444-459`) runs the startup steps in order, and
 `registerMainIpc` comes before `openMainWindow`. Renderer providers
 may invoke settings channels while the first document is still loading, so
 window creation must not move ahead of `registerIpc`.
@@ -30,7 +30,7 @@ window creation must not move ahead of `registerIpc`.
 
 On macOS, startup resolves PATH from the user's interactive login shell before
 constructing services or creating a renderer (`adoptLoginShellPath`,
-`src/main/index.ts:377-389`, the first step of `startApp`).
+`src/main/index.ts:318-330`, the first step of `startApp`).
 The resolver reads only NUL-framed PATH output, ignoring shell startup banners.
 It limits execution to 10 seconds and output to 1 MiB
 (`src/main/domain/login-shell-path.ts:10-33`).
@@ -783,7 +783,7 @@ Temporary directory:
   In test mode (`METAIDE_TEST_MODE=1`) the entrypoint passes
   `METAIDE_DROP_DIR`, or `<userData>/drops` when it is unset, so an E2E launch
   never stages into or prunes the real directory (`testModeDropDir`,
-  `createServices`, `src/main/index.ts:397-406`).
+  `createServices`, `src/main/index.ts:338-347`).
 - Before every write, staging creates the directory with mode 0700 when it
   is missing. It then refuses to write when the directory is a symlink or
   not a directory. On POSIX it also refuses when another user owns the
@@ -798,7 +798,7 @@ Temporary directory:
   Timestamps are UTC.
 - At startup, after the main window is created, the main process deletes
   regular files older than 24 hours, once, without awaiting the result
-  (`openMainWindow`, `src/main/index.ts:457-463`). Pruning refuses an untrusted directory, so a
+  (`openMainWindow`, `src/main/index.ts:398-405`). Pruning refuses an untrusted directory, so a
   planted symlink cannot make it delete other files. A dev build and a
   packaged build share the directory, so each can prune the other's old
   files.
