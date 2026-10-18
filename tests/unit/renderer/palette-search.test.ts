@@ -2,7 +2,9 @@
  * `searchPalette` builds the palette view from the providers: fixed group order with empty groups
  * dropped (AC6), list order on an empty query and match order within each group otherwise (AC7,
  * AC13), the 50/40 row caps (AC13, AC34), prefix modes (AC33, AC41, AC42, AC44), every empty-state
- * (AC14, AC36, AC38, AC41, AC42) and the flat row list the highlight indexes into (AC3). Also covers
+ * (AC14, AC36, AC38, AC41, AC42), best-match-first project ranking with a query (name over path, and
+ * the group holding the best match listed first) and the flat row list the highlight indexes into
+ * (AC3). Also covers
  * `stepHighlight` (AC3, AC14).
  */
 import { describe, it, expect } from 'vitest';
@@ -85,6 +87,64 @@ describe('searchPalette — running projects', () => {
 
   it('splits projects the same way in "#" mode', () => {
     expect(groupIds(view('#', { aliveIds: new Set([1]) }))).toEqual(['running', 'projects']);
+  });
+});
+
+describe('searchPalette — best match first with a query', () => {
+  const TEMP = '/var/folders/cl/0hzw921d6h3b0rqy9jt/T/metalogix-e2e-Xk9s';
+  const alpha = project(1, 'alpha', `${TEMP}/alpha`);
+  const beta = project(2, 'beta', `${TEMP}/beta`);
+  const running = { projects: [alpha, beta], aliveIds: new Set([1]), currentProjectId: 1 };
+
+  it('ranks a non-running exact-name match above a running project matched only through its path', () => {
+    expect(view('#beta', running).rows.map(label)[0]).toBe('p:beta');
+    expect(view('beta', running).rows.map(label)[0]).toBe('p:beta');
+    expect(view('BETA', running).rows.map(label)[0]).toBe('p:beta');
+  });
+
+  it('ranks a name-prefix match above a running path-only match', () => {
+    const archived = project(1, 'alpha', '/work/betamax-archive/alpha');
+    const v = view('#beta', { projects: [archived, project(2, 'beta-app')], aliveIds: new Set([1]) });
+    expect(v.rows.map(label)).toEqual(['p:beta-app', 'p:alpha']);
+  });
+
+  it('ranks a multi-word name-prefix match above a path-only match Fuse alone would put first, ignoring case', () => {
+    const projects = [project(1, 'other', '/beta'), project(2, 'Beta client portal web app', '/srv/x')];
+    expect(view('#beta', { projects }).rows.map(label)).toEqual(['p:Beta client portal web app', 'p:other']);
+    expect(view('#BETA', { projects }).rows.map(label)).toEqual(['p:Beta client portal web app', 'p:other']);
+  });
+
+  it('ranks an exact name above a prefix name and a prefix name above a path-only match', () => {
+    const projects = [project(1, 'other', '/srv/beta/other'), project(2, 'beta-tools'), project(3, 'beta')];
+    expect(view('#beta', { projects }).rows.map(label)).toEqual(['p:beta', 'p:beta-tools', 'p:other']);
+  });
+
+  it('weighs a mid-name match above an equally good path-only match', () => {
+    const projects = [project(1, 'zz', '/w/tools'), project(2, 'my-tools-kit', '/w/a')];
+    expect(view('#tools', { projects }).rows.map(label)).toEqual(['p:my-tools-kit', 'p:zz']);
+  });
+
+  it('lists the group holding the best match first, keeping both headings', () => {
+    const v = view('#beta', running);
+    expect(groupIds(v)).toEqual(['projects', 'running']);
+    expect(v.groups.map((g) => g.title)).toEqual([PALETTE_COPY.groupTitles.projects, PALETTE_COPY.groupTitles.running]);
+    expect(v.groups[1]?.rows.map(label)).toEqual(['p:alpha']);
+  });
+
+  it('keeps Running first when its row is the best match', () => {
+    const projects = [alpha, project(3, 'alpha-two', `${TEMP}/alpha-two`)];
+    expect(groupIds(view('#alpha', { projects, aliveIds: new Set([1]) }))).toEqual(['running', 'projects']);
+  });
+
+  it('keeps project groups ahead of command groups in normal mode', () => {
+    expect(groupIds(view('beta', { ...running, commands: [command('go.beta', 'Go', 'Go beta')] }))).toEqual(['projects', 'running', 'Go']);
+  });
+
+  it('keeps the running-first grouping in list order with an empty query', () => {
+    const v = view('#', running);
+    expect(groupIds(v)).toEqual(['running', 'projects']);
+    expect(v.rows.map(label)).toEqual(['p:alpha', 'p:beta']);
+    expect(groupIds(view('', running)).slice(0, 2)).toEqual(['running', 'projects']);
   });
 });
 
