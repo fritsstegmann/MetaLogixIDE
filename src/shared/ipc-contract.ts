@@ -66,7 +66,7 @@ export interface IpcContract {
   'projects:rename':        { request: { id: number; newName: string; killShells?: boolean }; response: { project: Project } };
 
   // shells
-  'shells:launch':      { request: { projectId: number };                       response: { shellIndex: number } };
+  'shells:launch':      { request: { projectId: number; forceFirst?: boolean }; response: { shellIndex: number } };
   // Spawn a plain login shell (user's $SHELL, or /bin/zsh) at the project's
   // cwd. Auto-picks the next unused shellIndex. Used by the "New Terminal"
   // button and the ⌘T shortcut for ad-hoc shells alongside the Claude one.

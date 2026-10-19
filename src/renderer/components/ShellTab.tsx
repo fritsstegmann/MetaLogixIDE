@@ -137,6 +137,10 @@ export function ShellTab({
   // calls term.reset() can't wipe it. `null` while running.
   const [exitInfo, setExitInfo] = useState<{ code: number | null } | null>(null);
   const [relaunching, setRelaunching] = useState(false);
+  // Set when Claude CLI prints an API error that indicates the saved
+  // session is corrupted (invalid thinking-block signature) — we offer a
+  // one-click "Start fresh session" that re-launches without --continue.
+  const [sessionCorrupted, setSessionCorrupted] = useState(false);
   // Show a "Starting…" overlay after 3 s of silence so the user knows the
   // process is alive but hasn't produced output yet (slow auth / large session).
   const [showStarting, setShowStarting] = useState(false);
@@ -146,6 +150,7 @@ export function ShellTab({
   useEffect(() => {
     setShowStarting(false);
     setStartingProfileOpen(false);
+    setSessionCorrupted(false);
     startingTimerRef.current = setTimeout(() => setShowStarting(true), 3000);
     return () => { if (startingTimerRef.current) clearTimeout(startingTimerRef.current); };
   }, [projectId, shellIndex]);
@@ -493,6 +498,10 @@ export function ShellTab({
       if (exitInfo) setExitInfo(null);
       if (startingTimerRef.current) { clearTimeout(startingTimerRef.current); startingTimerRef.current = null; }
       setShowStarting(false);
+      // Detect corrupted-session API error so we can offer a fresh-start overlay.
+      if (!sessionCorrupted && /Invalid [`']?signature[`']? in [`']?thinking[`']? block/i.test(data)) {
+        setSessionCorrupted(true);
+      }
       if (snapshotReady.current) termRef.current?.write(data);
       else pendingLive.current += data;
     },
@@ -515,6 +524,22 @@ export function ShellTab({
       setRelaunching(false);
     }
   }, [projectId, relaunching]);
+
+  // Kill the current shell and re-launch bypassing --continue so a corrupted
+  // Claude session is left behind and a brand-new one is started.
+  const startFreshSession = useCallback(async () => {
+    if (relaunching) return;
+    setRelaunching(true);
+    setSessionCorrupted(false);
+    try {
+      try { await api.invoke('shells:kill', { projectId, shellIndex }); } catch { /* fine */ }
+      await api.invoke('shells:launch', { projectId, forceFirst: true });
+    } catch (e) {
+      toast('Fresh session failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally {
+      setRelaunching(false);
+    }
+  }, [projectId, shellIndex, relaunching]);
 
   // Kill the currently running (but stuck) shell then re-launch it, optionally with a specific profile.
   const killAndRelaunch = useCallback(async (profileName?: string) => {
@@ -556,6 +581,29 @@ export function ShellTab({
       {/* `isolate` keeps xterm's internal z-indexes (e.g. its link layer) inside the
           host, so the exit overlay, drop hint and search bar always paint above it. */}
       <div ref={termHostRef} className="w-full h-full isolate" />
+      {sessionCorrupted && (
+        <div className="absolute inset-x-0 top-3 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-3 bg-[--danger]/15 border border-[--danger]/40 rounded-md shadow-xl px-3 py-2 text-xs text-[--text] max-w-[640px]">
+            <span className="font-medium text-[--danger]">Claude session corrupted</span>
+            <span className="text-[--text-muted]">(API rejected the saved thinking block)</span>
+            <button
+              onClick={startFreshSession}
+              disabled={relaunching}
+              className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {relaunching && <span className="mp-spinner" aria-hidden />}
+              <span>{relaunching ? 'Starting…' : 'Start fresh session'}</span>
+            </button>
+            <button
+              onClick={() => setSessionCorrupted(false)}
+              title="Dismiss"
+              className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       {showStarting && !exitInfo && (
         <div className="absolute inset-x-0 bottom-3 flex flex-col items-center gap-1 pointer-events-none">
           {startingProfileOpen && startingProfiles.length > 0 && (

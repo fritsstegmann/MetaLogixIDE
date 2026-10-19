@@ -393,13 +393,16 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'projects:update-config':async (s, { id, config }) => ({ project: s.projects.updateConfig(id, validatedConfigPatch(config)) }),
   'projects:recents':      async (s, { limit }) => ({ projects: s.projects.listRecents(limit ?? 10) }),
 
-  'shells:launch': async (s, { projectId }) => {
+  'shells:launch': async (s, { projectId, forceFirst }) => {
     // Defence in depth behind the renderer's blocking modal: never spawn
     // Claude in Manual mode (the local, un-rewritten default) before the
     // user has made an explicit permission-mode choice.
     if (s.settings.get('claude_permission_mode') === null) throw new Error('Choose a Claude permission mode first');
-    const project = s.projects.get(projectId);
-    if (!project) throw new Error(`no project ${projectId}`);
+    const projectRow = s.projects.get(projectId);
+    if (!projectRow) throw new Error(`no project ${projectId}`);
+    // forceFirst bypasses --continue and starts a brand-new Claude session —
+    // used when the saved session is corrupted (e.g. invalid thinking signature).
+    const project = forceFirst ? { ...projectRow, firstLaunchedAt: null } : projectRow;
     // Idempotent: clicking an already-open project (or a tab the sidebar
     // thinks might not be alive) used to re-enter here and throw "already
     // spawned". Just return the index — the renderer re-attaches the stream.
