@@ -506,6 +506,21 @@ export function ShellTab({
     }
   }, [projectId, relaunching]);
 
+  // Kill the currently running (but stuck) shell then re-launch it.
+  const killAndRelaunch = useCallback(async () => {
+    if (relaunching) return;
+    setRelaunching(true);
+    setShowStarting(false);
+    try {
+      try { await api.invoke('shells:kill', { projectId, shellIndex }); } catch { /* fine — may already be dead */ }
+      await api.invoke('shells:launch', { projectId });
+    } catch (e) {
+      toast('Re-launch failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally {
+      setRelaunching(false);
+    }
+  }, [projectId, shellIndex, relaunching]);
+
   // Outer div = padding + background. Inner div = pure terminal viewport,
   // so xterm's own geometry math sees an element with no padding or extra chrome.
   return (
@@ -528,9 +543,26 @@ export function ShellTab({
       <div ref={termHostRef} className="w-full h-full isolate" />
       {showStarting && !exitInfo && (
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
-          <div className="flex items-center gap-2 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text-muted]">
+          <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
             <span className="mp-spinner" aria-hidden />
-            <span>Starting Claude…</span>
+            <span className="text-[--text-muted]">Starting Claude…</span>
+            <button
+              onClick={killAndRelaunch}
+              disabled={relaunching}
+              className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {relaunching && <span className="mp-spinner" aria-hidden />}
+              <span>{relaunching ? 'Re-launching…' : 'Re-launch'}</span>
+            </button>
+            {onOpenLaunchSettings && (
+              <button
+                onClick={onOpenLaunchSettings}
+                className="pressable border border-[--border] rounded-md px-2.5 py-1 font-medium hover:bg-[--surface-hover]"
+                title="Open Settings → Launch commands"
+              >
+                Fix launch command
+              </button>
+            )}
           </div>
         </div>
       )}
