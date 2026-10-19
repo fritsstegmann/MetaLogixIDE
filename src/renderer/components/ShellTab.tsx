@@ -781,7 +781,7 @@ export function ShellTab({
               onClick: () => { termRef.current?.clearSelection(); },
             },
           ];
-          return <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />;
+          return <ContextMenu key="context-menu" x={menu.x} y={menu.y} items={items} onClose={() => { setMenu(null); termRef.current?.focus(); }} />;
         })()}
       </AnimatePresence>
     </div>
