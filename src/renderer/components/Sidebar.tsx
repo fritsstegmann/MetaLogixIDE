@@ -4,9 +4,9 @@ import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
-import { useOverallClaudeState, useProjectClaudeState } from '@renderer/hooks/useClaudeStates';
+import { useOverallAgentState, useProjectAgentState } from '@renderer/hooks/useAgentStates';
+import type { AgentState } from '@shared/agent-state';
 import type { Project, Root } from '@shared/types';
-import type { ClaudeShellState } from '@shared/claude-state';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { AnimatePresence } from 'motion/react';
@@ -32,7 +32,7 @@ export function Sidebar({ selectedProjectId, onSelect, onNewProject, onEditEnv, 
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
   const { aliveIds } = useAliveShellIds();
-  const overallClaudeState = useOverallClaudeState();
+  const overallClaudeState = useOverallAgentState();
   const [filter, setFilter] = useState('');
 
   // Stable order for the "In use" section: each project keeps the seq
@@ -174,7 +174,7 @@ function Section({
   testId: string;
   accent?: boolean;
   /** Worst Claude state across the section's shells (D4); only meaningful when `accent` is set. */
-  dotState?: ClaudeShellState;
+  dotState?: AgentState;
   children: React.ReactNode;
 }) {
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(readCollapsedSections);
@@ -223,7 +223,7 @@ function ProjectRow({
   onEditEnv: (p: Project) => void;
   indent?: number;
 }) {
-  const claudeState = useProjectClaudeState(project.id);
+  const claudeState = useProjectAgentState(project.id);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   async function unload(e: React.MouseEvent) {
     e.stopPropagation();

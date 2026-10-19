@@ -5,7 +5,7 @@ import { ICON_SIZE, ICON_STROKE } from './icon-size';
 
 interface TaskDef {
   id: string;
-  source: 'npm' | 'make' | 'compose';
+  source: 'npm' | 'make' | 'compose' | 'mise';
   name: string;
   command: string[];
   description?: string;
@@ -52,7 +52,7 @@ export function TasksPanel({ projectId, onLaunched }: Props) {
   }, [tasks, filter]);
 
   const grouped = useMemo(() => {
-    const g: Record<TaskDef['source'], TaskDef[]> = { npm: [], make: [], compose: [] };
+    const g: Record<TaskDef['source'], TaskDef[]> = { npm: [], make: [], compose: [], mise: [] };
     for (const t of filtered) g[t.source].push(t);
     return g;
   }, [filtered]);

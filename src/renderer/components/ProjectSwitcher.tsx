@@ -2,7 +2,7 @@ import Fuse from 'fuse.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
-import { useProjectClaudeState } from '@renderer/hooks/useClaudeStates';
+import { useProjectAgentState } from '@renderer/hooks/useAgentStates';
 import type { Project } from '@shared/types';
 import { StatusDot } from './StatusDot';
 import { ICON_SIZE } from './icon-size';
@@ -120,7 +120,7 @@ function ProjectSwitcherRow({
   onPick: () => void;
   onHover: () => void;
 }) {
-  const claudeState = useProjectClaudeState(project.id);
+  const claudeState = useProjectAgentState(project.id);
   return (
     <li>
       <button

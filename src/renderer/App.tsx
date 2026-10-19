@@ -50,7 +50,7 @@ import { useTerminalGeometryHold } from './hooks/useTerminalGeometryHold';
 import { useSplitLifecycle } from './hooks/useSplitLifecycle';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { StatusDot } from './components/StatusDot';
-import { useProjectClaudeState, useShellClaudeState } from './hooks/useClaudeStates';
+import { useProjectAgentState, useShellAgentState } from './hooks/useAgentStates';
 import { useApplyUiFont } from './fonts/use-apply-ui-font';
 import { XIcon } from './components/shell-icons';
 import { ICON_SIZE } from './components/icon-size';
@@ -149,7 +149,7 @@ function MainApp() {
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
   // -1 never matches a real project id, so this reads idle when nothing is selected.
-  const selectedClaudeState = useProjectClaudeState(selected?.id ?? -1);
+  const selectedClaudeState = useProjectAgentState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
   // useEffect with an empty dep list) always reads the current project.
   const selectedRef = useRef<Project | null>(null);
@@ -1061,7 +1061,7 @@ function MainApp() {
 }
 
 function PopoutShell({ projectId, shellIndex }: PopoutInfo) {
-  const claudeState = useShellClaudeState(projectId, shellIndex);
+  const claudeState = useShellAgentState(projectId, shellIndex).state;
   const [tab, setTab] = useState<'shell' | 'files'>('shell');
   const [openInFiles, setOpenInFiles] = useState<{ relPath: string; line: number | null } | null>(null);
   const [projectName, setProjectName] = useState<string>('');

@@ -9,6 +9,15 @@ import { ICON_SIZE, ICON_STROKE } from '../icon-size';
 
 export type SettingsSection = 'general' | 'roots' | 'launch' | 'env' | 'metaproject';
 
+/** Settings sections in nav order with their labels; the Settings nav and the command palette both read this. */
+export const SETTINGS_NAV_ITEMS: readonly { readonly section: SettingsSection; readonly label: string }[] = [
+  { section: 'general', label: 'General' },
+  { section: 'roots', label: 'Root directories' },
+  { section: 'launch', label: 'Launch commands' },
+  { section: 'env', label: 'Environment' },
+  { section: 'metaproject', label: 'Metaproject' },
+];
+
 const ICON_HUES: Record<SettingsSection, string> = {
   general: '',
   roots: 'text-[--hue-yellow]',
