@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import { ModalFrame } from '@renderer/components/ModalFrame';
 import { toast } from '@renderer/hooks/useToasts';
+import { ICON_SIZE } from './icon-size';
+import { XIcon } from './shell-icons';
 
 interface Prompt {
   id: string;
@@ -148,7 +150,7 @@ export function PromptLibrary({ open, onClose, projectId, activeShell, activeShe
             className="text-[--modal-text-muted] hover:text-[--text] w-7 h-7 flex items-center justify-center rounded hover:bg-[--panel]"
             aria-label="Close"
           >
-            ✕
+            <XIcon size={ICON_SIZE.md} />
           </button>
         </div>
 

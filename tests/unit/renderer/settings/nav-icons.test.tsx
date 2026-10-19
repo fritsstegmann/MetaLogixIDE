@@ -30,10 +30,10 @@ function renderItem(section: SettingsSection, active: boolean, label: string): s
 }
 
 describe('NavIcon', () => {
-  it.each(SECTIONS)('renders a 15x15 svg hidden from assistive tech for %s', (section) => {
+  it.each(SECTIONS)('renders a 14x14 svg hidden from assistive tech for %s', (section) => {
     const svg = svgTag(renderToStaticMarkup(<NavIcon section={section} />));
-    expect(svg).toContain('width="15"');
-    expect(svg).toContain('height="15"');
+    expect(svg).toContain('width="14"');
+    expect(svg).toContain('height="14"');
     expect(svg).toContain('aria-hidden="true"');
     expect(svg).toContain('stroke="currentColor"');
   });

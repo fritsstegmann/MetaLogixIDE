@@ -5,6 +5,7 @@
  * are the caller's.
  */
 import { Tooltip } from '@renderer/components/Tooltip';
+import { ICON_SIZE, ICON_STROKE } from '@renderer/components/icon-size';
 import { ENV_COPY, ENV_TESTIDS } from '@renderer/project-env-copy';
 
 /** Accessible names for one row's value input, reveal toggle (both states) and copy button. */
@@ -134,12 +135,12 @@ function EnvRowButtons({ value, labels, revealed, onToggle, onCopy }: ButtonsPro
 function Icon({ children }: { children: React.ReactNode }) {
   return (
     <svg
-      width="14"
-      height="14"
+      width={ICON_SIZE.md}
+      height={ICON_SIZE.md}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth={ICON_STROKE.outline}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden

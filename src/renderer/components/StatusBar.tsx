@@ -4,10 +4,8 @@ import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { usePorts } from '@renderer/hooks/usePorts';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
-import { PALETTE_COPY, PALETTE_TESTIDS } from '@renderer/command-palette-contract';
-import type { ShortcutPlatform } from '@renderer/shortcut-contract';
-import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
-import { RUNTIME_SHORTCUT_PLATFORM, useShortcutPlatform } from '@renderer/shortcut-platform';
+import { XIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 
 interface LiveShell {
   projectId: number; shellIndex: number; projectName: string; pid: number;
@@ -15,18 +13,9 @@ interface LiveShell {
   launchName: string; hanging: boolean;
 }
 
-interface StatusBarProps {
-  readonly project: Project | null;
-  readonly aliveCount: number;
-  /** Opens the command palette exactly as ⌘K does. */
-  readonly onOpenPalette: () => void;
-}
-
-/** The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version. */
-export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps): React.JSX.Element {
+export function StatusBar({ project, aliveCount }: { project: Project | null; aliveCount: number }) {
   const { status: git } = useGitStatus(project?.id ?? null);
   const ports = usePorts(project?.id ?? null);
-  const platform = useShortcutPlatform();
   // App version shown at the far right so users know exactly which build
   // they're running when they hit a bug or file feedback. Cached for the
   // session — a version bump requires a relaunch anyway.
@@ -37,7 +26,7 @@ export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps
   return (
     <div className="h-[34px] shrink-0 px-3 text-xs text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
       <span className="flex items-center gap-1.5">
-        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--text-muted]/50'}`} />
+        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[--accent]' : 'bg-[--text-muted]/50'}`} />
         {project ? project.name : 'no project'}
       </span>
       {git.isRepo && (
@@ -69,7 +58,11 @@ export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps
         </span>
       )}
       <span className="ml-auto min-w-0 overflow-hidden flex items-center gap-3 opacity-70 whitespace-nowrap">
-        <PaletteHint onOpen={onOpenPalette} platform={platform} />
+        <span className="flex items-center gap-1"><kbd>⌘K</kbd> project</span>
+        <span className="flex items-center gap-1"><kbd>⌘P</kbd> file</span>
+        <span className="flex items-center gap-1"><kbd>⌘⇧F</kbd> search</span>
+        <span className="flex items-center gap-1"><kbd>⌘B</kbd> sidebar</span>
+        <span className="flex items-center gap-1"><kbd>⌘,</kbd> settings</span>
         {version && (
           <>
             <span className="opacity-40">·</span>
@@ -159,7 +152,7 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
         )}
       </button>
       {open && (
-        <div className="absolute bottom-full right-0 mb-2 w-[380px] max-h-[400px] overflow-y-auto rounded-md border border-[--border] bg-[--panel-strong] shadow-xl z-50 text-[11px]" data-overlay>
+        <div className="absolute bottom-full right-0 mb-2 w-[380px] max-h-[400px] overflow-y-auto rounded-md border border-[--border] bg-[--panel-strong] shadow-xl z-50 text-[11px]">
           <div className="px-3 py-2 border-b border-[--border] flex items-center gap-2">
             <span className="font-semibold text-[--text]">Alive shells</span>
             <span className="text-[--text-muted]">·  refresh every 2s</span>
@@ -168,7 +161,7 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
               className="ml-auto text-[--text-muted] hover:text-[--text] w-5 h-5 flex items-center justify-center rounded hover:bg-[--panel]"
               title="Close"
             >
-              ✕
+              <XIcon size={ICON_SIZE.sm} />
             </button>
           </div>
           {shells.length === 0 && (
@@ -232,31 +225,10 @@ function fmtDuration(ms: number): string {
 
 function BranchIcon() {
   return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="2.5" />
       <circle cx="18" cy="18" r="2.5" />
       <path d="M6 8.5v4a4 4 0 0 0 4 4h5.5" />
     </svg>
-  );
-}
-
-interface PaletteHintProps {
-  readonly onOpen: () => void;
-  /** Label notation for the key and accessible name; defaults to the runtime platform. */
-  readonly platform?: ShortcutPlatform;
-}
-
-/** The status bar's single "⌘K command palette" hint (`Ctrl+K` off mac): a muted button that opens the palette (AC29-AC31). */
-export function PaletteHint({ onOpen, platform = RUNTIME_SHORTCUT_PLATFORM }: PaletteHintProps): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={SHORTCUT_COPY.statusHintLabel(platform)}
-      data-testid={PALETTE_TESTIDS.statusHint}
-      className="flex items-center gap-1 rounded-sm hover:text-[--text]"
-    >
-      <kbd>{SHORTCUT_COPY.statusHintKey(platform)}</kbd> {PALETTE_COPY.statusHintText}
-    </button>
   );
 }

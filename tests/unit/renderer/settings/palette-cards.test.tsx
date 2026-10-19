@@ -62,7 +62,7 @@ describe('PaletteCards', () => {
     const index = PALETTES.indexOf(palette);
     expect(cs.map((c) => /aria-pressed="([^"]*)"/.exec(c.attrs)?.[1])).toEqual(PALETTES.map((_, i) => String(i === index)));
     expect(cs.map((c) => c.inner.includes('<svg'))).toEqual(PALETTES.map((_, i) => i === index));
-    expect(cs[index]?.inner).toMatch(/<svg[^>]*aria-hidden="true"[^>]*width="13"[^>]*height="13"/);
+    expect(cs[index]?.inner).toMatch(/<svg[^>]*aria-hidden="true"[^>]*width="14"[^>]*height="14"/);
   });
 
   it('gives only the selected card the accent-soft fill and inset accent ring', () => {

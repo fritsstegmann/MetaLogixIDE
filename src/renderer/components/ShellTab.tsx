@@ -20,6 +20,8 @@ import { resolvePathClick } from '@renderer/peek-open';
 import { createHoverHold } from '@renderer/hover-hold';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
+import { XIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 import { isTerminalGeometryHeld, onTerminalGeometryRelease } from '@renderer/terminal-geometry-hold';
 import { toast } from '@renderer/hooks/useToasts';
 import { createTerminalKeyHandler, terminalTabAction } from '@renderer/terminal-keys';
@@ -510,7 +512,9 @@ export function ShellTab({
       }}
       className="relative w-full h-full min-h-0 px-3 pt-2 pb-3 bg-transparent focus:outline-none"
     >
-      <div ref={termHostRef} className="w-full h-full" />
+      {/* `isolate` keeps xterm's internal z-indexes (e.g. its link layer) inside the
+          host, so the exit overlay, drop hint and search bar always paint above it. */}
+      <div ref={termHostRef} className="w-full h-full isolate" />
       {exitInfo && (
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
@@ -542,7 +546,7 @@ export function ShellTab({
               className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
               data-testid="shell-exit-dismiss"
             >
-              ✕
+              <XIcon size={ICON_SIZE.sm} />
             </button>
           </div>
         </div>
@@ -575,7 +579,7 @@ export function ShellTab({
             title="Close (Esc)"
             className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel]"
           >
-            ✕
+            <XIcon size={ICON_SIZE.sm} />
           </button>
         </div>
       )}

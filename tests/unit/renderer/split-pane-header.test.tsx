@@ -99,4 +99,14 @@ describe('SplitPaneHeader', () => {
     const svg = tags(html.slice(toTab), 'svg')[0] ?? '';
     expect(attr(svg, 'aria-hidden')).toBe('true');
   });
+
+  it('renders the to-tab and close icons at 12px (AC6)', () => {
+    const html = render({ actions: true });
+    const svgs = tags(html, 'svg');
+    expect(svgs).toHaveLength(2);
+    for (const s of svgs) {
+      expect(attr(s, 'width')).toBe('12');
+      expect(attr(s, 'height')).toBe('12');
+    }
+  });
 });

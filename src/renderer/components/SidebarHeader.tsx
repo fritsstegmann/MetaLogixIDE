@@ -10,6 +10,7 @@ import { SIDEBAR_COPY, SIDEBAR_TESTIDS } from '@renderer/sidebar-copy';
 import { addRootFromPicker, buildAddMenuItems, rescanRoots } from '@renderer/sidebar-add-menu';
 import { AnimatePresence } from 'motion/react';
 import { ContextMenu } from './ContextMenu';
+import { ICON_SIZE } from './icon-size';
 
 interface Props {
   filter: string;
@@ -97,7 +98,7 @@ function FilterField({ value, onChange }: { value: string; onChange: (value: str
 
 function SearchIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0">
+    <svg width={ICON_SIZE.md} height={ICON_SIZE.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="shrink-0">
       <circle cx="11" cy="11" r="7" />
       <path d="m20 20-3.5-3.5" />
     </svg>
@@ -106,7 +107,7 @@ function SearchIcon() {
 
 function PlusIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
       <path d="M12 5v14M5 12h14" />
     </svg>
   );

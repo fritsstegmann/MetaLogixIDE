@@ -149,7 +149,7 @@ test('AC1–AC5, AC4a: the Split pill is a labelled toggle, right-most in the st
       height: '28px', 'padding-left': '10px', 'padding-right': '10px', 'border-top-left-radius': '7px', 'column-gap': '7px', 'font-size': '12px',
     });
     const icon = await rect(p.locator('svg'));
-    expect.soft([icon.width, icon.height], 'AC1 13px split icon').toEqual([13, 13]);
+    expect.soft([icon.width, icon.height], 'AC1 12px split icon').toEqual([12, 12]);
     // (A Range-based text measurement here left Chromium with no :hover state, so read the DOM order instead.)
     expect(await p.evaluate((n) => [n.firstChild?.nodeName, n.lastChild?.nodeType === Node.TEXT_NODE]), 'icon, then the text')
       .toEqual(['svg', true]);

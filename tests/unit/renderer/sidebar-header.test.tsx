@@ -71,4 +71,17 @@ describe('SidebarHeader', () => {
     const html = render();
     for (const gone of ['+ Root', '+ Project', 'sidebar-rescan', 'new-project-btn']) expect(html).not.toContain(gone);
   });
+
+  it('sizes the "+" icon 16px and the filter search icon 14px, both decorative', () => {
+    const html = render();
+    const svgs = tags(html, 'svg');
+    expect(svgs).toHaveLength(2);
+    const [search, plus] = svgs as [string, string];
+    expect(attr(search, 'width')).toBe('14');
+    expect(attr(search, 'height')).toBe('14');
+    expect(attr(plus, 'width')).toBe('16');
+    expect(attr(plus, 'height')).toBe('16');
+    expect(attr(search, 'aria-hidden')).toBe('true');
+    expect(attr(plus, 'aria-hidden')).toBe('true');
+  });
 });

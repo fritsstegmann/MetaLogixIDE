@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Tooltip } from './Tooltip';
 import { XIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 import { abbreviatePath } from '../abbreviate-path';
 import { SPLIT_COPY, SPLIT_TESTIDS } from '../split-copy';
 
@@ -21,7 +22,7 @@ const BUTTON = 'h-6 flex items-center justify-center rounded-[6px] focus-visible
 
 function ToTabIcon() {
   return (
-    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" width={ICON_SIZE.sm} height={ICON_SIZE.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
       <path d="M3 15h9M9 12l3 3-3 3" />
     </svg>
@@ -38,7 +39,7 @@ function PaneActions({ onToTab, onClose }: Actions) {
         </button>
       </Tooltip>
       <button type="button" onClick={onClose} aria-label={SPLIT_COPY.close} data-testid={SPLIT_TESTIDS.close} className={`${BUTTON} w-6`}>
-        <XIcon />
+        <XIcon size={ICON_SIZE.sm} />
       </button>
     </>
   );

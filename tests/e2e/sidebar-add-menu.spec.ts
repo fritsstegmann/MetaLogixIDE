@@ -1,8 +1,8 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SIDEBAR_COPY, SIDEBAR_TESTIDS, SECTION_PERSIST_KEYS } from '../../src/renderer/sidebar-copy';
-import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
  * Sidebar header: one row with a filter field and a "+" button whose menu
@@ -30,38 +30,36 @@ let isolatedHome: string;
 let demoRoot: string;
 
 test.beforeAll(async () => {
-  await guardedLaunch(async (scope) => {
-    const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
-    isolatedHome = scope.tempDir('metaide-addmenu-home-');
-    demoRoot = scope.tempDir('metaide-addmenu-root-');
-    for (const name of ['alpha', 'beta']) {
-      mkdirSync(join(demoRoot, name));
-      mkdirSync(join(demoRoot, name, '.git'));
-    }
+  const mockClaude = resolve(process.cwd(), 'scripts/mock-claude.mjs');
+  isolatedHome = mkdtempSync(join(tmpdir(), 'metaide-addmenu-home-'));
+  demoRoot = mkdtempSync(join(tmpdir(), 'metaide-addmenu-root-'));
+  for (const name of ['alpha', 'beta']) {
+    mkdirSync(join(demoRoot, name));
+    mkdirSync(join(demoRoot, name, '.git'));
+  }
 
-    app = scope.own(await electron.launch({
-      args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
-      env: {
-        ...process.env,
-        HOME: isolatedHome,
-        METAIDE_TEST_MODE: '1',
-        METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
-        METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
-        METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
-      },
-    }));
-    win = await app.firstWindow();
-    await win.waitForLoadState('domcontentloaded');
-    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
-    await win.evaluate(async (path: string) => {
-      await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
-    }, demoRoot);
-    for (const name of ['alpha', 'beta']) await expect(projectRow(name)).toBeVisible({ timeout: 5000 });
+  app = await electron.launch({
+    args: ['.', `--user-data-dir=${join(isolatedHome, 'userData')}`],
+    env: {
+      ...process.env,
+      HOME: isolatedHome,
+      METAIDE_TEST_MODE: '1',
+      METAIDE_CLAUDE_PERMISSION_MODE: 'bypass',
+      METAIDE_DEFAULT_LAUNCH_FIRST:      JSON.stringify({ argv: ['node', mockClaude],              env: {} }),
+      METAIDE_DEFAULT_LAUNCH_SUBSEQUENT: JSON.stringify({ argv: ['node', mockClaude, '--continue'], env: {} }),
+    },
   });
+  win = await app.firstWindow();
+  await win.waitForLoadState('domcontentloaded');
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(1400, 900); });
+  await win.evaluate(async (path: string) => {
+    await (window as unknown as { api: Api }).api.invoke('roots:add', { path });
+  }, demoRoot);
+  for (const name of ['alpha', 'beta']) await expect(projectRow(name)).toBeVisible({ timeout: 5000 });
 });
 
 test.afterAll(async () => {
-  if (app) await closeApp(app);
+  await app?.close();
   rmSync(isolatedHome, { recursive: true, force: true });
   rmSync(demoRoot, { recursive: true, force: true });
 });
@@ -152,6 +150,17 @@ async function markScrollRegion(): Promise<{ left: number; right: number; conten
   });
 }
 
+/** Fish-style abbreviation, computed independently of the app: /Users/<name> → ~, leading segments to one char (two for .dirs), last whole. */
+function fish(path: string): string {
+  const home = /^\/Users\/[^/]+/.exec(path);
+  const rest = home ? path.slice(home[0].length) : path;
+  const parts = rest.split('/');
+  const out = parts.map((seg, i) => {
+    if (i === parts.length - 1 || seg === '') return seg;
+    return seg.startsWith('.') && seg.length > 1 ? seg.slice(0, 2) : seg.slice(0, 1);
+  });
+  return (home ? '~' : '') + out.join('/');
+}
 
 /**
  * Seeds the sections the row and header tests measure: In use holds `beta`
@@ -436,7 +445,7 @@ test('AC24c: project rows are 34px tall with 10px side padding, 8px radius and a
   }
 });
 
-test('AC24d: section headers align with the filter, show a right-edge 11px chevron, and expose the full root path in a tooltip', async () => {
+test('AC24d: section headers align with the filter, show a right-edge 12px chevron, and the root label is fish-abbreviated', async () => {
   await seedSections();
   await markHeader();
   const field = await box(win.locator('[data-e2e="filter-field"]'));
@@ -449,7 +458,7 @@ test('AC24d: section headers align with the filter, show a right-edge 11px chevr
     const chevron = t.locator('> svg').last();
     const cb = await box(chevron);
     const tb = await box(t);
-    expect([cb.width, cb.height], `${id} chevron size`).toEqual([11, 11]);
+    expect([cb.width, cb.height], `${id} chevron size`).toEqual([12, 12]);
     expect(tb.x + tb.width - (cb.x + cb.width), `${id} chevron at the right edge`).toBeCloseTo(0, 0);
   }
 
@@ -463,19 +472,18 @@ test('AC24d: section headers align with the filter, show a right-edge 11px chevr
   await recents.click();
   await expect(recents).toHaveAttribute('aria-expanded', 'true');
 
-  // Root toggle: same right-edge chevron and full-path tooltip, independent of label wording.
+  // Root toggle: same chevron at its right, fish-abbreviated label, full path in the tooltip.
   const { roots } = await invoke<{ roots: { path: string }[] }>('roots:list', undefined);
   expect(roots, 'one seeded root').toHaveLength(1);
-  const root = roots[0];
-  if (!root) throw new Error('seeded root missing');
-  const fullPath = root.path;
+  const fullPath = roots[0]!.path;
+  expect(fullPath.split('/').filter(Boolean).length, `input state: root path has >= 3 segments (${fullPath})`).toBeGreaterThanOrEqual(3);
   const rootToggle = win.getByTestId('root-toggle');
   const label = rootToggle.locator(`[title="${fullPath}"]`);
-  await expect(label).toBeVisible();
-  await expect(label).toHaveAttribute('title', fullPath);
+  await expect(label).toHaveText(fish(fullPath));
+  expect(fish(fullPath), 'positive control: the abbreviation differs from the full path').not.toBe(fullPath);
   const rc = await box(rootToggle.locator('> svg').last());
   const rt = await box(rootToggle);
-  expect([rc.width, rc.height], 'root chevron size').toEqual([11, 11]);
+  expect([rc.width, rc.height], 'root chevron size').toEqual([12, 12]);
   expect(rt.x + rt.width - (rc.x + rc.width), 'root chevron at the right (inside the toggle padding)').toBeLessThanOrEqual(10.5);
   expect(rc.x, 'root chevron right of the label').toBeGreaterThan((await box(label)).x);
 });

@@ -1,21 +1,13 @@
 /**
- * Settings nav: the section ids, one inline 15px stroke icon per section (General in the item's
+ * Settings nav: the section ids, one inline 14px stroke icon per section (General in the item's
  * text colour, the others in their semantic hue), and the `SectionButton` nav item that pairs an
  * icon with its text-only label, marks the active section with `aria-current="page"` and can show
  * an unsaved-changes marker.
  */
-import { APP_ENV_COPY, APP_ENV_TESTIDS, ENV_COPY } from '@renderer/project-env-copy';
+import { APP_ENV_TESTIDS, ENV_COPY } from '@renderer/project-env-copy';
+import { ICON_SIZE, ICON_STROKE } from '../icon-size';
 
 export type SettingsSection = 'general' | 'roots' | 'launch' | 'env' | 'metaproject';
-
-/** Settings sections in nav order with their labels; the Settings nav and the command palette both read this. */
-export const SETTINGS_NAV_ITEMS: readonly { readonly section: SettingsSection; readonly label: string }[] = [
-  { section: 'general', label: 'General' },
-  { section: 'roots', label: 'Root directories' },
-  { section: 'launch', label: 'Launch commands' },
-  { section: 'env', label: APP_ENV_COPY.navLabel },
-  { section: 'metaproject', label: 'Metaproject' },
-];
 
 const ICON_HUES: Record<SettingsSection, string> = {
   general: '',
@@ -47,17 +39,17 @@ const ICON_SHAPES: Record<SettingsSection, React.JSX.Element> = {
   ),
 };
 
-/** Decorative 15x15 icon for `section`, wrapped in a span carrying its hue; hidden from assistive tech. */
+/** Decorative 14x14 icon for `section`, wrapped in a span carrying its hue; hidden from assistive tech. */
 export function NavIcon({ section }: { readonly section: SettingsSection }): React.JSX.Element {
   return (
     <span className={`flex shrink-0 ${ICON_HUES[section]}`}>
       <svg
-        width="15"
-        height="15"
+        width={ICON_SIZE.md}
+        height={ICON_SIZE.md}
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.9"
+        strokeWidth={ICON_STROKE.outline}
         strokeLinecap="round"
         strokeLinejoin="round"
         aria-hidden="true"

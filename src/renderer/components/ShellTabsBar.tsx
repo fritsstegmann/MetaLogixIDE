@@ -4,23 +4,25 @@ import { menuMotion } from '../menu-motion';
 import { toast } from '../hooks/useToasts';
 import { api } from '../api';
 import { Tooltip } from './Tooltip';
-import { SHELL_TAB_TEST_ID } from '@shared/agent-state';
+import { SHELL_TAB_TEST_ID } from '@shared/claude-state';
 import { ShellTabDot } from './ShellTabDot';
 import { shellChipLabel } from '../shell-label';
 import { SplitPill } from './SplitPill';
 import { PlusIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
-import type { ScopedCliProfile } from '@shared/project-default-agent';
-import type { Project } from '@shared/types';
-import { PROJECT_SETTINGS_COPY } from '@renderer/project-settings-contract';
-import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
-import { useShortcutPlatform } from '@renderer/shortcut-platform';
+import { ICON_SIZE } from './icon-size';
 
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
 const ompIconUrl = new URL('../assets/cli-icons/omp.svg', import.meta.url).href;
 
+interface CliProfileEntry {
+  name: string;
+  argv: string[];
+  env?: Record<string, string>;
+  icon?: string;
+  scope: 'project' | 'global';
+}
 
-/** The add-shell menu: saved CLI profiles with a default-star toggle, a custom-command form and the plain terminal row. */
-export function NewShellMenu({
+function NewShellMenu({
   projectId,
   defaultCliName,
   onLaunchProfile,
@@ -36,17 +38,15 @@ export function NewShellMenu({
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
   /** Called when the star toggle sets/clears the folder-level default. */
-  onDefaultChanged: (project: Project) => void;
+  onDefaultChanged: (name: string | null) => void;
   onClose: () => void;
 }) {
-  const platform = useShortcutPlatform();
-  const [profiles, setProfiles] = useState<ScopedCliProfile[]>([]);
+  const [profiles, setProfiles] = useState<CliProfileEntry[]>([]);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customCmd, setCustomCmd] = useState('');
   const [customSave, setCustomSave] = useState(true);
 
-  const [savingDefault, setSavingDefault] = useState(false);
   useEffect(() => {
     (async () => {
       try {
@@ -61,7 +61,6 @@ export function NewShellMenu({
   const panelProps = {
     ...motionProps,
     'data-new-shell-menu': '1',
-    'data-overlay': '',
     ...(present ? {} : { inert: '' }),
     'data-testid': present ? undefined : 'new-shell-menu-leaving',
     style: { transformOrigin: 'top left', pointerEvents: present ? undefined : ('none' as const) },
@@ -143,7 +142,6 @@ export function NewShellMenu({
         <div className="text-[10px] text-[--text-muted] mt-0.5">
           Opens as a new tab. Use the popout icon to move it to its own window.
         </div>
-        <p className="mt-2 text-xs leading-relaxed text-[--hue-orange-text]">{PROJECT_SETTINGS_COPY.menuDefaultNotice}</p>
       </div>
       {profiles.length === 0 && (
         <div className="px-3 py-4 text-xs text-[--text-muted] text-center">
@@ -162,7 +160,7 @@ export function NewShellMenu({
               <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
                 {p.icon === 'builtin:pi' ? (
                   <span
-                    className="w-5 h-5 bg-current"
+                    className="w-4 h-4 bg-current"
                     style={{
                       maskImage: `url("${piIconUrl}")`,
                       maskSize: 'contain',
@@ -175,7 +173,7 @@ export function NewShellMenu({
                     }}
                   />
                 ) : p.icon === 'builtin:omp' ? (
-                  <img src={ompIconUrl} alt="" className="w-5 h-5" />
+                  <img src={ompIconUrl} alt="" className="w-4 h-4" />
                 ) : (
                   p.icon ?? '▸'
                 )}
@@ -184,24 +182,18 @@ export function NewShellMenu({
               {isDefault && <span className="text-[9px] uppercase text-[color:var(--accent)] px-1 py-0.5 rounded bg-[color:var(--accent)]/15 border border-[color:var(--accent)]/40">auto</span>}
               {p.scope === 'project' && !isDefault && <span className="text-[9px] uppercase text-[--text-muted] px-1 py-0.5 rounded bg-[--panel] border border-[--border]">saved</span>}
             </button>
+            {/* Star: pin as this folder's auto-launch. Click again to clear. */}
             <button
-              disabled={savingDefault}
-              className={`px-2 flex items-center transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] ${isDefault
+              className={`px-2 flex items-center transition-colors ${isDefault
                 ? 'text-[color:var(--accent)] opacity-100'
-                : 'opacity-0 group-hover:opacity-60 focus:opacity-100 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
+                : 'opacity-0 group-hover:opacity-60 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
               onClick={async () => {
-                if (savingDefault) return;
-                const capturedProjectId = projectId;
-                setSavingDefault(true);
                 try {
-                  const { project } = await api.invoke('shells:set-default-cli', { projectId: capturedProjectId, name: isDefault ? null : p.name });
-                  if (project.id !== capturedProjectId) return;
-                  onDefaultChanged(project);
+                  await api.invoke('shells:set-default-cli', { projectId, name: isDefault ? null : p.name });
+                  onDefaultChanged(isDefault ? null : p.name);
                   toast(isDefault ? `Cleared folder default` : `${p.name} will auto-launch in this folder`, { kind: 'success', timeoutMs: 1400 });
                 } catch (e) {
                   toast('Could not set default', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
-                } finally {
-                  setSavingDefault(false);
                 }
               }}
               title={isDefault ? 'Clear folder default (fall back to global)' : `Make ${p.name} the auto-launch for this folder`}
@@ -215,7 +207,7 @@ export function NewShellMenu({
                 onClick={() => removeProfile(p.name)}
                 title="Remove from this project"
               >
-                <XIcon />
+                <XIcon size={ICON_SIZE.sm} />
               </button>
             )}
           </div>
@@ -240,7 +232,7 @@ export function NewShellMenu({
             <span className="w-5 text-center text-base leading-none">⌨️</span>
             <span>Terminal</span>
           </span>
-          <span className="opacity-60 font-mono">{SHORTCUT_COPY.newTerminalHint(platform)}</span>
+          <span className="opacity-60 font-mono">⌘T</span>
         </button>
       </div>
     </m.div>
@@ -269,7 +261,7 @@ export function ShellTabsBar({
   onClose: (idx: number) => void;
   /** Current per-folder auto-launch CLI, forwarded to NewShellMenu's star toggle. */
   defaultCliName: string | null;
-  onDefaultCliChanged: (project: Project) => void;
+  onDefaultCliChanged: (name: string | null) => void;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
@@ -278,7 +270,6 @@ export function ShellTabsBar({
   onToggleSplit: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const platform = useShortcutPlatform();
   return (
     <div className="flex items-center gap-1 pl-2 pr-[14px] py-1 text-xs shrink-0 overflow-visible">
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
@@ -315,19 +306,19 @@ export function ShellTabsBar({
           in its own window instead, use the popout icon in the top toolbar
           (it moves the currently-active tab out). */}
       <div className="relative shrink-0">
-        <Tooltip label="Add a shell" shortcut={SHORTCUT_COPY.newTerminalHint(platform)}>
+        <Tooltip label="Add a shell" shortcut="⌘T">
           <button
             onClick={() => setMenuOpen((v) => !v)}
             className="text-[--text-muted] hover:text-[--text] w-6 h-6 flex items-center justify-center rounded hover:bg-[--panel-strong]"
             data-testid="tabbar-new-shell"
           >
-            <PlusIcon />
+            <PlusIcon size={ICON_SIZE.sm} />
           </button>
         </Tooltip>
         <AnimatePresence>
           {menuOpen && (
           <NewShellMenu
-            key={`new-shell-menu-${projectId}`}
+            key="new-shell-menu"
             projectId={projectId}
             defaultCliName={defaultCliName}
             onDefaultChanged={onDefaultCliChanged}

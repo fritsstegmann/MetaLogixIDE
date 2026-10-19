@@ -1,5 +1,6 @@
 import { Tooltip } from './Tooltip';
 import { SplitIcon } from './shell-icons';
+import { ICON_SIZE } from './icon-size';
 import { SPLIT_COPY, SPLIT_TESTIDS } from '../split-copy';
 
 const BASE = 'shrink-0 h-7 px-2.5 inline-flex items-center gap-[7px] rounded-[7px] text-xs focus-visible:rounded-[7px]';
@@ -25,7 +26,7 @@ export function SplitPill({ on, onToggle }: Props) {
         className={`${BASE} ${on ? ON : OFF}`}
         data-testid={SPLIT_TESTIDS.toggle}
       >
-        <SplitIcon size={13} />
+        <SplitIcon size={ICON_SIZE.sm} />
         {SPLIT_COPY.pill}
       </button>
     </Tooltip>
