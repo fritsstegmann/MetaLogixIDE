@@ -561,7 +561,10 @@ function MainApp() {
       // Only surface the toast when the failure is for the current pick —
       // otherwise a stale evictee-failure would confuse the user.
       if (lastPickIdRef.current === p.id) {
-        toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+        toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, ''), timeoutMs: 8000 });
+        // Open Settings → Launch commands so the user can fix the startup command immediately.
+        setSettingsSection('launch');
+        setSettingsOpen(true);
       }
       console.error(e);
     }
@@ -638,6 +641,7 @@ function MainApp() {
               setMainTab('files');
               setOpenInFiles({ relPath, line });
             }}
+            onOpenLaunchSettings={() => { setSettingsSection('launch'); setSettingsOpen(true); }}
           />
         );
       case 'files':

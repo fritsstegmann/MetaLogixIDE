@@ -36,6 +36,7 @@ interface Props {
   ratio: number;
   onRatioChange: (r: number) => void;
   onOpenFile: (relPath: string, line: number | null, projectId?: number) => void;
+  onOpenLaunchSettings?: () => void;
 }
 
 type Side = 'left' | 'right';
@@ -106,13 +107,14 @@ function usePaneMode(right: SplitPane | null) {
   };
 }
 
-function PaneBody({ projectId, projectName, pane, primary, rightKey, onOpenFile }: {
+function PaneBody({ projectId, projectName, pane, primary, rightKey, onOpenFile, onOpenLaunchSettings }: {
   projectId: number;
   projectName: string;
   pane: SplitPane;
   primary: boolean;
   rightKey: boolean;
   onOpenFile: Props['onOpenFile'];
+  onOpenLaunchSettings?: Props['onOpenLaunchSettings'];
 }) {
   return (
     <div className="flex-1 min-h-0 relative">
@@ -124,6 +126,7 @@ function PaneBody({ projectId, projectName, pane, primary, rightKey, onOpenFile 
             shellIndex={pane.index}
             primary={primary}
             onOpenFile={onOpenFile}
+            onOpenLaunchSettings={onOpenLaunchSettings}
           />
       }
     </div>
@@ -138,11 +141,11 @@ function PaneBody({ projectId, projectName, pane, primary, rightKey, onOpenFile 
  * right pane folds in and out as a FoldPane keyed by shell index; `mode="wait"` keeps a reopen
  * from mounting a second right pane before the previous one has finished leaving.
  */
-export function ShellSplit({ projectId, projectName, panes, ratio, onRatioChange, onOpenFile }: Props) {
+export function ShellSplit({ projectId, projectName, panes, ratio, onRatioChange, onOpenFile, onOpenLaunchSettings }: Props) {
   const rowRef = useRef<HTMLDivElement>(null);
   const { dragging, startDrag } = useDividerDrag(rowRef, onRatioChange);
   const { paneMode, focused, focusAttr, cardClass, markFocused, custom, onOpened, onExited } = usePaneMode(panes.right);
-  const body = { projectId, projectName, onOpenFile };
+  const body = { projectId, projectName, onOpenFile, onOpenLaunchSettings };
   const right = panes.right;
 
   return (

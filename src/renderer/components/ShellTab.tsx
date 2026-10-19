@@ -79,12 +79,14 @@ const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out
 };
 
 export function ShellTab({
-  projectId, shellIndex, onOpenFile, primary = false, popout = false,
+  projectId, shellIndex, onOpenFile, onOpenLaunchSettings, primary = false, popout = false,
 }: {
   projectId: number;
   shellIndex: number;
   /** Opens a file from terminal output; a click on the preview card or on the printed path passes `projectId` only when the peek found the file in another project. */
   onOpenFile?: HoverPreviewOpen;
+  /** Opens Settings → Launch commands so the user can fix a broken launch command. */
+  onOpenLaunchSettings?: () => void;
   /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
   primary?: boolean;
   /** Popout window: hover previews of another project's file cannot be opened from here. */
@@ -524,6 +526,16 @@ export function ShellTab({
               {relaunching && <span className="mp-spinner" aria-hidden />}
               <span>{relaunching ? 'Re-launching…' : 'Re-launch'}</span>
             </button>
+            {onOpenLaunchSettings && (
+              <button
+                onClick={onOpenLaunchSettings}
+                className="pressable border border-[--border] rounded-md px-2.5 py-1 font-medium hover:bg-[--surface-hover] flex items-center gap-1.5"
+                data-testid="shell-fix-launch"
+                title="Open Settings → Launch commands to fix the startup command"
+              >
+                Fix launch command
+              </button>
+            )}
             <button
               onClick={() => setExitInfo(null)}
               title="Dismiss"
