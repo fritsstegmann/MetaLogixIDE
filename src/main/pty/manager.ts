@@ -69,6 +69,18 @@ export interface PtyManagerOptions {
 }
 
 /** Owns live PTYs and generation-bound launch identities independent of process labels. */
+/**
+ * Sends `signal` to the PTY's process group, falling back to the PTY itself. Windows has no
+ * signals or process groups and node-pty throws if given one, so there it terminates the PTY
+ * with a plain `kill()` and ignores `signal`. Never throws: the process may already be gone.
+ */
+export function signalPty(pty: Pick<IPty, 'kill'>, pid: number, signal: 'SIGTERM' | 'SIGKILL', platform: NodeJS.Platform = process.platform): void {
+  try {
+    if (platform === 'win32') { pty.kill(); return; }
+    try { process.kill(-pid, signal); } catch { pty.kill(signal); }
+  } catch { /* already gone */ }
+}
+
 export class PtyManager extends EventEmitter {
   /** Returns current spawn identity, never the outer Windows cmd.exe process label. */
   liveShell(projectId: number, shellIndex: number): { pid: number; generation: string; agent: AgentKind | null } | null {
@@ -293,10 +305,8 @@ export class PtyManager extends EventEmitter {
     // Send SIGTERM to the whole process group so child processes also receive it,
     // then escalate to SIGKILL after 3 s if the process is still alive.
     const pid = e.pid;
-    try { process.kill(-pid, 'SIGTERM'); } catch { e.pty.kill('SIGTERM'); }
-    const killTimer = setTimeout(() => {
-      try { process.kill(-pid, 'SIGKILL'); } catch { try { e.pty.kill('SIGKILL'); } catch { /* already gone */ } }
-    }, 3000);
+    signalPty(e.pty, pid, 'SIGTERM');
+    const killTimer = setTimeout(() => signalPty(e.pty, pid, 'SIGKILL'), 3000);
     // The onExit handler fires when the process actually dies and calls
     // releaseEntry; if somehow it never fires, clean up anyway.
     const cleanup = () => { clearTimeout(killTimer); this.releaseEntry(key(projectId, shellIndex), e); };
