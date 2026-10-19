@@ -137,6 +137,15 @@ export function ShellTab({
   // calls term.reset() can't wipe it. `null` while running.
   const [exitInfo, setExitInfo] = useState<{ code: number | null } | null>(null);
   const [relaunching, setRelaunching] = useState(false);
+  // Show a "Starting…" overlay after 3 s of silence so the user knows the
+  // process is alive but hasn't produced output yet (slow auth / large session).
+  const [showStarting, setShowStarting] = useState(false);
+  const startingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    setShowStarting(false);
+    startingTimerRef.current = setTimeout(() => setShowStarting(true), 3000);
+    return () => { if (startingTimerRef.current) clearTimeout(startingTimerRef.current); };
+  }, [projectId, shellIndex]);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
   const [hoverHold] = useState(() => createHoverHold(() => setHover(null)));
@@ -469,9 +478,11 @@ export function ShellTab({
     projectId,
     shellIndex,
     (data) => {
-      // Any new data means we're alive again — clear a stale exit overlay.
+      // Any new data means we're alive again — clear stale overlays.
       shellExitedRef.current = false;
       if (exitInfo) setExitInfo(null);
+      if (startingTimerRef.current) { clearTimeout(startingTimerRef.current); startingTimerRef.current = null; }
+      setShowStarting(false);
       if (snapshotReady.current) termRef.current?.write(data);
       else pendingLive.current += data;
     },
@@ -515,6 +526,14 @@ export function ShellTab({
       {/* `isolate` keeps xterm's internal z-indexes (e.g. its link layer) inside the
           host, so the exit overlay, drop hint and search bar always paint above it. */}
       <div ref={termHostRef} className="w-full h-full isolate" />
+      {showStarting && !exitInfo && (
+        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
+          <div className="flex items-center gap-2 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text-muted]">
+            <span className="mp-spinner" aria-hidden />
+            <span>Starting Claude…</span>
+          </div>
+        </div>
+      )}
       {exitInfo && (
         <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
