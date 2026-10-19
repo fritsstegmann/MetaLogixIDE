@@ -24,6 +24,7 @@ window creation must not move ahead of `registerIpc`.
 | Layer | File | Responsibility |
 |---|---|---|
 | Composition | `src/main/index.ts` | `startApp` runs the startup steps in order. It owns the module state: the main window, popout windows, and the window-setting readers. It reads the environment and app paths. |
+| Composition | `src/main/startup/crash-observability.ts` | Runs at module load, before `app.whenReady()`. Logs uncaught exceptions, unhandled rejections and `child-process-gone`/`render-process-gone` events to `main.log`. Starts the crash reporter with uploads off, so minidumps stay in `app.getPath('crashDumps')`. Logs `[metaide] started` with the pid, version, log file and dump directory, and `[metaide] clean exit` on `will-quit`. A `started` line with no `clean exit` before the next `started` line means the previous run crashed. |
 | Composition | `src/main/startup/receivers.ts` | Starts the Claude hook receiver, then the OMP receiver. A failure in either is logged and does not stop startup. |
 | Composition | `src/main/startup/boot-rescan.ts` | Rescans every registered root at boot and prunes projects whose folder is gone. A failure is logged. |
 | Logic and adapter | `src/main/startup/done-notifier.ts` | Polls finished long-running commands every 500 ms. `planDoneNotice` decides, for one finished command, whether to notify and how. Each command is planned and shown before the next. The wiring shows the native notification and routes its click to the main window or a popout. |
