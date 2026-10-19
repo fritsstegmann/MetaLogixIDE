@@ -141,11 +141,21 @@ export function ShellTab({
   // process is alive but hasn't produced output yet (slow auth / large session).
   const [showStarting, setShowStarting] = useState(false);
   const startingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [startingProfileOpen, setStartingProfileOpen] = useState(false);
+  const [startingProfiles, setStartingProfiles] = useState<{ name: string; scope: 'project' | 'global' }[]>([]);
   useEffect(() => {
     setShowStarting(false);
+    setStartingProfileOpen(false);
     startingTimerRef.current = setTimeout(() => setShowStarting(true), 3000);
     return () => { if (startingTimerRef.current) clearTimeout(startingTimerRef.current); };
   }, [projectId, shellIndex]);
+  // Fetch profiles when Starting overlay becomes visible so user can pick one.
+  useEffect(() => {
+    if (!showStarting) return;
+    api.invoke('shells:cli-profiles-list', { projectId })
+      .then(({ profiles }) => setStartingProfiles(profiles.map((p: { name: string; scope: 'project' | 'global' }) => ({ name: p.name, scope: p.scope }))))
+      .catch(() => {});
+  }, [showStarting, projectId]);
   const onOpenFileRef = useRef<typeof onOpenFile>(onOpenFile);
   onOpenFileRef.current = onOpenFile;
   const [hoverHold] = useState(() => createHoverHold(() => setHover(null)));
@@ -506,14 +516,19 @@ export function ShellTab({
     }
   }, [projectId, relaunching]);
 
-  // Kill the currently running (but stuck) shell then re-launch it.
-  const killAndRelaunch = useCallback(async () => {
+  // Kill the currently running (but stuck) shell then re-launch it, optionally with a specific profile.
+  const killAndRelaunch = useCallback(async (profileName?: string) => {
     if (relaunching) return;
     setRelaunching(true);
     setShowStarting(false);
+    setStartingProfileOpen(false);
     try {
       try { await api.invoke('shells:kill', { projectId, shellIndex }); } catch { /* fine — may already be dead */ }
-      await api.invoke('shells:launch', { projectId });
+      if (profileName) {
+        await api.invoke('shells:launch-cli', { projectId, profileName, argv: [], env: {}, save: false });
+      } else {
+        await api.invoke('shells:launch', { projectId });
+      }
     } catch (e) {
       toast('Re-launch failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     } finally {
@@ -542,17 +557,40 @@ export function ShellTab({
           host, so the exit overlay, drop hint and search bar always paint above it. */}
       <div ref={termHostRef} className="w-full h-full isolate" />
       {showStarting && !exitInfo && (
-        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-x-0 bottom-3 flex flex-col items-center gap-1 pointer-events-none">
+          {startingProfileOpen && startingProfiles.length > 0 && (
+            <div className="pointer-events-auto bg-[--panel-strong] border border-[--border] rounded-md shadow-xl text-xs text-[--text] overflow-hidden min-w-[200px]">
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-[--text-muted] font-semibold border-b border-[--border]">Launch with…</div>
+              {startingProfiles.map((p) => (
+                <button
+                  key={p.name}
+                  onClick={() => void killAndRelaunch(p.name)}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[--surface-hover] flex items-center gap-2"
+                >
+                  <span className="font-medium truncate">{p.name}</span>
+                  <span className="text-[--text-muted] text-[10px] ml-auto">{p.scope}</span>
+                </button>
+              ))}
+              <div className="border-t border-[--border]">
+                <button
+                  onClick={() => void killAndRelaunch()}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[--surface-hover] text-[--text-muted]"
+                >
+                  Default launch command
+                </button>
+              </div>
+            </div>
+          )}
           <div className="pointer-events-auto flex items-center gap-3 bg-[--panel-strong] border border-[--border] rounded-md shadow-xl px-3 py-2 text-xs text-[--text]">
             <span className="mp-spinner" aria-hidden />
             <span className="text-[--text-muted]">Starting Claude…</span>
             <button
-              onClick={killAndRelaunch}
+              onClick={() => startingProfiles.length > 0 ? setStartingProfileOpen((v) => !v) : void killAndRelaunch()}
               disabled={relaunching}
               className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
             >
               {relaunching && <span className="mp-spinner" aria-hidden />}
-              <span>{relaunching ? 'Re-launching…' : 'Re-launch'}</span>
+              <span>{relaunching ? 'Re-launching…' : startingProfiles.length > 0 ? 'Re-launch ▾' : 'Re-launch'}</span>
             </button>
             {onOpenLaunchSettings && (
               <button
