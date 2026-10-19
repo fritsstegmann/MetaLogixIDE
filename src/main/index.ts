@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, ipcMain, Menu, Notification, screen, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -14,6 +14,7 @@ import { createHookFanout } from './claude-hooks/hook-fanout';
 import { rescanRootsAtBoot } from './startup/boot-rescan';
 import { startDoneNotifier } from './startup/done-notifier';
 import { startReceivers } from './startup/receivers';
+import { installCrashObservability } from './startup/crash-observability';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
 import { computeTileLayout } from './window-tiling';
@@ -26,8 +27,10 @@ import {
   type StoredFrostedGlass,
 } from './window-chrome';
 
-// Route console.log/warn/error to a rolling file at
-// `~/Library/Logs/MetaLogix IDE/main.log` (Electron's app.getPath('logs')).
+// Route console.log/warn/error to a rolling `main.log`: on macOS
+// `~/Library/Logs/<app name>/`, on Linux `~/.config/<app name>/logs/`, on
+// Windows `%USERPROFILE%\AppData\Roaming\<app name>\logs\`. The resolved
+// path is written to the log's `[metaide] started` line at every boot.
 // `preload: true` wires renderer console output through IPC into the same
 // file so both sides land in one place — no more "was that a main or a
 // renderer error?" hunt when a user reports a blank screen. transports.file
@@ -36,6 +39,7 @@ log.initialize({ preload: true });
 log.transports.file.level = 'info';
 log.transports.console.level = 'debug';
 Object.assign(console, log.functions);
+installCrashObservability({ log, app, crashReporter, pid: process.pid });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
