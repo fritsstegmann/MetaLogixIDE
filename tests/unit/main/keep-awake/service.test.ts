@@ -184,6 +184,38 @@ describe('keep-awake service', () => {
     expect(t.darken).toHaveBeenCalledTimes(1);
   });
 
+  it('darkenNow cancels the pending scheduled darken so it darkens once', async () => {
+    const t = setup();
+    t.svc.start(T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(500);
+    t.svc.darkenNow();
+    await vi.advanceTimersByTimeAsync(KEEP_AWAKE_DARKEN_DELAY_MS);
+    expect(t.darken).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failing darken settling after stop does not signal failure', async () => {
+    const t = setup();
+    let settle: (r: DarkenResult) => void = () => undefined;
+    t.darken.mockImplementationOnce(() => new Promise<DarkenResult>((res) => (settle = res)));
+    t.svc.start(T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(KEEP_AWAKE_DARKEN_DELAY_MS);
+    t.svc.stop();
+    settle({ ok: false, cause: new Error('late') });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.onDarkenFailed).not.toHaveBeenCalled();
+  });
+
+  it('a failing darken settling while active signals failure once', async () => {
+    const t = setup();
+    let settle: (r: DarkenResult) => void = () => undefined;
+    t.darken.mockImplementationOnce(() => new Promise<DarkenResult>((res) => (settle = res)));
+    t.svc.start(T0 + 60_000);
+    await vi.advanceTimersByTimeAsync(KEEP_AWAKE_DARKEN_DELAY_MS);
+    settle({ ok: false, cause: new Error('late') });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.onDarkenFailed).toHaveBeenCalledTimes(1);
+  });
+
   it('dispose releases, clears all timers and posts nothing', () => {
     const t = setup();
     t.svc.start(T0 + 60_000);

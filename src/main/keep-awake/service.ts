@@ -35,41 +35,53 @@ export interface KeepAwakeDeps {
 const TICK_MS = 1000;
 const INACTIVE: KeepAwakeState = { active: false };
 
-/** Creates the controller; all timers and the assertion are released by `stop`, expiry or `dispose`. */
-export function createKeepAwakeService(deps: KeepAwakeDeps): KeepAwakeController {
-  const { assertion, timers } = deps;
-  let endsAt: number | null = null;
-  let tick: unknown = null;
-  let darkenTimer: unknown = null;
+interface DarkenScheduler {
+  schedule(): void;
+  cancel(): void;
+  run(): void;
+}
 
-  const state = (): KeepAwakeState => (endsAt === null ? INACTIVE : { active: true, endsAt });
+/** Owns the single pending darken timer; `run` reports a failed darken only while `isActive()` holds. */
+function createDarkenScheduler(deps: KeepAwakeDeps, isActive: () => boolean): DarkenScheduler {
+  let timer: unknown = null;
 
-  const clearDarkenTimer = (): void => {
-    if (darkenTimer === null) return;
-    timers.clearTimeout(darkenTimer);
-    darkenTimer = null;
+  const cancel = (): void => {
+    if (timer === null) return;
+    deps.timers.clearTimeout(timer);
+    timer = null;
   };
 
-  const runDarken = (): void => {
+  const run = (): void => {
     void deps.darken().then((result) => {
-      if (!result.ok && endsAt !== null) deps.onDarkenFailed();
+      if (!result.ok && isActive()) deps.onDarkenFailed();
     });
   };
 
-  const scheduleDarken = (): void => {
-    clearDarkenTimer();
-    darkenTimer = timers.setTimeout(() => {
-      darkenTimer = null;
-      runDarken();
+  const schedule = (): void => {
+    cancel();
+    timer = deps.timers.setTimeout(() => {
+      timer = null;
+      run();
     }, KEEP_AWAKE_DARKEN_DELAY_MS);
   };
 
+  return { schedule, cancel, run };
+}
+
+/** Creates the controller; all timers and the assertion are released by `stop`, expiry or `dispose`. */
+export function createKeepAwakeService(deps: KeepAwakeDeps): KeepAwakeController {
+  let endsAt: number | null = null;
+  let tick: unknown = null;
+  const darkening = createDarkenScheduler(deps, () => endsAt !== null);
+
+  const state = (): KeepAwakeState => (endsAt === null ? INACTIVE : { active: true, endsAt });
+
   const teardown = (): void => {
-    clearDarkenTimer();
-    if (tick !== null) timers.clearInterval(tick);
+    darkening.cancel();
+    if (tick !== null) deps.timers.clearInterval(tick);
     tick = null;
     endsAt = null;
-    assertion.release();
+    deps.assertion.release();
   };
 
   const expire = (): void => {
@@ -89,9 +101,9 @@ export function createKeepAwakeService(deps: KeepAwakeDeps): KeepAwakeController
       if (!Number.isFinite(requested) || requested <= now || requested > now + KEEP_AWAKE_MAX_MS)
         return { ok: false, error: 'invalid' };
       endsAt = requested;
-      assertion.hold();
-      if (tick === null) tick = timers.setInterval(onTick, TICK_MS);
-      scheduleDarken();
+      deps.assertion.hold();
+      if (tick === null) tick = deps.timers.setInterval(onTick, TICK_MS);
+      darkening.schedule();
       deps.onChange(state());
       return { ok: true, state: state() };
     },
@@ -103,7 +115,8 @@ export function createKeepAwakeService(deps: KeepAwakeDeps): KeepAwakeController
     },
     darkenNow() {
       if (endsAt === null) return { ok: false, error: 'inactive' };
-      runDarken();
+      darkening.cancel();
+      darkening.run();
       return { ok: true };
     },
     dispose() {
