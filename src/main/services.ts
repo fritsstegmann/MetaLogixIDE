@@ -23,6 +23,7 @@ import type { AgentStatusTracker } from './agent-status/state-tracker';
 import { createDropStaging, defaultDropDir, type DropStaging } from './drops/staging';
 import { createClipboardImage, type ClipboardImage } from './drops/clipboard-image';
 import { listMiseTasks, type MiseLister } from './domain/mise-cli';
+import type { KeepAwakeController } from './keep-awake/port';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -51,6 +52,8 @@ export interface Services {
   clipboardImage: ClipboardImage;
   /** Lists a project's mise tasks; injected so tests run without a mise binary. */
   listMise: MiseLister;
+  /** macOS keep-awake timer; installed after startup, null off darwin. */
+  keepAwake: KeepAwakeController | null;
   homeDir: string;
   migrationsDir: string;
 }
@@ -130,6 +133,6 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
   return {
     db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
     hookSessions, hookReceiver, hookRuntime, hookHistory, ompReceiver, agentStatus: null,
-    viewedShells: new ViewedShells(), dropStaging, clipboardImage: createClipboardImage(), listMise: listMiseTasks, homeDir: home, migrationsDir,
+    viewedShells: new ViewedShells(), dropStaging, clipboardImage: createClipboardImage(), listMise: listMiseTasks, keepAwake: null, homeDir: home, migrationsDir,
   };
 }
