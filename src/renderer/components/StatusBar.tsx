@@ -8,6 +8,8 @@ import { PALETTE_COPY, PALETTE_TESTIDS } from '@renderer/command-palette-contrac
 import type { ShortcutPlatform } from '@renderer/shortcut-contract';
 import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
 import { RUNTIME_SHORTCUT_PLATFORM, useShortcutPlatform } from '@renderer/shortcut-platform';
+import type { KeepAwakeControls } from '@renderer/hooks/useKeepAwake';
+import { KeepAwakeChip } from './KeepAwakeChip';
 import { XIcon } from './shell-icons';
 import { ICON_SIZE } from './icon-size';
 
@@ -22,10 +24,12 @@ interface StatusBarProps {
   readonly aliveCount: number;
   /** Opens the command palette exactly as ⌘K does. */
   readonly onOpenPalette: () => void;
+  /** Keep-awake controls; omitted or null (off macOS, pop-outs) shows no chip. */
+  readonly keepAwake?: KeepAwakeControls | null;
 }
 
 /** The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version. */
-export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps): React.JSX.Element {
+export function StatusBar({ project, aliveCount, onOpenPalette, keepAwake }: StatusBarProps): React.JSX.Element {
   const { status: git } = useGitStatus(project?.id ?? null);
   const ports = usePorts(project?.id ?? null);
   const platform = useShortcutPlatform();
@@ -54,6 +58,13 @@ export function StatusBar({ project, aliveCount, onOpenPalette }: StatusBarProps
         </span>
       )}
       <ShellsChip aliveCount={aliveCount} />
+      {keepAwake && (
+        <KeepAwakeChip
+          state={keepAwake.state}
+          onStop={() => { void keepAwake.stop(); }}
+          onDarkenNow={() => { void keepAwake.darkenNow(); }}
+        />
+      )}
       {ports.length > 0 && (
         <span className="flex items-center gap-1" title="Ports opened by this project's shells — click to open in your browser">
           <span className="text-[9px] uppercase opacity-70">ports</span>
