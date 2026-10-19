@@ -40,7 +40,8 @@ export function installCrashObservability({ log, app, crashReporter, pid }: Cras
     crashDumps: app.getPath('crashDumps'),
   });
   // A 'started' pid with no 'clean exit' line for the same pid means that
-  // run died rather than quit. Match by pid: a second instance logs both
-  // lines before it hands off to the running one.
+  // run died rather than quit. Match by pid: a second instance logs
+  // 'started', fails the single-instance lock, quits and logs 'clean exit',
+  // all while the first instance is still running.
   app.on('will-quit', () => log.info('[metaide] clean exit', { pid }));
 }
