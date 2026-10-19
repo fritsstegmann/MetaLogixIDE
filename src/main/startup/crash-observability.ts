@@ -39,7 +39,8 @@ export function installCrashObservability({ log, app, crashReporter, pid }: Cras
     logFile: log.transports.file.getFile().path,
     crashDumps: app.getPath('crashDumps'),
   });
-  // A 'started' line with no 'clean exit' before the next one means the
-  // previous run died rather than quit.
+  // A 'started' pid with no 'clean exit' line for the same pid means that
+  // run died rather than quit. Match by pid: a second instance logs both
+  // lines before it hands off to the running one.
   app.on('will-quit', () => log.info('[metaide] clean exit', { pid }));
 }
