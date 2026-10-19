@@ -289,7 +289,20 @@ export class PtyManager extends EventEmitter {
     const e = this.entries.get(key(projectId, shellIndex));
     if (!e) return;
     this.flushOutput(e);
-    e.pty.kill();
+    // SIGHUP (node-pty default) is ignored by many processes including Claude CLI.
+    // Send SIGTERM to the whole process group so child processes also receive it,
+    // then escalate to SIGKILL after 3 s if the process is still alive.
+    const pid = e.pid;
+    try { process.kill(-pid, 'SIGTERM'); } catch { e.pty.kill('SIGTERM'); }
+    const killTimer = setTimeout(() => {
+      try { process.kill(-pid, 'SIGKILL'); } catch { try { e.pty.kill('SIGKILL'); } catch { /* already gone */ } }
+    }, 3000);
+    // The onExit handler fires when the process actually dies and calls
+    // releaseEntry; if somehow it never fires, clean up anyway.
+    const cleanup = () => { clearTimeout(killTimer); this.releaseEntry(key(projectId, shellIndex), e); };
+    e.pty.onExit(() => cleanup());
+    // Also release immediately from our tracking so isAlive() returns false
+    // and the UI tab disappears without waiting for the OS reap.
     this.releaseEntry(key(projectId, shellIndex), e);
   }
 
