@@ -697,6 +697,12 @@ input::placeholder, textarea::placeholder {
 }
 .pressable:not(:disabled):active { transform: scale(0.97); }
 
+/* Fleet sheet: a newly discovered or linked machine settles in rather than popping. */
+.fleet-peer { transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+@starting-style {
+  .fleet-peer { opacity: 0; transform: translateY(4px); }
+}
+
 /* Live-shell indicator: a ring expands off the dot. Animating transform and
  * opacity on a pseudo-element stays on the compositor, unlike the previous
  * box-shadow pulse which repainted every dot every frame. */
@@ -733,7 +739,7 @@ input::placeholder, textarea::placeholder {
   .live-dot::after { animation: none; opacity: 0; }
   .pressable:not(:disabled):active { transform: none; }
   @starting-style {
-    .modal-panel, .popover, .toast { transform: none; }
+    .modal-panel, .popover, .toast, .fleet-peer { transform: none; }
     .tooltip { transform: translate(-50%, var(--tooltip-y)); }
   }
   .toast[data-leaving] { transform: none; }

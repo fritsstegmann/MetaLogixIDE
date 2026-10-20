@@ -6,7 +6,7 @@ import { ICON_SIZE, ICON_STROKE } from './icon-size';
 import { Switch } from './settings/primitives';
 import { Tooltip } from './Tooltip';
 
-const BUTTON = 'min-h-11 max-w-full rounded-lg border border-[--border] px-3 text-base text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50';
+const BUTTON = 'pressable min-h-11 max-w-full rounded-lg border border-[--border] px-3 text-base text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50';
 const FIELD = 'min-h-11 w-full rounded-lg border border-[--border] bg-[--surface-field] px-3 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2';
 
 const STATUS: Record<FleetPeer['status'], { readonly label: string; readonly tone: string }> = {
@@ -42,20 +42,20 @@ function PeerRow({ peer, busy, code, onCode, onAction }: PeerRowProps) {
   const status = STATUS[peer.status];
   const trusted = peer.status === 'linked' || peer.status === 'offline';
   return (
-    <li className="min-w-0 space-y-3 py-2">
+    <li className="fleet-peer min-w-0 space-y-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h3 className="break-words text-base font-semibold">{peer.name}</h3>
           {peer.status === 'offline' ? (
             <Tooltip label={OFFLINE_HINT} focusable>
-              <p tabIndex={0} className={`flex cursor-help items-center gap-1.5 rounded text-sm focus-visible:ring-2 focus-visible:ring-[--accent] ${status.tone}`}>
+              <p tabIndex={0} className={`flex cursor-help items-center gap-1.5 rounded text-sm transition-colors duration-200 ease-[var(--ease-out)] focus-visible:ring-2 focus-visible:ring-[--accent] ${status.tone}`}>
                 <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-current" />
                 {status.label}
                 <span className="sr-only">. {OFFLINE_HINT}</span>
               </p>
             </Tooltip>
           ) : (
-            <p className={`flex items-center gap-1.5 text-sm ${status.tone}`}>
+            <p className={`flex items-center gap-1.5 text-sm transition-colors duration-200 ease-[var(--ease-out)] ${status.tone}`}>
               <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-current" />
               {status.label}
             </p>
@@ -64,7 +64,7 @@ function PeerRow({ peer, busy, code, onCode, onAction }: PeerRowProps) {
         {trusted && (
           <Tooltip label="Revoke link" focusable>
             <button type="button" aria-label="Revoke link" disabled={busy} onClick={() => onAction('revoke')}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--danger] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50">
+              className="pressable flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--danger] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50">
               <UnlinkIcon />
             </button>
           </Tooltip>
