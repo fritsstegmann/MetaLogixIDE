@@ -149,11 +149,22 @@ describe('buildPaletteCommands', () => {
       'Settings: Launch commands',
       'Settings: Environment',
       'Settings: Metaproject',
+      'Settings: Fleet',
     ]);
     for (const [i, row] of rows.entries()) {
       await row.run();
       expect(fns.openSettings).toHaveBeenNthCalledWith(i + 1, SETTINGS_NAV_ITEMS[i]?.section);
     }
+  });
+
+  it('opens the Fleet settings section from its command-palette entry', async () => {
+    const { fns, deps: commandDeps } = deps({ hasProject: false });
+    const command = buildPaletteCommands(commandDeps).find(
+      (item) => item.category === 'Settings' && item.title === 'Settings: Fleet',
+    );
+    expect(command).toBeDefined();
+    await command?.run();
+    expect(fns.openSettings).toHaveBeenCalledWith('fleet');
   });
 
   it('marks and hides the project-dependent commands when no project is selected (AC12)', () => {

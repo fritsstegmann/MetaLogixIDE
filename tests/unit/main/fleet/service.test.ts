@@ -28,10 +28,10 @@ const operations = (): FleetOperations => ({
   write: async () => {},
   snapshot: async () => ({ output: 'safe', alive: true }),
 });
-function service(name: string) {
+function service(name: string, callbacks: FleetOperations = operations()) {
   const storageDir = mkdtempSync(join(tmpdir(), 'fleet-service-'));
   roots.push(storageDir);
-  return new FleetService({ name, storageDir, operations: operations(), keychain });
+  return new FleetService({ name, storageDir, operations: callbacks, keychain });
 }
 afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -562,6 +562,175 @@ describe('fleet authorization', () => {
     expect(request).toHaveBeenCalledTimes(7);
     channel.close();
   });
+  it.each(['saved', 'failed'] as const)(
+    'does not replace an unapproved session with a preferred channel while trust persistence is %s',
+    async (saveResult) => {
+      const callbacks = operations();
+      const status = vi.spyOn(callbacks, 'status');
+      const fleet = service('Local', callbacks);
+      await fleet.start();
+      await fleet.setEnabled(true);
+      const identity: unknown = Reflect.get(fleet, 'identity');
+      if (
+        !identity ||
+        typeof identity !== 'object' ||
+        !('id' in identity) ||
+        typeof identity.id !== 'string'
+      )
+        throw new Error('Local identity unavailable');
+      const peerId = identity.id === '0'.repeat(64) ? '1'.repeat(64) : '0'.repeat(64);
+      Reflect.set(fleet, 'presence', [
+        { id: peerId, name: 'Crossed peer', host: '127.0.0.1', port: 1, seen: Date.now() },
+      ]);
+      Reflect.set(fleet, 'certificate', () => peerId);
+      const accept: unknown = Reflect.get(fleet, 'accept');
+      const sessions: unknown = Reflect.get(fleet, 'sessions');
+      const store: unknown = Reflect.get(fleet, 'store');
+      if (
+        typeof accept !== 'function' ||
+        !(sessions instanceof Map) ||
+        !(store instanceof FleetIdentityStore)
+      )
+        throw new Error('Fleet channel seam unavailable');
+      const originalSave = store.save.bind(store);
+      let enteredSave = () => {};
+      const saving = new Promise<void>((resolve) => {
+        enteredSave = resolve;
+      });
+      let releaseSave = () => {};
+      let rejectSave: (error: Error) => void = () => {};
+      const deferred = new Promise<void>((resolve, reject) => {
+        releaseSave = resolve;
+        rejectSave = reject;
+      });
+      const saveSpy = vi.spyOn(store, 'save').mockImplementationOnce(async (trust) => {
+        enteredSave();
+        await deferred;
+        await originalSave(trust);
+      });
+      const socket = (onHello: (id: string, nonce: string) => void) => {
+        const stream = new Duplex({
+          read() {},
+          write(chunk, _encoding, done) {
+            const message = JSON.parse(chunk.toString()) as unknown;
+            if (
+              message &&
+              typeof message === 'object' &&
+              'type' in message &&
+              message.type === 'hello' &&
+              'id' in message &&
+              typeof message.id === 'string' &&
+              'nonce' in message &&
+              typeof message.nonce === 'string'
+            )
+              onHello(message.id, message.nonce);
+            done();
+          },
+        });
+        Reflect.set(stream, 'setKeepAlive', () => stream);
+        return stream;
+      };
+      let firstHelloId = '';
+      let firstNonce = '';
+      const first = socket((id, nonce) => {
+        firstHelloId = id;
+        firstNonce = nonce;
+      });
+      const preferred = socket(() => {});
+      let approval: Promise<void> | undefined;
+      let saveReleased = false;
+      try {
+        expect(accept.call(fleet, first, peerId)).toBe(true);
+        const originalSession = sessions.get(peerId);
+        expect(originalSession).toBeDefined();
+        expect(firstHelloId).toMatch(/^[a-f0-9]{32}$/);
+        expect(firstNonce).toMatch(/^[a-f0-9]{64}$/);
+        const frame = (message: object) => {
+          first.push(Buffer.from(`${JSON.stringify(message)}\n`));
+        };
+        frame({ type: 'hello', id: 'a'.repeat(32), nonce: 'b'.repeat(64) });
+        await vi.waitFor(() =>
+          expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('pending'),
+        );
+        const code = fleet.state().peers.find((peer) => peer.id === peerId)?.verificationCode;
+        if (!code) throw new Error('Pending comparison code unavailable');
+        frame({ type: 'approve', id: 'a'.repeat(32), nonce: firstNonce });
+        await vi.waitFor(() => {
+          const pending: unknown = sessions.get(peerId);
+          expect(pending).toHaveProperty('approvedRemote', true);
+        });
+        approval = fleet.approve(peerId, code);
+        void approval.catch(() => {});
+        await saving;
+        expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('pending');
+        expect((await store.load()).trusted).toEqual([]);
+        accept.call(fleet, preferred);
+        expect.soft(preferred.destroyed).toBe(true);
+        if (!preferred.destroyed) {
+          preferred.push(
+            Buffer.from(
+              `${JSON.stringify({ type: 'hello', id: 'c'.repeat(32), nonce: 'd'.repeat(64) })}\n`,
+            ),
+          );
+          preferred.push(
+            Buffer.from(
+              `${JSON.stringify({
+                type: 'request',
+                id: 'e'.repeat(32),
+                op: 'status',
+                args: { projectOffset: 0, shellOffset: 0 },
+              })}\n`,
+            ),
+          );
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect.soft(first.destroyed).toBe(false);
+        expect.soft(sessions.get(peerId)).toBe(originalSession);
+        expect.soft(fleet.state().peers.find((peer) => peer.id === peerId)).toMatchObject({
+          status: 'pending',
+          verificationCode: code,
+        });
+        expect.soft(status).not.toHaveBeenCalled();
+        if (saveResult === 'failed') {
+          frame({
+            type: 'request',
+            id: '0'.repeat(32),
+            op: 'status',
+            args: { projectOffset: 0, shellOffset: 0 },
+          });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(status).not.toHaveBeenCalled();
+          rejectSave(new Error('disk full'));
+          saveReleased = true;
+          await expect(approval).rejects.toThrow('disk full');
+          expect(sessions.has(peerId)).toBe(false);
+          expect(preferred.destroyed).toBe(true);
+          expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('discovered');
+          await expect(fleet.status(peerId)).rejects.toThrow('Peer is not linked and online');
+          expect((await store.load()).trusted).toEqual([]);
+          expect(status).not.toHaveBeenCalled();
+        } else {
+          releaseSave();
+          saveReleased = true;
+          await approval;
+          expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('linked');
+          expect(sessions.get(peerId)).toBe(originalSession);
+          frame({
+            type: 'request',
+            id: 'f'.repeat(32),
+            op: 'status',
+            args: { projectOffset: 0, shellOffset: 0 },
+          });
+          await vi.waitFor(() => expect(status).toHaveBeenCalledTimes(1));
+        }
+      } finally {
+        if (!saveReleased) releaseSave();
+        await approval?.catch(() => {});
+        saveSpy.mockRestore();
+        await fleet.stop();
+      }
+    },
+  );
 });
 
 async function occupy(port = 0): Promise<{ server: TcpServer; port: number }> {

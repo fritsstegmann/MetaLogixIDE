@@ -122,6 +122,9 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   expect(codeA).toBeTruthy();
   expect(codeA).toBe(codeB);
   if (!codeA || !codeB) throw new Error('Comparison codes missing');
+  await new Promise<void>((resolve) => setTimeout(resolve, 11_000));
+  expect(a.state().peers.find((peer) => peer.id === idB)?.verificationCode).toBe(codeA);
+  expect(b.state().peers.find((peer) => peer.id === idA)?.verificationCode).toBe(codeB);
   const incorrectCode = codeA === '0000-0000-0000' ? '9999-9999-9999' : '0000-0000-0000';
   await expect(a.approve(idB, incorrectCode)).rejects.toThrow('Verification code mismatch');
   await expect(a.status(idB)).rejects.toThrow();
@@ -363,3 +366,57 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     { timeout: 10_000, interval: 100 },
   );
 }, 45_000);
+
+it('keeps one comparison code when both devices request a link at once', async () => {
+  const operations: FleetOperations = {
+    status: () => ({ projects: [], shells: [] }),
+    launch: async () => ({ shellIndex: 0 }),
+    stop: async () => {},
+    write: async () => {},
+    snapshot: async () => ({ output: '', alive: false }),
+  };
+  function instance(name: string) {
+    const root = mkdtempSync(join(tmpdir(), 'metaide-fleet-pair-'));
+    roots.push(root);
+    const fleet = new FleetService({
+      name,
+      storageDir: join(root, 'fleet'),
+      operations,
+      keychain,
+    });
+    instances.push(fleet);
+    return fleet;
+  }
+  const a = instance('Fleet C');
+  const b = instance('Fleet D');
+  await a.start();
+  await b.start();
+  await a.setEnabled(true);
+  await b.setEnabled(true);
+  announceTo(a, b, 'Fleet D');
+  announceTo(b, a, 'Fleet C');
+  const idB = a.state().peers.find((peer) => peer.name === 'Fleet D')?.id;
+  const idA = b.state().peers.find((peer) => peer.name === 'Fleet C')?.id;
+  if (!idA || !idB) throw new Error('Both runtimes must discover one another');
+  await Promise.all([a.pair(idB), b.pair(idA)]);
+  await vi.waitFor(
+    () => {
+      const pendingA = a.state().peers.find((peer) => peer.id === idB);
+      const pendingB = b.state().peers.find((peer) => peer.id === idA);
+      expect(pendingA?.status).toBe('pending');
+      expect(pendingA?.verificationCode).toMatch(/^\d{4}-\d{4}-\d{4}$/);
+      expect(pendingB?.verificationCode).toBe(pendingA?.verificationCode);
+    },
+    { timeout: 5_000, interval: 100 },
+  );
+  const code = a.state().peers.find((peer) => peer.id === idB)?.verificationCode;
+  if (!code) throw new Error('Comparison code missing');
+  await a.approve(idB, code);
+  await b.approve(idA, code);
+  await vi.waitFor(() =>
+    expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked'),
+  );
+  await vi.waitFor(() =>
+    expect(b.state().peers.find((peer) => peer.id === idA)?.status).toBe('linked'),
+  );
+}, 15_000);

@@ -22,14 +22,21 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     });
     await win.getByRole('button', { name: 'Fleet', exact: true }).click();
     const panel = win.getByTestId('fleet-panel');
+    await expect(win.locator('main').getByTestId('fleet-panel')).toBeVisible();
     await expect(
-      panel.getByText('Fleet is off. Enable it to discover IDEs on your local network.'),
+      panel.getByText('Fleet is off. Turn it on in Settings to discover IDEs on your local network.'),
     ).toBeVisible();
-    await expect(panel.getByRole('button', { name: 'Enable fleet' })).toBeVisible();
+    await panel.getByRole('button', { name: 'Open Fleet settings' }).click();
+    const settings = win.getByRole('dialog', { name: 'Settings' });
+    await expect(settings).toBeVisible();
+    await expect(settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Fleet' })).toHaveAttribute('aria-current', 'page');
+    const discovery = settings.getByRole('switch', { name: 'Enable Fleet discovery' });
+    await expect(discovery).not.toBeChecked();
     const before = await win.evaluate(() => window.api.invoke('fleet:get-state', undefined));
     expect(before.enabled).toBe(false);
-    await panel.getByRole('button', { name: 'Enable fleet' }).click();
-    await expect(panel.getByRole('button', { name: 'Disable fleet' })).toBeVisible();
+    await discovery.click();
+    await expect(discovery).toBeChecked();
+    await win.getByTestId('settings-done').click();
     await expect(panel.getByText(/Looking for IDEs on this LAN/)).toBeVisible();
     const outcome = await win.evaluate(async () => {
       try {
@@ -45,9 +52,13 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
       }
     });
     expect(outcome).toBe('rejected');
-    await panel.getByRole('button', { name: 'Disable fleet' }).click();
+    await win.getByTestId('settings-open').click();
+    await expect(discovery).toBeChecked();
+    await discovery.click();
+    await expect(discovery).not.toBeChecked();
+    await win.getByTestId('settings-done').click();
     await expect(
-      panel.getByText('Fleet is off. Enable it to discover IDEs on your local network.'),
+      panel.getByText('Fleet is off. Turn it on in Settings to discover IDEs on your local network.'),
     ).toBeVisible();
     await win.getByTestId('ab-projects').click();
     await expect(panel).toBeHidden();

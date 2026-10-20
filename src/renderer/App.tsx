@@ -793,8 +793,8 @@ function MainApp() {
       <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
         <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
           <TitleGroup
-            projectName={selected?.name ?? null}
-            branch={git.isRepo ? (git.branch ?? 'HEAD') : null}
+            projectName={activeView === 'fleet' ? 'Fleet' : selected?.name ?? null}
+            branch={activeView !== 'fleet' && git.isRepo ? (git.branch ?? 'HEAD') : null}
           />
         </div>
         <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
@@ -835,8 +835,8 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            setActiveView(sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v);
-            if (!sidebarOpen) toggleSidebar(true, true);
+            setActiveView(sidebarOpen && activeView === v && v !== 'projects' && v !== 'fleet' ? 'projects' : v);
+            if (!sidebarOpen && v !== 'fleet') toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}
@@ -845,9 +845,8 @@ function MainApp() {
           taskCount={taskCount || undefined}
         />
         <AnimatePresence initial={false} custom={sidebarFold.custom}>
-          {sidebarOpen && (
+          {sidebarOpen && activeView !== 'fleet' && (
             <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
-              <div className={activeView === 'fleet' ? 'hidden md:contents' : 'contents'}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
                 onSelect={pick}
@@ -864,7 +863,6 @@ function MainApp() {
                 max={SIDEBAR_WIDTH.max}
                 side="left"
               />
-              </div>
               {activeView === 'chat' && (
                 <>
                   <div
@@ -930,30 +928,17 @@ function MainApp() {
                   />
                 </>
               )}
-              {activeView === 'fleet' && (
-                <>
-                  <div data-view="fleet" className="section-panel h-full min-w-0 max-w-[calc(100vw-3.5rem)] flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
-                    <FleetPanel />
-                  </div>
-                  <div className="hidden md:contents">
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={280}
-                    max={640}
-                    side="left"
-                  />
-                  </div>
-                </>
-              )}
             </FoldPane>
           )}
         </AnimatePresence>
         <main
-          className={`flex-1 flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2 ${activeView === 'fleet' ? 'hidden md:flex' : 'flex'}`}
-          data-sheet-content={mainSheetContent}
+          className="flex flex-1 flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
+          data-sheet-content={activeView === 'fleet' ? 'other' : mainSheetContent}
         >
+          {activeView === 'fleet' ? (
+            <FleetPanel onOpenSettings={() => { setSettingsSection('fleet'); setSettingsOpen(true); }} />
+          ) : (
+          <>
           <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
@@ -1080,6 +1065,8 @@ function MainApp() {
                   </section>
               : selected ? mainBody(selected) : <EmptyState />}
           </div>
+          </>
+          )}
         </main>
       </div>
 
