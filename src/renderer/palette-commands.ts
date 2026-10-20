@@ -6,11 +6,21 @@
  */
 import { PALETTE_COPY, type PaletteCommand, type PaletteSeed } from './command-palette-contract';
 import { SETTINGS_NAV_ITEMS, type SettingsSection } from './components/settings/nav-icons';
+import { KEEP_AWAKE_COPY, KEEP_AWAKE_PRESETS } from '@shared/keep-awake-contract';
 import { DIFF_COPY } from './diff-tab-copy';
 import type { ThemeMode, ThemePalette } from './hooks/useTheme';
 import { SHORTCUTS, type ShortcutDef, type ShortcutPlatform } from './shortcut-contract';
 import { formatShortcut } from './shortcut-format';
 import { RUNTIME_SHORTCUT_PLATFORM } from './shortcut-platform';
+
+/** The keep-awake actions the App-category rows run; `active` decides whether Stop and Turn screen off now are listed. */
+export interface PaletteKeepAwake {
+  readonly active: boolean;
+  readonly start: (minutes: number) => void;
+  readonly openUntil: () => void;
+  readonly stop: () => void;
+  readonly darkenNow: () => void;
+}
 
 export type PaletteTab = 'shell' | 'files' | 'diff' | 'env';
 
@@ -34,11 +44,28 @@ export interface PaletteCommandDeps {
   readonly setThemeMode: (mode: ThemeMode) => void;
   readonly setThemePalette: (palette: ThemePalette) => void;
   readonly openSettings: (section?: SettingsSection) => void;
+  /** Keep-awake rows; omitted or null off macOS (and in pop-out windows), which lists none. */
+  readonly keepAwake?: PaletteKeepAwake | null;
   /** Label notation for the hints; defaults to the runtime platform. */
   readonly platform?: ShortcutPlatform;
 }
 
 const noop = (): void => {};
+
+function keepAwakeCommands(k: PaletteKeepAwake | null | undefined): PaletteCommand[] {
+  if (!k) return [];
+  const rows: PaletteCommand[] = [
+    ...KEEP_AWAKE_PRESETS.map((p): PaletteCommand => ({ id: `keep-awake.${p.id}`, category: 'App', title: p.title, run: () => k.start(p.minutes) })),
+    { id: 'keep-awake.until', category: 'App', title: KEEP_AWAKE_COPY.palette.until, run: k.openUntil },
+  ];
+  if (k.active) {
+    rows.push(
+      { id: 'keep-awake.stop', category: 'App', title: KEEP_AWAKE_COPY.palette.stop, run: k.stop },
+      { id: 'keep-awake.darken', category: 'App', title: KEEP_AWAKE_COPY.palette.darkenNow, run: k.darkenNow },
+    );
+  }
+  return rows;
+}
 
 /** Builds the palette's commands for the current project and sidebar state, hinted in the platform's shortcut notation. */
 export function buildPaletteCommands(d: PaletteCommandDeps): PaletteCommand[] {
@@ -72,6 +99,7 @@ export function buildPaletteCommands(d: PaletteCommandDeps): PaletteCommand[] {
     { id: 'theme.catppuccin', category: 'Theme', title: 'Use Catppuccin palette', run: () => d.setThemePalette('catppuccin') },
     { id: 'theme.rose-pine', category: 'Theme', title: 'Use Rosé Pine palette', run: () => d.setThemePalette('rose-pine') },
     { id: 'app.settings', category: 'App', title: 'Open Settings', hint: hint(SHORTCUTS.settings), run: () => d.openSettings() },
+    ...keepAwakeCommands(d.keepAwake),
     ...SETTINGS_NAV_ITEMS.map(({ section, label }): PaletteCommand => ({
       id: `settings.${section}`,
       category: 'Settings',

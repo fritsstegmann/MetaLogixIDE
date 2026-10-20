@@ -7,6 +7,7 @@ import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
+import type { KeepAwakeDarkenResult, KeepAwakeStartRequest, KeepAwakeStartResult, KeepAwakeState } from './keep-awake-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -381,6 +382,12 @@ export interface IpcContract {
     };
   };
 
+  // keep-awake (macOS only; off darwin start/darken return 'unsupported')
+  'keep-awake:get':    { request: undefined; response: KeepAwakeState };
+  'keep-awake:start':  { request: KeepAwakeStartRequest; response: KeepAwakeStartResult };
+  'keep-awake:stop':   { request: undefined; response: KeepAwakeState };
+  'keep-awake:darken': { request: undefined; response: KeepAwakeDarkenResult };
+
   // health / dev
   'app:ping':    { request: undefined; response: 'pong' };
 }
@@ -416,5 +423,9 @@ export interface IpcEvents {
    * add the file's parent as a new root if nothing matches.
    */
   'app:open-file-request':  { path: string };
+  /** Keep-awake state changed (start, re-start, stop, expiry, quit); sent to every window. */
+  'keep-awake:changed':     KeepAwakeState;
+  /** Both darken actions (`pmset displaysleepnow`, ScreenSaverEngine) failed; keep-awake stays on. */
+  'keep-awake:darken-failed': Record<string, never>;
 }
 export type IpcEventName = keyof IpcEvents;

@@ -40,6 +40,7 @@ import { describeGitFailure, runGit } from '@main/git/run-git';
 import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
+import { keepAwakeHandlers } from '@main/keep-awake/handlers';
 import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -1365,6 +1366,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
 
   ...dropHandlers,
+  ...keepAwakeHandlers,
 };
 
 /** Events broadcast after a channel's handler resolves; exported for the CHANNEL_EMITS guard test. */

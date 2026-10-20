@@ -41,6 +41,8 @@ import { useEnvDrafts } from './hooks/useEnvDrafts';
 import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { useTaskCount } from './hooks/useTaskCount';
 import { toast } from './hooks/useToasts';
+import { useKeepAwake } from './hooks/useKeepAwake';
+import { KeepAwakeUntilDialog } from './components/KeepAwakeUntilDialog';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
 import { api } from './api';
@@ -284,6 +286,23 @@ function MainApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [scrollbackOpen, setScrollbackOpen] = useState(false);
+  const keepAwake = useKeepAwake();
+  const [keepAwakeUntilOpen, setKeepAwakeUntilOpen] = useState(false);
+  const keepAwakeActive = keepAwake?.state.active ?? false;
+  const keepAwakeStart = keepAwake?.start;
+  const keepAwakeStop = keepAwake?.stop;
+  const keepAwakeDarken = keepAwake?.darkenNow;
+  const paletteKeepAwake = useMemo(() => (
+    keepAwakeStart && keepAwakeStop && keepAwakeDarken
+      ? {
+          active: keepAwakeActive,
+          start: (minutes: number) => { void keepAwakeStart(minutes * 60_000); },
+          openUntil: () => setKeepAwakeUntilOpen(true),
+          stop: () => { void keepAwakeStop(); },
+          darkenNow: () => { void keepAwakeDarken(); },
+        }
+      : null
+  ), [keepAwakeActive, keepAwakeStart, keepAwakeStop, keepAwakeDarken]);
   const envDrafts = useEnvDrafts();
   const envDirty = selected != null && envDrafts.isDirty(selected.id);
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
@@ -379,8 +398,9 @@ function MainApp() {
       if (section) setSettingsSection(section);
       setSettingsOpen(true);
     },
+    keepAwake: paletteKeepAwake,
     platform,
-  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, platform]);
+  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, paletteKeepAwake, platform]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -1068,7 +1088,10 @@ function MainApp() {
         </main>
       </div>
 
-      <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} />
+      <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} keepAwake={keepAwake} />
+      {keepAwakeUntilOpen && keepAwake && (
+        <KeepAwakeUntilDialog onStart={(endsAt) => { void keepAwake.startUntil(endsAt); }} onClose={() => setKeepAwakeUntilOpen(false)} />
+      )}
       <Settings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

@@ -68,6 +68,7 @@ describe('registerIpc', () => {
       'shells:alive-list', 'shells:pin',
       'settings:get', 'settings:set', 'settings:set-font', 'settings:set-app-env', 'settings:set-claude-permission-mode',
       'files:tree', 'app:ping', 'notifications:viewed-shells', 'agent-state:list',
+      'keep-awake:get', 'keep-awake:start', 'keep-awake:stop', 'keep-awake:darken',
     ];
     for (const c of expected) expect(ipc.handlers.has(c)).toBe(true);
   });
