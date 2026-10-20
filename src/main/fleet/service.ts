@@ -42,6 +42,7 @@ export interface FleetOptions {
 interface Session {
   readonly id: string;
   readonly channel: FleetChannel;
+  readonly outbound: boolean;
   readonly localNonce: string;
   readonly helloId: string;
   remoteNonce?: string;
@@ -412,8 +413,11 @@ export class FleetService {
         },
         () => {
           try {
-            if (this.accept(socket, peer.id)) resolve();
-            else reject(new Error('Peer TLS identity does not match discovery'));
+            if (this.accept(socket, peer.id)) {
+              socket.setTimeout(0);
+              socket.removeListener('timeout', onTimeout);
+              resolve();
+            } else reject(new Error('Peer TLS identity does not match discovery'));
           } catch (error) {
             socket.destroy();
             reject(error);
@@ -421,10 +425,11 @@ export class FleetService {
         },
       );
       socket.once('error', reject);
-      socket.once('timeout', () => {
+      const onTimeout = () => {
         socket.destroy();
         reject(new Error('Fleet connection timeout'));
-      });
+      };
+      socket.once('timeout', onTimeout);
     });
     this.starting = connection;
     try {
@@ -486,15 +491,23 @@ export class FleetService {
       socket.destroy();
       return false;
     }
-    this.attachSession(socket, id);
+    const outbound = expected !== undefined;
+    const existing = this.sessions.get(id);
+    const preferredOutbound = this.identity.id < id;
+    if (existing && (existing.outbound === preferredOutbound || outbound !== preferredOutbound)) {
+      socket.destroy();
+      return true;
+    }
+    this.attachSession(socket, id, outbound);
     return true;
   }
 
-  private attachSession(socket: TLSSocket, id: string): void {
-    this.sessions.get(id)?.channel.close();
+  private attachSession(socket: TLSSocket, id: string, outbound: boolean): void {
+    const replaced = this.sessions.get(id);
     socket.setKeepAlive(true, 10_000);
     const channel = new FleetChannel(socket);
     const session: Session = {
+      outbound,
       id,
       channel,
       localNonce: randomBytes(32).toString('hex'),
@@ -505,6 +518,7 @@ export class FleetService {
       statusPending: 0,
     };
     this.sessions.set(id, session);
+    replaced?.channel.close();
     channel.onClose(() => {
       clearTimeout(session.deadline);
       if (this.sessions.get(id) === session) {

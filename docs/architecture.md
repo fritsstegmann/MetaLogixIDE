@@ -65,23 +65,28 @@ fingerprints, and revoked fingerprints in at most 1 MiB
 The user requests a link on one device. Both devices then display a
 12-digit comparison code from their TLS identities and fresh session nonces.
 The user must compare and approve the code on **both** devices.
+A dial has a 10-second TLS connection deadline. An established connection
+does not expire because it is idle. An unfinished pairing expires after
+90 seconds (`src/main/fleet/service.ts:403-432,503-537`).
+If both devices request a link at once, they keep the same TLS connection
+according to their certificate identities (`src/main/fleet/service.ts:458-503`).
 The Fleet view remains pending while local trust is saved. Incoming shell
 commands wait for that save to finish, and a failed save closes the connection.
 No peer can run an operation before both approvals are saved.
 Revocation closes the active channel and blocks future pairing with that
-fingerprint while the trust file is intact (`src/main/fleet/service.ts:787-810`).
+fingerprint while the trust file is intact (`src/main/fleet/service.ts:800-824`).
 If saving revocation fails, Fleet closes all connections and attempts to
 persist disabled trust without any approved peers. If even that fails, it
 removes the old trust file so a restart cannot restore trusted connections;
 previous revocation history is then lost. If storage cannot be written **or**
 removed, Fleet reports an error and cannot guarantee durable revocation until
-the storage fault is repaired (`src/main/fleet/service.ts:209-240`).
+the storage fault is repaired (`src/main/fleet/service.ts:220-241`).
 
 A linked peer can read project names and live shell status, launch a plain
 shell, stop a shell, send input, and read bounded recent output.
 Status travels in bounded pages from one captured peer snapshot.
 The caller receives one complete project and shell list
-(`src/main/fleet/service.ts:687-752,826-855`).
+(`src/main/fleet/service.ts:721-766,839-870`).
 This POC publishes status for at most 256 projects and 256 live shells per
 machine. A larger inventory is rejected rather than shown as a partial list;
 the Fleet panel names that limit in its status error
@@ -95,7 +100,7 @@ The Fleet panel clears remote content when the link closes and shows network
 failure separately from an empty LAN (`src/renderer/components/FleetPanel.tsx:349-376,654-677`).
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
-the network or credential store (`src/main/fleet/service.ts:85-101,250-260`).
+the network or credential store (`src/main/fleet/service.ts:86-103,261-271`).
 
 ### Main-process responsiveness
 
