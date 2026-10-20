@@ -2,13 +2,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@renderer/api';
 import type { FleetPeer, FleetState } from '@shared/fleet-contract';
+import { ICON_SIZE, ICON_STROKE } from './icon-size';
 import { Switch } from './settings/primitives';
+import { Tooltip } from './Tooltip';
 
 const BUTTON = 'min-h-11 max-w-full rounded-lg border border-[--border] px-3 text-base text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50';
 const FIELD = 'min-h-11 w-full rounded-lg border border-[--border] bg-[--surface-field] px-3 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2';
 
-interface Props {
-  readonly onOpenSettings: () => void;
+const STATUS: Record<FleetPeer['status'], { readonly label: string; readonly tone: string }> = {
+  discovered: { label: 'Discovered', tone: 'text-[--hue-cyan]' },
+  pending: { label: 'Awaiting approval', tone: 'text-[--hue-yellow]' },
+  linked: { label: 'Online', tone: 'text-[--hue-green]' },
+  offline: { label: 'Offline', tone: 'text-[--hue-pink]' },
+};
+const OFFLINE_HINT = 'Check that Fleet is enabled on both devices and they share a LAN.';
+
+function UnlinkIcon() {
+  return (
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={ICON_STROKE.outline} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71" />
+      <path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71" />
+      <line x1="8" y1="2" x2="8" y2="5" />
+      <line x1="2" y1="8" x2="5" y2="8" />
+      <line x1="16" y1="19" x2="16" y2="22" />
+      <line x1="19" y1="16" x2="22" y2="16" />
+    </svg>
+  );
 }
 
 interface PeerRowProps {
@@ -20,11 +39,36 @@ interface PeerRowProps {
 }
 
 function PeerRow({ peer, busy, code, onCode, onAction }: PeerRowProps) {
+  const status = STATUS[peer.status];
+  const trusted = peer.status === 'linked' || peer.status === 'offline';
   return (
-    <li className="min-w-0 space-y-3 rounded-lg border border-[--border] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="min-w-0 break-words text-base font-semibold">{peer.name}</h3>
-        <span className="text-base text-[--text-muted]">{{ discovered: 'Discovered', pending: 'Awaiting approval', linked: 'Linked', offline: 'Offline' }[peer.status]}</span>
+    <li className="min-w-0 space-y-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="break-words text-base font-semibold">{peer.name}</h3>
+          {peer.status === 'offline' ? (
+            <Tooltip label={OFFLINE_HINT} focusable>
+              <p tabIndex={0} className={`flex cursor-help items-center gap-1.5 rounded text-sm focus-visible:ring-2 focus-visible:ring-[--accent] ${status.tone}`}>
+                <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-current" />
+                {status.label}
+                <span className="sr-only">. {OFFLINE_HINT}</span>
+              </p>
+            </Tooltip>
+          ) : (
+            <p className={`flex items-center gap-1.5 text-sm ${status.tone}`}>
+              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-current" />
+              {status.label}
+            </p>
+          )}
+        </div>
+        {trusted && (
+          <Tooltip label="Revoke link" focusable>
+            <button type="button" aria-label="Revoke link" disabled={busy} onClick={() => onAction('revoke')}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[--text-muted] hover:bg-[--surface-hover] hover:text-[--danger] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50">
+              <UnlinkIcon />
+            </button>
+          </Tooltip>
+        )}
       </div>
       {peer.status === 'discovered' && <button type="button" className={BUTTON} disabled={busy} onClick={() => onAction('pair')}>Request link</button>}
       {peer.status === 'pending' && (
@@ -43,19 +87,13 @@ function PeerRow({ peer, busy, code, onCode, onAction }: PeerRowProps) {
           <button type="button" className={BUTTON} disabled={busy} onClick={() => onAction('revoke')}>Cancel request</button>
         </div>
       )}
-      {(peer.status === 'linked' || peer.status === 'offline') && (
-        <div className="space-y-3">
-          {peer.status === 'linked' && <p className="text-base text-[--text-muted]">Projects on this machine appear in the Projects sidebar.</p>}
-          {peer.status === 'offline' && <p className="text-base text-[--text-muted]">Check that Fleet is enabled on both devices and they share a LAN.</p>}
-          <button type="button" className={BUTTON} disabled={busy} onClick={() => onAction('revoke')}>Revoke link</button>
-        </div>
-      )}
+      {peer.status === 'linked' && <p className="text-base text-[--text-muted]">Projects on this machine appear in the Projects sidebar.</p>}
     </li>
   );
 }
 
 /** Controls discovery and peer linking in a compact side sheet without owning remote terminals. */
-export function FleetPanel({ onOpenSettings }: Props) {
+export function FleetPanel() {
   const [state, setState] = useState<FleetState | null>(null);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -124,22 +162,20 @@ export function FleetPanel({ onOpenSettings }: Props) {
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col text-[--text]" data-testid="fleet-panel" data-view="fleet" aria-label="Fleet">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[--border] px-3 py-2">
-        <h2 className="text-sm font-medium">Fleet</h2>
-        <button type="button" aria-label="Open Fleet settings" className="min-h-11 rounded-md px-2 text-sm text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent]" onClick={onOpenSettings}>Settings</button>
+      <header className="flex min-h-11 shrink-0 items-center justify-between gap-2 px-3 py-2">
+        <h2 className="text-sm font-medium leading-[22px]">Fleet</h2>
+        {state && (
+          <div aria-busy={busyEnabled} className={busyEnabled ? 'flex opacity-50' : 'flex'}>
+            <Switch ariaLabel="Enable Fleet discovery" testId="fleet-sheet-enabled" disabled={busyEnabled}
+              checked={state.enabled} onChange={(enabled) => void changeEnabled(enabled)} />
+          </div>
+        )}
       </header>
-      {state && (
-        <fieldset disabled={busyEnabled} aria-busy={busyEnabled} className="shrink-0 border-b border-[--border] px-3 py-3">
-          <legend className="sr-only">Fleet discovery</legend>
-          <Switch label="Enable Fleet" ariaLabel="Enable Fleet discovery" testId="fleet-sheet-enabled"
-            checked={state.enabled} onChange={(enabled) => void changeEnabled(enabled)} />
-        </fieldset>
-      )}
       <div className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {error && <p role="alert" className="mb-3 text-base text-[--danger]">{error}</p>}
         {!state && (error ? <button type="button" className={BUTTON} onClick={() => void retry()}>Retry</button> : <p role="status" className="text-base">Loading Fleet…</p>)}
         {state?.error && <p role="alert" className="mb-3 text-base text-[--danger]">{state.error}</p>}
-        {state && !state.enabled && <p className="text-base text-[--text-muted]">Fleet is off. Enable discovery above to find IDEs on your local network.</p>}
+        {state && !state.enabled && <p className="text-base text-[--text-muted]">Fleet is off. Turn on the switch above to find IDEs on your local network.</p>}
         {state?.enabled && (state.peers.length ? <ul aria-label="Fleet machines" className="flex min-w-0 flex-col gap-3">{state.peers.map((peer) => <PeerRow key={peer.id} peer={peer} busy={busyId !== null} code={code?.peerId === peer.id ? code.value : ''} onCode={(value) => setCode({ peerId: peer.id, value })} onAction={(kind) => void action(peer, kind)} />)}</ul> : <p role="status" className="text-base text-[--text-muted]">Looking for IDEs on this LAN. Check the network and multicast if none appear.</p>)}
       </div>
     </section>

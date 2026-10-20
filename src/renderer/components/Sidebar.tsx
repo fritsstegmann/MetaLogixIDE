@@ -231,7 +231,7 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
         </Section>
         {fleet?.enabled && fleet.peers.filter((peer) => peer.status === 'linked' || peer.status === 'offline').map((peer) => (
           <Section key={peer.id} title={peer.name} persistKey={`fleet:${peer.id}`} testId={`fleet-machine-${peer.id}`}
-            statusLabel={peer.status === 'linked' ? 'Linked' : 'Offline'}>
+            status={peer.status === 'linked' ? { label: 'Online', tone: 'text-[--hue-green]' } : { label: 'Offline', tone: 'text-[--hue-pink]' }}>
             <FleetMachine peer={peer} status={remoteStatuses[peer.id]} filter={filter} selected={selectedRemote} onSelect={onSelectRemote} onLoad={loadRemote} />
           </Section>
         ))}
@@ -288,7 +288,6 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
           <button type="button" onClick={() => void onLoad(peer.id)} className="min-h-11 rounded-lg px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry</button>
         </div>
       )}
-      {!online && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">{peer.name} is offline. Reconnect to open projects.</p>}
       {online && status?.kind === 'ready' && data?.roots.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote folders.</p>}
       {online && status?.kind === 'ready' && data?.roots.length !== 0 && data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
       {data?.roots.map((root) => (
@@ -369,7 +368,7 @@ function writeCollapsedKeys(key: string, set: Set<string>): void {
 }
 
 function Section({
-  title, persistKey = title, testId, accent = false, dotState, statusLabel, children,
+  title, persistKey = title, testId, accent = false, dotState, status, children,
 }: {
   title: string;
   /** Collapse-state key; defaults to `title`, so a renamed section can keep its stored state. */
@@ -378,7 +377,8 @@ function Section({
   accent?: boolean;
   /** Worst severity among the section's shells, independent of agent identity. */
   dotState?: AgentState;
-  statusLabel?: string;
+  /** Connection status shown at the right of the header, with its text colour class. */
+  status?: { readonly label: string; readonly tone: string };
   children: React.ReactNode;
 }) {
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(() => readCollapsedKeys(SECTION_COLLAPSED_KEY));
@@ -396,14 +396,19 @@ function Section({
     <div data-testid={testId}>
       <button
         onClick={toggle}
-        aria-label={statusLabel ? `${title}, ${statusLabel.toLowerCase()}` : undefined}
+        aria-label={status ? `${title}, ${status.label.toLowerCase()}` : undefined}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className={`w-full ${statusLabel ? 'min-h-11 mb-2 focus-visible:ring-2 focus-visible:ring-[--accent]' : 'h-[26px] mb-1'} px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]`}
+        className={`w-full ${status ? 'min-h-11 mb-2 focus-visible:ring-2 focus-visible:ring-[--accent]' : 'h-[26px] mb-1'} px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]`}
       >
         {accent && <StatusDot state={dotState ?? 'idle'} />}
         <span className={`flex-1 ${accent ? '' : 'text-[--text-muted]'}`}>{title}</span>
-        {statusLabel && <span className="text-[10px] normal-case tracking-normal text-[--text-muted]">{statusLabel}</span>}
+        {status && (
+          <span className={`flex items-center gap-1.5 text-[11px] normal-case tracking-normal ${status.tone}`}>
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+            {status.label}
+          </span>
+        )}
         <ChevronIcon collapsed={collapsed} />
       </button>
       {!collapsed && children}

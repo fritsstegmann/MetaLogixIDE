@@ -211,12 +211,12 @@ describe('Projects sidebar Fleet grouping', () => {
       setItem: (key: string, value: string) => stored.set(key, value),
     });
     clickButton('remote-root-toggle', 'Workspace on Build Mac');
-    clickButton('fleet-machine-machine-b-toggle', 'Build Mac, linked');
+    clickButton('fleet-machine-machine-b-toggle', 'Build Mac, online');
     expect(markup()).not.toContain('Workspace on Build Mac');
-    expect(markup()).toContain('Build Mac, linked');
+    expect(markup()).toContain('Build Mac, online');
     scenario.states.clear();
     expect(markup()).not.toContain('Workspace on Build Mac');
-    clickButton('fleet-machine-machine-b-toggle', 'Build Mac, linked');
+    clickButton('fleet-machine-machine-b-toggle', 'Build Mac, online');
     expect(markup()).toContain('Workspace on Build Mac');
     expect(markup()).not.toContain('Service on Build Mac');
   });

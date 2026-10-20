@@ -76,13 +76,11 @@ function text(node: ReactNode): string {
   return text((node.props as { children?: ReactNode }).children);
 }
 function mount(initial: FleetState, fail = false) {
-  const onOpenSettings = vi.fn();
   invoke.mockImplementation((channel: string) => channel === 'fleet:get-state' ? fail ? Promise.reject(new Error('private diagnostics')) : Promise.resolve(initial) : Promise.resolve({ ok: true }));
-  const draw = () => runtime.render(() => FleetPanel({ onOpenSettings }));
+  const draw = () => runtime.render(() => FleetPanel());
   draw();
   return {
     draw,
-    onOpenSettings,
     async loaded() { await flush(); draw(); },
     visible() { return text(draw()); },
     control(label: string) {
@@ -110,14 +108,6 @@ beforeEach(() => { runtime.reset(); listeners.clear(); invoke.mockReset(); });
 afterEach(() => { runtime.unmount(); });
 
 describe('FleetPanel discovery and trust', () => {
-  it('does not enable discovery when the Fleet settings modal opens', async () => {
-    const app = mount({ enabled: false, peers: [], controls: [] });
-    await app.loaded();
-    app.control('Open Fleet settings').onClick();
-    expect(app.onOpenSettings).toHaveBeenCalledOnce();
-    expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
-  });
-
   it('enables and disables discovery from Fleet while keeping the switch in sync', async () => {
     const app = mount({ enabled: false, peers: [], controls: [] });
     await app.loaded();

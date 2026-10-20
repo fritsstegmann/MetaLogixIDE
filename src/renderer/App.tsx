@@ -971,7 +971,7 @@ function MainApp() {
               {activeView === 'fleet' && (
                 <>
                   <div className="section-panel h-full flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
-                    <FleetPanel onOpenSettings={() => { setSettingsSection('fleet'); setSettingsOpen(true); }} />
+                    <FleetPanel />
                   </div>
                   <ResizeHandle
                     value={chatPanelWidth}

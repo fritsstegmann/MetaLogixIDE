@@ -890,6 +890,7 @@ kbd {
   --hue-cyan: var(--term-cyan, var(--hue-cyan-default));
   --hue-pink: var(--term-red, var(--hue-pink-default));
   --hue-orange: var(--hue-orange-default);
+  --hue-green: var(--term-green, var(--hue-green-default));
   /* Hue pulled toward --text so small coloured text keeps its contrast. */
   --hue-orange-text: color-mix(in oklab, var(--hue-orange) 75%, var(--text));
   --hue-orange-soft: color-mix(in oklab, var(--hue-orange) 22%, transparent);
@@ -903,6 +904,7 @@ kbd {
   --hue-cyan-default: #7dcfff;
   --hue-pink-default: #f7768e;
   --hue-orange-default: #ff9e64;
+  --hue-green-default: #9ece6a;
 }
 :root[data-theme="light"] {
   --badge-ink: #fff;
