@@ -194,11 +194,11 @@ describe('Projects sidebar Fleet grouping', () => {
     expect(invoke).toHaveBeenCalledWith('fleet:status', { peerId: 'machine-b' });
     const oldReply = replies[0];
     expect(oldReply).toBeDefined();
-    scenario.emit?.({ enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'offline' }] });
+    scenario.emit?.({ enabled: true, port: 43872, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'offline' }] });
     oldReply?.(status);
     await Promise.resolve();
     await Promise.resolve();
-    scenario.emit?.({ enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'linked' }] });
+    scenario.emit?.({ enabled: true, port: 43872, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'linked' }] });
     expect(markup()).not.toContain('data-testid=\"remote-project-row\"');
     scenario.effects[1]?.();
     const freshReply = replies[1];
