@@ -68,9 +68,13 @@ stay cheap and must never wait on a child process.
   of order, so every git poller in the renderer (`useGitStatus`,
   `usePanelStatus` in `GitPanel.tsx`, `useGitChanges`) uses
   `createRequestGate`: it applies only the latest request's reply and
-  skips a poll tick while a request is in flight. Git commands that the user
-  starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
-  use `spawnSync`; this is a known gap, recorded as a follow-up.
+  skips a poll tick while a request is in flight.
+- **User-started git commands are asynchronous.** `git:stage`,
+  `git:unstage`, `git:commit`, `git:push`, `git:pull` and the git steps of
+  `projects:create` and `projects:clone-git` run through the async
+  `runGitCommand` (`src/main/git/run-git-command.ts`). Unlike `runGit` it
+  adds no safety arguments, so hooks and credential helpers behave as in the
+  user's terminal. A slow hook, push or clone no longer freezes the window.
 - **mise task listing is asynchronous.** `tasks:discover` and `tasks:run`
   list mise tasks through the async `execFile` in `listMiseTasks`
   (`src/main/domain/mise-cli.ts:48`). mise is killed after 5 s. A project

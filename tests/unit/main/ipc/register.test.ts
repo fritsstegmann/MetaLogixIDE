@@ -1820,6 +1820,99 @@ describe('git handlers for the Diff tab and Git panel (AC9, AC19, AC20, AC28, AC
   });
 });
 
+describe('git write handlers and project git setup do not block the main process', () => {
+  beforeEach(stubGitEnv);
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  /** A repo at `<base>/proj` with one commit and one modified file, resolved as project 1; root 1 is `<base>`. */
+  function writeRig() {
+    const { base, root } = tempProject('reg-gitw-');
+    git(root, 'init', '-q', '-b', 'main');
+    writeFileSync(join(root, 'a.txt'), 'one\n');
+    commitAll(root);
+    writeFileSync(join(root, 'a.txt'), 'two\n');
+    const ipc = fakeIpcMain();
+    const projects = {
+      get: (id: number) => (id === 1 ? { id: 1, path: root } : undefined),
+      upsert: (rootId: number, path: string, name: string) => ({ id: 2, rootId, path, name }),
+      markLastOpened: () => {},
+    };
+    const roots = { list: () => [{ id: 1, path: base }] };
+    registerIpc(ipc as unknown as IpcMain, { projects, roots } as unknown as Parameters<typeof registerIpc>[1], () => {});
+    const call = (channel: string, req: unknown) => ipc.handlers.get(channel)!({}, req);
+    const slowGit = () => vi.stubEnv('PATH', `${slowCommandDir(base, 'git', 0.6)}:${process.env.PATH ?? ''}`);
+    return { base, root, call, slowGit };
+  }
+
+  it.each([
+    ['git:stage', { projectId: 1, paths: ['a.txt'] }],
+    ['git:unstage', { projectId: 1, paths: ['a.txt'] }],
+    ['git:commit', { projectId: 1, message: 'm' }],
+    ['git:push', { projectId: 1 }],
+    ['git:pull', { projectId: 1 }],
+    ['projects:create', { rootId: 1, name: 'fresh', initGit: true }],
+    ['projects:clone-git', { rootId: 1, url: 'proj', name: 'copy' }],
+  ])('%s lets timers run while git is still running', async (channel, req) => {
+    const { call, slowGit } = writeRig();
+    slowGit();
+    expect(await finishOrder(() => call(channel, req).catch(() => {}))).toEqual(['timer', 'work']);
+  });
+
+  it('git:stage and git:unstage move a file into and out of the index', async () => {
+    const { root, call } = writeRig();
+    await expect(call('git:stage', { projectId: 1, paths: ['a.txt'] })).resolves.toEqual({ ok: true });
+    expect(git(root, 'status', '--porcelain=v1')).toBe('M  a.txt\n');
+    await expect(call('git:unstage', { projectId: 1, paths: ['a.txt'] })).resolves.toEqual({ ok: true });
+    expect(git(root, 'status', '--porcelain=v1')).toBe(' M a.txt\n');
+  });
+
+  it('git:commit passes a multi-line message with shell metacharacters through verbatim', async () => {
+    const { root, call } = writeRig();
+    const message = 'subject `x` $HOME\n\nbody "quoted"\n';
+    await call('git:stage', { projectId: 1, paths: ['a.txt'] });
+    await expect(call('git:commit', { projectId: 1, message })).resolves.toEqual({ ok: true });
+    expect(git(root, 'log', '-1', '--format=%B')).toBe(`${message}\n`);
+  });
+
+  it('git:commit with nothing staged rejects with git\'s explanation', async () => {
+    const { call } = writeRig();
+    await expect(call('git:commit', { projectId: 1, message: 'm' })).rejects.toThrow(/no changes added to commit|nothing (added )?to commit/);
+  });
+
+  it('git:stage of a missing path rejects with git\'s error', async () => {
+    const { call } = writeRig();
+    await expect(call('git:stage', { projectId: 1, paths: ['missing.txt'] })).rejects.toThrow(/did not match any files/);
+  });
+
+  it('git:push without a remote rejects with git\'s error', async () => {
+    const { call } = writeRig();
+    await expect(call('git:push', { projectId: 1 })).rejects.toThrow(/no configured push destination|No configured push destination/i);
+  });
+
+  it('git:pull reports git\'s output on success', async () => {
+    const { base, root, call } = writeRig();
+    git(root, 'stash', '-q');
+    git(base, 'clone', '-q', 'proj', 'upstream');
+    git(root, 'remote', 'add', 'origin', join(base, 'upstream'));
+    git(root, 'fetch', '-q', 'origin');
+    git(root, 'branch', '-q', '--set-upstream-to=origin/main');
+    await expect(call('git:pull', { projectId: 1 })).resolves.toEqual({ ok: true, output: 'Already up to date.' });
+  });
+
+  it('projects:create with initGit makes a git repository', async () => {
+    const { base, call } = writeRig();
+    await call('projects:create', { rootId: 1, name: 'fresh', initGit: true });
+    expect(git(join(base, 'fresh'), 'rev-parse', '--is-inside-work-tree').trim()).toBe('true');
+  });
+
+  it('projects:clone-git clones the repository and rejects with git\'s error when the clone fails', async () => {
+    const { base, call } = writeRig();
+    await call('projects:clone-git', { rootId: 1, url: join(base, 'proj'), name: 'copy' });
+    expect(readFileSync(join(base, 'copy', 'a.txt'), 'utf8')).toBe('one\n');
+    await expect(call('projects:clone-git', { rootId: 1, url: join(base, 'nope'), name: 'bad' })).rejects.toThrow(/does not exist|not a git repository|Could not read/i);
+  });
+});
+
 describe('shells:live-stats', () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
