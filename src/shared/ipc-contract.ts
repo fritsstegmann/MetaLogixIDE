@@ -99,6 +99,8 @@ export interface IpcContract {
    */
   'shells:set-default-cli':     { request: ProjectDefaultAgentRequest; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
+  /** Repair a corrupted Claude session by stripping all thinking blocks from the most recent .jsonl session file. Backs up the original. */
+  'claude:repair-session': { request: { projectId: number }; response: { repaired: number; blocksStripped: number; backup: string } | { repaired: 0; blocksStripped: 0; backup: null; reason: string } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'shells:write':       { request: { projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'shells:alive-list':  { request: undefined;                                   response: { shells: AliveShellSummary[] } };

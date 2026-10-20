@@ -544,6 +544,29 @@ export function ShellTab({
     }
   }, [projectId, shellIndex, relaunching]);
 
+  // Strip bad thinking blocks from the saved Claude session so --continue
+  // works again. Backs up the original. Keeps user/assistant text + tool
+  // messages — only loses the model's internal reasoning blocks.
+  const repairSession = useCallback(async () => {
+    if (relaunching) return;
+    setRelaunching(true);
+    try {
+      try { await api.invoke('shells:kill', { projectId, shellIndex }); } catch { /* fine */ }
+      const result = await api.invoke('claude:repair-session', { projectId });
+      if (result.repaired === 0) {
+        toast('Nothing to repair', { kind: 'warning', detail: (result as { reason?: string }).reason });
+      } else {
+        toast('Session repaired', { kind: 'success', detail: `Stripped ${result.blocksStripped} thinking block${result.blocksStripped === 1 ? '' : 's'}. Original backed up.` });
+      }
+      setSessionCorrupted(false);
+      await api.invoke('shells:launch', { projectId });
+    } catch (e) {
+      toast('Repair failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    } finally {
+      setRelaunching(false);
+    }
+  }, [projectId, shellIndex, relaunching]);
+
   // Kill the currently running (but stuck) shell then re-launch it, optionally with a specific profile.
   // The default-path relaunch forces the "first" variant: if the shell is stuck
   // it's almost always because --continue picked up a bad session, so starting
@@ -589,16 +612,25 @@ export function ShellTab({
       <div ref={termHostRef} className="w-full h-full isolate" />
       {sessionCorrupted && (
         <div className="absolute inset-x-0 top-3 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-3 bg-[--danger]/15 border border-[--danger]/40 rounded-md shadow-xl px-3 py-2 text-xs text-[--text] max-w-[640px]">
+          <div className="pointer-events-auto flex items-center gap-3 bg-[--danger]/15 border border-[--danger]/40 rounded-md shadow-xl px-3 py-2 text-xs text-[--text] max-w-[720px]">
             <span className="font-medium text-[--danger]">Claude session corrupted</span>
-            <span className="text-[--text-muted]">(API rejected the saved thinking block)</span>
+            <span className="text-[--text-muted]">(API rejected a saved thinking block)</span>
+            <button
+              onClick={repairSession}
+              disabled={relaunching}
+              className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
+              title="Strip bad thinking blocks and resume the session"
+            >
+              {relaunching && <span className="mp-spinner" aria-hidden />}
+              <span>Repair session</span>
+            </button>
             <button
               onClick={startFreshSession}
               disabled={relaunching}
-              className="pressable bg-[color:var(--accent)] text-[--accent-text] rounded-md px-2.5 py-1 font-medium hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
+              className="pressable border border-[--border] rounded-md px-2.5 py-1 font-medium hover:bg-[--surface-hover] disabled:opacity-50"
+              title="Discard the saved session and start a brand-new one"
             >
-              {relaunching && <span className="mp-spinner" aria-hidden />}
-              <span>{relaunching ? 'Starting…' : 'Start fresh session'}</span>
+              Start fresh
             </button>
             <button
               onClick={() => setSessionCorrupted(false)}
