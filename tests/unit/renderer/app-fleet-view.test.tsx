@@ -23,7 +23,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it('restores the actual Fleet view and leaves the local sheet hidden on narrow screens', async () => {
+it('restores Fleet and Projects views without leaking remote content into local layout', async () => {
   const saved = new Map<string, string>([['metaide.activeView', JSON.stringify('fleet')]]);
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => saved.get(key) ?? null,
@@ -73,5 +73,12 @@ it('restores the actual Fleet view and leaves the local sheet hidden on narrow s
   expect(markup).toContain('data-testid="fleet-panel"');
   expect(markup).toContain('Loading fleet');
   expect(markup).toMatch(/<main[^>]+hidden md:flex/);
+  expect(markup).toContain('class="hidden md:contents"');
   expect(markup).toContain('aria-label="Fleet"');
+  saved.set('metaide.activeView', JSON.stringify('projects'));
+  const projectsMarkup = renderToStaticMarkup(createElement(App));
+  expect(projectsMarkup).not.toContain('data-view="fleet"');
+  expect(projectsMarkup).not.toContain('data-testid="fleet-panel"');
+  expect(projectsMarkup).toContain('class="contents"');
+  expect(projectsMarkup).toMatch(/<main[^>]+mr-2 flex"/);
 });
