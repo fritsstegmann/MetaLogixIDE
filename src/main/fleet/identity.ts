@@ -27,6 +27,14 @@ import { X509CertificateGenerator } from '@peculiar/x509';
 export interface FleetKeychain {
   getPassword(service: string, account: string): Promise<string | null>;
   setPassword(service: string, account: string, password: string): Promise<void>;
+  deletePassword(service: string, account: string): Promise<boolean>;
+}
+/** The stored identity exists but cannot be parsed or validated; only a reset recovers it. */
+export class FleetCredentialError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Invalid fleet credential', options);
+    this.name = 'FleetCredentialError';
+  }
 }
 export interface FleetIdentity {
   readonly id: string;
@@ -53,7 +61,9 @@ async function systemKeychain(): Promise<FleetKeychain> {
     !('getPassword' in candidate) ||
     typeof candidate.getPassword !== 'function' ||
     !('setPassword' in candidate) ||
-    typeof candidate.setPassword !== 'function'
+    typeof candidate.setPassword !== 'function' ||
+    !('deletePassword' in candidate) ||
+    typeof candidate.deletePassword !== 'function'
   )
     throw new Error('Fleet credential store unavailable');
   return candidate as FleetKeychain;
@@ -127,19 +137,14 @@ export class FleetIdentityStore {
     ensureSafe(this.directory, true);
   }
 
-  /** Loads or generates the private identity only through the OS credential store. */
-  async loadIdentity(requireExisting = false): Promise<FleetIdentity> {
-    this.ensureDirectory();
-    const vault = this.keychain ?? (await systemKeychain());
-    const account = `tls-v1:${createHash('sha256').update(resolve(this.directory)).digest('hex')}`;
-    const saved = await vault.getPassword(SERVICE, account);
-    if (saved !== null) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(saved) as unknown;
-      } catch {
-        throw new Error('Invalid fleet credential');
-      }
+  private account(): string {
+    return `tls-v1:${createHash('sha256').update(resolve(this.directory)).digest('hex')}`;
+  }
+
+  /** Parses and verifies a stored credential; any malformed content raises FleetCredentialError. */
+  private parseCredential(saved: string): FleetIdentity {
+    try {
+      const parsed: unknown = JSON.parse(saved);
       if (
         parsed === null ||
         typeof parsed !== 'object' ||
@@ -148,7 +153,7 @@ export class FleetIdentityStore {
         typeof parsed.key !== 'string' ||
         typeof parsed.cert !== 'string'
       )
-        throw new Error('Invalid fleet credential');
+        throw new Error('Malformed credential');
       const cert = new X509Certificate(parsed.cert);
       const key = createPrivateKey(parsed.key);
       const derived = createPublicKey(key).export({ type: 'spki', format: 'der' });
@@ -161,13 +166,30 @@ export class FleetIdentityStore {
         Date.parse(cert.validFrom) > Date.now() ||
         Date.parse(cert.validTo) < Date.now()
       )
-        throw new Error('Invalid fleet credential');
+        throw new Error('Credential failed validation');
       return {
         cert: parsed.cert,
         key: parsed.key,
         id: createHash('sha256').update(cert.raw).digest('hex'),
       };
+    } catch (cause) {
+      throw new FleetCredentialError({ cause });
     }
+  }
+
+  /** Removes this directory's identity from the credential store; other devices' entries are untouched. */
+  async deleteIdentity(): Promise<void> {
+    const vault = this.keychain ?? (await systemKeychain());
+    await vault.deletePassword(SERVICE, this.account());
+  }
+
+  /** Loads or generates the private identity only through the OS credential store; unreadable content raises FleetCredentialError. */
+  async loadIdentity(requireExisting = false): Promise<FleetIdentity> {
+    this.ensureDirectory();
+    const vault = this.keychain ?? (await systemKeychain());
+    const account = this.account();
+    const saved = await vault.getPassword(SERVICE, account);
+    if (saved !== null) return this.parseCredential(saved);
     if (requireExisting)
       throw new Error('Fleet identity unavailable; existing trust cannot be restored');
     const keys = await globalThis.crypto.subtle.generateKey(

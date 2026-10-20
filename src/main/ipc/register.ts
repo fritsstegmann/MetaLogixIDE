@@ -196,6 +196,13 @@ function peekFile({ abs, root, projectId }: PeekCandidate, maxLines: number): Ip
   }
 }
 
+/** Reads one field from an untrusted IPC payload; null, non-objects and missing fields yield undefined. */
+function requestField(req: unknown, key: string): unknown {
+  return typeof req === 'object' && req !== null && key in req
+    ? (req as Record<string, unknown>)[key]
+    : undefined;
+}
+
 function needFleet(services: Services): NonNullable<Services['fleet']> {
   if (!services.fleet) throw new Error('Fleet is not available');
   return services.fleet;
@@ -221,6 +228,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'app:ping': async () => 'pong',
   'fleet:get-state': async (s) => needFleet(s).state(),
   'fleet:set-enabled': async (s, { enabled }) => needFleet(s).setEnabled(enabled),
+  'fleet:set-port': async (s, req) => needFleet(s).setPort(requestField(req, 'port')),
+  'fleet:reset-identity': async (s) => needFleet(s).resetIdentity(),
   'fleet:pair': async (s, { peerId }) => { await needFleet(s).pair(peerId); return { ok: true }; },
   'fleet:approve': async (s, { peerId, verificationCode }) => {
     await needFleet(s).approve(peerId, verificationCode);

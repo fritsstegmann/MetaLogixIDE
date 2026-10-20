@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Socket as DatagramSocket } from 'node:dgram';
 import { Server as TlsServer } from 'node:tls';
+import { createServer as createTcpServer, type Server as TcpServer } from 'node:net';
 import { join } from 'node:path';
 import { FleetService, type FleetOperations } from '@main/fleet/service';
 import { FleetChannel } from '@main/fleet/channel';
@@ -18,6 +19,7 @@ const keychain: FleetKeychain = {
   setPassword: async (service, account, password) => {
     vault.set(`${service}:${account}`, password);
   },
+  deletePassword: async (service, account) => vault.delete(`${service}:${account}`),
 };
 const operations = (): FleetOperations => ({
   status: () => ({ projects: [{ id: 1, name: 'Project' }], shells: [] }),
@@ -103,7 +105,7 @@ describe('fleet authorization', () => {
   it('defaults disabled and forbids unknown, revoked and offline status and shell operations', async () => {
     const fleet = service('Local');
     await fleet.start();
-    expect(fleet.state()).toEqual({ enabled: false, peers: [] });
+    expect(fleet.state()).toEqual({ enabled: false, peers: [], port: 0 });
     await expect(fleet.status('a'.repeat(64))).rejects.toThrow();
     await expect(fleet.launch('a'.repeat(64), 1)).rejects.toThrow();
     await expect(fleet.stopShell('a'.repeat(64), 1, 0)).rejects.toThrow();
@@ -378,7 +380,7 @@ describe('fleet authorization', () => {
       keychain,
     });
     await restarted.start();
-    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    expect(restarted.state()).toEqual({ enabled: false, peers: [], port: 0 });
     expect((await store.load()).revoked).toEqual([peerId]);
     await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
     await restarted.stop();
@@ -411,7 +413,7 @@ describe('fleet authorization', () => {
       keychain,
     });
     await restarted.start();
-    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    expect(restarted.state()).toEqual({ enabled: false, peers: [], port: 0 });
     await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
     await restarted.stop();
   });
@@ -445,6 +447,9 @@ describe('fleet authorization', () => {
       setPassword: async () => {
         throw new Error('unavailable');
       },
+      deletePassword: async () => {
+        throw new Error('unavailable');
+      },
     };
     const fleet = new FleetService({
       name: 'Local',
@@ -469,6 +474,9 @@ describe('fleet authorization', () => {
         throw new Error('unavailable');
       },
       setPassword: async () => {
+        throw new Error('unavailable');
+      },
+      deletePassword: async () => {
         throw new Error('unavailable');
       },
     };
@@ -553,5 +561,343 @@ describe('fleet authorization', () => {
     await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
     expect(request).toHaveBeenCalledTimes(7);
     channel.close();
+  });
+});
+
+async function occupy(port = 0): Promise<{ server: TcpServer; port: number }> {
+  const server = createTcpServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '0.0.0.0', resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No port');
+  return { server, port: address.port };
+}
+async function freePort(): Promise<number> {
+  const held = await occupy();
+  await new Promise((resolve) => held.server.close(resolve));
+  return held.port;
+}
+function portedService(getPort: () => number, savePort: (port: number) => void = () => {}) {
+  const storageDir = mkdtempSync(join(tmpdir(), 'fleet-port-'));
+  roots.push(storageDir);
+  const fleet = new FleetService({
+    name: 'Local',
+    storageDir,
+    operations: operations(),
+    keychain,
+    getPort,
+    savePort,
+  });
+  return { fleet, storageDir };
+}
+function boundPort(fleet: FleetService): number | undefined {
+  const server: unknown = Reflect.get(fleet, 'server');
+  const address = server instanceof TlsServer ? server.address() : null;
+  return address && typeof address !== 'string' ? address.port : undefined;
+}
+
+describe('fleet listener port', () => {
+  it('binds the configured port and reports it in state', async () => {
+    const port = await freePort();
+    const { fleet } = portedService(() => port);
+    await fleet.start();
+    await fleet.setEnabled(true);
+    try {
+      expect(boundPort(fleet)).toBe(port);
+      expect(fleet.state().port).toBe(port);
+    } finally {
+      await fleet.stop();
+    }
+  });
+
+  it('fails enable with the exact in-use message, stays disabled and surfaces it in state', async () => {
+    const held = await occupy();
+    const { fleet, storageDir } = portedService(() => held.port);
+    await fleet.start();
+    try {
+      const message = `Fleet port ${held.port} is already in use`;
+      await expect(fleet.setEnabled(true)).rejects.toThrow(new RegExp(`^${message}$`));
+      expect(fleet.state().enabled).toBe(false);
+      expect(fleet.state().error).toBe(message);
+      expect((await new FleetIdentityStore(storageDir, keychain).load()).enabled).toBe(false);
+      expect(boundPort(fleet)).toBeUndefined();
+    } finally {
+      await fleet.stop();
+      await new Promise((resolve) => held.server.close(resolve));
+    }
+  });
+
+  it('reports the in-use message when a saved opt-in cannot bind at start', async () => {
+    const port = await freePort();
+    const first = portedService(() => port);
+    await first.fleet.start();
+    await first.fleet.setEnabled(true);
+    await first.fleet.stop();
+    const held = await occupy(port);
+    const second = new FleetService({
+      name: 'Local',
+      storageDir: first.storageDir,
+      operations: operations(),
+      keychain,
+      getPort: () => port,
+    });
+    try {
+      await second.start();
+      expect(second.state().error).toBe(`Fleet port ${port} is already in use`);
+    } finally {
+      await second.stop();
+      await new Promise((resolve) => held.server.close(resolve));
+    }
+  });
+
+  it('rejects every hostile port value without persisting or rebinding', async () => {
+    const port = await freePort();
+    const saved: number[] = [];
+    const { fleet } = portedService(
+      () => port,
+      (value) => saved.push(value),
+    );
+    await fleet.start();
+    await fleet.setEnabled(true);
+    try {
+      const hostile: unknown[] = [
+        undefined,
+        null,
+        '43872',
+        '',
+        {},
+        [],
+        [43872],
+        43872.5,
+        Number.NaN,
+        Infinity,
+        -Infinity,
+        1023,
+        0,
+        -1,
+        65536,
+        2 ** 32,
+        true,
+        1n,
+      ];
+      for (const value of hostile)
+        await expect(fleet.setPort(value), String(value)).rejects.toThrow(
+          'Fleet port must be an integer between 1024 and 65535',
+        );
+      expect(saved).toEqual([]);
+      expect(boundPort(fleet)).toBe(port);
+    } finally {
+      await fleet.stop();
+    }
+  });
+
+  it('accepts the 1024 and 65535 bounds as valid input', async () => {
+    const saved: number[] = [];
+    const { fleet } = portedService(
+      () => 0,
+      (value) => saved.push(value),
+    );
+    await fleet.start();
+    await fleet.setPort(1024);
+    await fleet.setPort(65535);
+    expect(saved).toEqual([1024, 65535]);
+  });
+
+  it('persists the new port and re-binds a running listener on it', async () => {
+    const first = await freePort();
+    const second = await freePort();
+    let current = first;
+    const saved: number[] = [];
+    const { fleet } = portedService(
+      () => current,
+      (value) => {
+        saved.push(value);
+        current = value;
+      },
+    );
+    await fleet.start();
+    await fleet.setEnabled(true);
+    try {
+      const state = await fleet.setPort(second);
+      expect(saved).toEqual([second]);
+      expect(boundPort(fleet)).toBe(second);
+      expect(state.port).toBe(second);
+      expect(state.enabled).toBe(true);
+    } finally {
+      await fleet.stop();
+    }
+  });
+
+  it('only persists when fleet is disabled and does not open a listener', async () => {
+    const next = await freePort();
+    let current = 43872;
+    const { fleet } = portedService(
+      () => current,
+      (value) => {
+        current = value;
+      },
+    );
+    await fleet.start();
+    const state = await fleet.setPort(next);
+    expect(state).toMatchObject({ enabled: false, port: next });
+    expect(boundPort(fleet)).toBeUndefined();
+  });
+
+  it('rolls the port back and keeps listening on the old one when the new port is taken', async () => {
+    const first = await freePort();
+    const held = await occupy();
+    let current = first;
+    const saved: number[] = [];
+    const { fleet } = portedService(
+      () => current,
+      (value) => {
+        saved.push(value);
+        current = value;
+      },
+    );
+    await fleet.start();
+    await fleet.setEnabled(true);
+    try {
+      await expect(fleet.setPort(held.port)).rejects.toThrow(
+        `Fleet port ${held.port} is already in use`,
+      );
+      expect(current).toBe(first);
+      expect(saved).toEqual([held.port, first]);
+      expect(boundPort(fleet)).toBe(first);
+      expect(fleet.state().enabled).toBe(true);
+    } finally {
+      await fleet.stop();
+      await new Promise((resolve) => held.server.close(resolve));
+    }
+  });
+});
+
+describe('fleet identity recovery', () => {
+  async function corrupted() {
+    const { fleet, storageDir } = portedService(() => 0);
+    await fleet.start();
+    await new FleetIdentityStore(storageDir, keychain).loadIdentity();
+    const [account] = [...vault.keys()];
+    if (!account) throw new Error('Missing credential');
+    vault.set(account, '{"cert":"x","key":"y"}');
+    return { fleet, storageDir, account };
+  }
+
+  it('flags recovery with a specific message when the stored identity is unreadable', async () => {
+    const { fleet } = await corrupted();
+    await expect(fleet.setEnabled(true)).rejects.toThrow();
+    const state = fleet.state();
+    expect(state.recovery).toBe('reset-identity');
+    expect(state.enabled).toBe(false);
+    expect(state.error).toBe(
+      'Fleet identity in the credential store is unreadable. Reset identity to create a new one; paired devices must pair again.',
+    );
+    await fleet.stop();
+  });
+
+  it('flags recovery when a saved opt-in cannot load its identity at start', async () => {
+    const { fleet, storageDir } = portedService(() => 0);
+    await fleet.start();
+    await fleet.setEnabled(true);
+    await fleet.stop();
+    const [account] = [...vault.keys()];
+    if (!account) throw new Error('Missing credential');
+    vault.set(account, 'garbage');
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+      getPort: () => 0,
+    });
+    await restarted.start();
+    expect(restarted.state().recovery).toBe('reset-identity');
+    await restarted.stop();
+  });
+
+  it('does not flag recovery for a keychain outage or an in-use port', async () => {
+    const held = await occupy();
+    const busy = portedService(() => held.port);
+    await busy.fleet.start();
+    await expect(busy.fleet.setEnabled(true)).rejects.toThrow();
+    expect(busy.fleet.state().recovery).toBeUndefined();
+    await new Promise((resolve) => held.server.close(resolve));
+    const down: FleetKeychain = {
+      ...keychain,
+      getPassword: async () => Promise.reject(new Error('down')),
+    };
+    const storageDir = mkdtempSync(join(tmpdir(), 'fleet-outage-'));
+    roots.push(storageDir);
+    const outage = new FleetService({
+      name: 'L',
+      storageDir,
+      operations: operations(),
+      keychain: down,
+    });
+    await outage.start();
+    await expect(outage.setEnabled(true)).rejects.toThrow('down');
+    expect(outage.state().recovery).toBeUndefined();
+    expect(outage.state().error).not.toMatch(/unreadable/);
+  });
+
+  it('refuses reset on a working identity and deletes nothing', async () => {
+    const { fleet } = portedService(() => 0);
+    await fleet.start();
+    await fleet.setEnabled(true);
+    const before = new Map(vault);
+    await expect(fleet.resetIdentity()).rejects.toThrow('Fleet identity reset is not available');
+    expect(new Map(vault)).toEqual(before);
+    expect(fleet.state().enabled).toBe(true);
+    await fleet.stop();
+  });
+
+  it('refuses reset on a fresh service with no identity at all', async () => {
+    const { fleet } = portedService(() => 0);
+    await fleet.start();
+    await expect(fleet.resetIdentity()).rejects.toThrow('Fleet identity reset is not available');
+    expect(vault.size).toBe(0);
+  });
+
+  it('resets: new identity, trusted cleared, revoked preserved, disabled, recovery cleared', async () => {
+    const { fleet, storageDir, account } = await corrupted();
+    const store = new FleetIdentityStore(storageDir, keychain);
+    const revoked = 'b'.repeat(64);
+    await store.save({
+      enabled: true,
+      trusted: [{ id: 'a'.repeat(64), name: 'Peer' }],
+      revoked: [revoked],
+    });
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+      getPort: () => 0,
+    });
+    await restarted.start();
+    expect(restarted.state().recovery).toBe('reset-identity');
+    const state = await restarted.resetIdentity();
+    expect(state.recovery).toBeUndefined();
+    expect(state.error).toBeUndefined();
+    expect(state.enabled).toBe(false);
+    expect(state.peers).toEqual([]);
+    expect(await store.load()).toEqual({ enabled: false, trusted: [], revoked: [revoked] });
+    expect(vault.get(account)).not.toBe('{"cert":"x","key":"y"}');
+    await expect(store.loadIdentity(true)).resolves.toMatchObject({ id: expect.any(String) });
+    await expect(restarted.setEnabled(true)).resolves.toMatchObject({ enabled: true });
+    await restarted.stop();
+    await fleet.stop();
+  });
+
+  it('refuses a second reset once recovered', async () => {
+    const { fleet } = await corrupted();
+    await expect(fleet.setEnabled(true)).rejects.toThrow();
+    await fleet.resetIdentity();
+    const after = new Map(vault);
+    await expect(fleet.resetIdentity()).rejects.toThrow('Fleet identity reset is not available');
+    expect(new Map(vault)).toEqual(after);
+    await fleet.stop();
   });
 });

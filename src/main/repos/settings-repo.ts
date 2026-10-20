@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   'terminal_frost_level':          'off',
   'vibrancy_material':             'sidebar',
   'app_env':                       {},
+  'fleet_port':                    43872,
   // Seeded named CLIs the "+ new shell" menu shows out of the box. The bare
   // "Terminal" (login $SHELL) is offered by the menu itself as a separate
   // row — don't duplicate it here. Each entry is spawned via the user's

@@ -14,6 +14,10 @@ export interface FleetState {
   readonly peers: readonly FleetPeer[];
   /** A listener failure is distinct from an empty LAN; no sensitive details leave main. */
   readonly error?: string;
+  /** TCP port the TLS listener binds (the beacon advertises it); persisted in the `fleet_port` setting. */
+  readonly port: number;
+  /** Set when the stored identity is unreadable; `fleet:reset-identity` is the only way out. */
+  readonly recovery?: 'reset-identity';
 }
 
 export interface FleetProject {

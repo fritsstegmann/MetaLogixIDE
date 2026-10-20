@@ -374,6 +374,8 @@ function registerMainIpc(services: Services): void {
     name: hostname(),
     storageDir: join(services.homeDir, '.metaide', 'fleet'),
     operations: createFleetOperations(services),
+    getPort: () => services.settings.get('fleet_port'),
+    savePort: (port) => services.settings.set('fleet_port', port),
   });
   services.fleet.onChanged((state) => broadcast('fleet:changed', state));
   registerIpc(ipcMain, services, broadcast, {

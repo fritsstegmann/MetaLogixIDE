@@ -132,6 +132,7 @@ describe('registered Fleet IPC over two real services', () => {
         setPassword: async (service, account, password) => {
           credentials.set(`${service}:${account}`, password);
         },
+        deletePassword: async (service, account) => credentials.delete(`${service}:${account}`),
       };
       const local = new FleetService({
         name: 'Local IDE',
@@ -259,4 +260,99 @@ describe('registered Fleet IPC over two real services', () => {
     },
     45_000,
   );
+});
+
+describe('Fleet port and recovery IPC', () => {
+  function fixture() {
+    const home = mkdtempSync(join(tmpdir(), 'fleet-port-ipc-'));
+    roots.push(home);
+    const services = buildServices({
+      homeDir: home,
+      dbPath: join(home, 'state.db'),
+      migrationsDir: resolve('migrations'),
+    });
+    const credentials = new Map<string, string>();
+    const keychain: FleetKeychain = {
+      getPassword: async (service, account) => credentials.get(`${service}:${account}`) ?? null,
+      setPassword: async (service, account, password) => {
+        credentials.set(`${service}:${account}`, password);
+      },
+      deletePassword: async (service, account) => credentials.delete(`${service}:${account}`),
+    };
+    services.fleet = new FleetService({
+      name: 'Local IDE',
+      storageDir: join(home, 'fleet'),
+      operations: createFleetOperations(services),
+      keychain,
+      getPort: () => services.settings.get('fleet_port'),
+      savePort: (port) => services.settings.set('fleet_port', port),
+    });
+    const channels = new Map<string, (...args: unknown[]) => unknown>();
+    registerIpc(
+      {
+        handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
+          channels.set(channel, handler);
+        },
+      } as unknown as IpcMain,
+      services,
+      vi.fn(),
+    );
+    const invoke = async (channel: string, req?: unknown): Promise<unknown> => {
+      const handler = channels.get(channel);
+      if (!handler) throw new Error(`IPC channel unavailable: ${channel}`);
+      return handler({ sender: {} }, req);
+    };
+    return { services, invoke, credentials };
+  }
+
+  it('defaults the persisted port to 43872 and rejects every malformed fleet:set-port payload', async () => {
+    const { services, invoke } = fixture();
+    try {
+      await services.fleet?.start();
+      expect(services.settings.get('fleet_port')).toBe(43872);
+      const payloads: unknown[] = [
+        undefined,
+        null,
+        'x',
+        42,
+        [],
+        {},
+        { port: null },
+        { port: '43872' },
+        { port: 43872.5 },
+        { port: Number.NaN },
+        { port: 80 },
+        { port: 1023 },
+        { port: 65536 },
+        { port: -1 },
+      ];
+      for (const payload of payloads)
+        await expect(invoke('fleet:set-port', payload), JSON.stringify(payload)).rejects.toThrow(
+          'Fleet port must be an integer between 1024 and 65535',
+        );
+      expect(services.settings.get('fleet_port')).toBe(43872);
+      await expect(invoke('fleet:set-port', { port: 45123 })).resolves.toMatchObject({
+        port: 45123,
+        enabled: false,
+      });
+      expect(services.settings.get('fleet_port')).toBe(45123);
+    } finally {
+      await services.fleet?.stop();
+      services.db.close();
+    }
+  });
+
+  it('refuses fleet:reset-identity while the identity is healthy and keeps the credential', async () => {
+    const { services, invoke, credentials } = fixture();
+    try {
+      await services.fleet?.start();
+      await expect(invoke('fleet:reset-identity')).rejects.toThrow(
+        'Fleet identity reset is not available',
+      );
+      expect(credentials.size).toBe(0);
+    } finally {
+      await services.fleet?.stop();
+      services.db.close();
+    }
+  });
 });

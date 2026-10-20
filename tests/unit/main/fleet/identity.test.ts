@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FleetIdentityStore, type FleetKeychain } from '@main/fleet/identity';
+import { FleetCredentialError, FleetIdentityStore, type FleetKeychain } from '@main/fleet/identity';
 
 const roots: string[] = [];
 function fixture() {
@@ -22,6 +22,7 @@ function fixture() {
     setPassword: async (_service, account, secret) => {
       values.set(account, secret);
     },
+    deletePassword: async (_service, account) => values.delete(account),
   };
   return { dir, keychain, values };
 }
@@ -88,8 +89,66 @@ describe('fleet trust persistence', () => {
       setPassword: async () => {
         throw new Error('unavailable');
       },
+      deletePassword: async () => {
+        throw new Error('unavailable');
+      },
     };
     await expect(new FleetIdentityStore(dir, broken).loadIdentity()).rejects.toThrow();
+  });
+
+  it('throws a typed credential error for every unreadable stored identity', async () => {
+    const { dir, keychain, values } = fixture();
+    const store = new FleetIdentityStore(dir, keychain);
+    const good = await store.loadIdentity();
+    const [account] = [...values.keys()];
+    if (!account) throw new Error('Missing fixture credential');
+    const other = fixture();
+    const foreign = await new FleetIdentityStore(other.dir, other.keychain).loadIdentity();
+    const bad = [
+      'not json',
+      'null',
+      '[]',
+      '{}',
+      JSON.stringify({ cert: 1, key: 2 }),
+      JSON.stringify({ cert: 'garbage', key: good.key }),
+      JSON.stringify({ cert: good.cert, key: 'garbage' }),
+      JSON.stringify({ cert: good.cert, key: foreign.key }),
+    ];
+    for (const value of bad) {
+      values.set(account, value);
+      const error = await store.loadIdentity().catch((caught: unknown) => caught);
+      expect(error, value).toBeInstanceOf(FleetCredentialError);
+    }
+  });
+
+  it('does not classify a missing identity or a keychain outage as a credential error', async () => {
+    const { dir, keychain } = fixture();
+    const missing = await new FleetIdentityStore(dir, keychain)
+      .loadIdentity(true)
+      .catch((caught: unknown) => caught);
+    expect(missing).toBeInstanceOf(Error);
+    expect(missing).not.toBeInstanceOf(FleetCredentialError);
+    const down = new FleetIdentityStore(dir, {
+      ...keychain,
+      getPassword: async () => {
+        throw new Error('unavailable');
+      },
+    });
+    const outage = await down.loadIdentity().catch((caught: unknown) => caught);
+    expect(outage).not.toBeInstanceOf(FleetCredentialError);
+  });
+
+  it('deletes only this directory identity so a fresh one can be generated', async () => {
+    const a = fixture();
+    const b = fixture();
+    const storeA = new FleetIdentityStore(a.dir, a.keychain);
+    const first = await storeA.loadIdentity();
+    await new FleetIdentityStore(b.dir, a.keychain).loadIdentity();
+    expect(a.values.size).toBe(2);
+    await storeA.deleteIdentity();
+    expect(a.values.size).toBe(1);
+    await expect(storeA.loadIdentity(true)).rejects.toThrow('Fleet identity unavailable');
+    expect((await storeA.loadIdentity()).id).not.toBe(first.id);
   });
 
   it('rejects owner-unsafe and symlink trust storage instead of following it', async () => {

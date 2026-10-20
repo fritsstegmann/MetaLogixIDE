@@ -9,6 +9,73 @@ const BUTTON =
 const FIELD =
   'min-h-11 w-full min-w-0 rounded-lg border border-[--border] bg-[--surface-field] px-3 text-base text-[--text] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]';
 
+/** Strips Electron's IPC wrapper so the main-side rejection reads as written. */
+function rejectionMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : '';
+  return raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+}
+
+/** Port field with save action and the firewall rules that port needs; fully controlled by FleetPanel. */
+function PortSettings({
+  port,
+  value,
+  busy,
+  onChange,
+  onSave,
+}: {
+  readonly port: number;
+  readonly value: string;
+  readonly busy: boolean;
+  readonly onChange: (value: string) => void;
+  readonly onSave: () => void;
+}) {
+  return (
+    <section aria-label="Fleet port" className="mt-4 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="number"
+          inputMode="numeric"
+          min={1024}
+          max={65535}
+          aria-label="Fleet port"
+          className={`${FIELD} !w-32`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <button
+          type="button"
+          className={BUTTON}
+          disabled={busy || value.trim() === '' || value === String(port)}
+          onClick={onSave}
+        >
+          Save port
+        </button>
+      </div>
+      <p className="text-base text-[--text-muted]">
+        If a firewall blocks Fleet, allow it on every device: <code>sudo ufw allow 43871/udp</code>{' '}
+        and <code>sudo ufw allow {port}/tcp</code>
+      </p>
+    </section>
+  );
+}
+
+/** Two-step identity reset; only mounted when the stored identity is unreadable. */
+function IdentityRecovery({
+  armed,
+  busy,
+  onClick,
+}: {
+  readonly armed: boolean;
+  readonly busy: boolean;
+  readonly onClick: () => void;
+}) {
+  return (
+    <button type="button" className={BUTTON} disabled={busy} onClick={onClick}>
+      {armed ? 'Confirm reset — paired devices must pair again' : 'Reset identity'}
+    </button>
+  );
+}
+
 type RemoteStatus =
   | { readonly kind: 'loading'; readonly peerId: string }
   | { readonly kind: 'ready'; readonly peerId: string; readonly data: FleetStatus }
@@ -327,6 +394,8 @@ export function FleetPanel() {
   const [state, setState] = useState<FleetState | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [portDraft, setPortDraft] = useState<string | null>(null);
+  const [resetArmed, setResetArmed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [code, setCode] = useState<{ readonly peerId: string; readonly value: string } | null>(
     null,
@@ -365,6 +434,7 @@ export function FleetPanel() {
       setInput('');
     }
     currentState.current = next;
+    if (!next.recovery) setResetArmed(false);
     setState(next);
     setCode((previous) =>
       previous &&
@@ -506,13 +576,19 @@ export function FleetPanel() {
     };
   }, [peerId, projectId, shellIndex, shellAvailable, shellKey]);
 
-  async function action(message: string, call: () => Promise<unknown>) {
+  async function action(
+    message: string,
+    call: () => Promise<unknown>,
+    describe?: (error: unknown) => string,
+  ) {
     setBusy(true);
     setError('');
     try {
       await call();
-    } catch {
-      setError(`${message}. Check the connection or remote machine, then retry.`);
+    } catch (caught) {
+      setError(
+        describe?.(caught) ?? `${message}. Check the connection or remote machine, then retry.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -520,7 +596,36 @@ export function FleetPanel() {
 
   async function changeEnabled(enabled: boolean) {
     await action('Could not change fleet setting', async () => {
-      applyState(await api.invoke('fleet:set-enabled', { enabled }));
+      try {
+        applyState(await api.invoke('fleet:set-enabled', { enabled }));
+      } catch (failure) {
+        const latest = await api.invoke('fleet:get-state', undefined);
+        applyState(latest);
+        if (!latest.error) throw failure;
+      }
+    });
+  }
+
+  async function savePort(current: FleetState) {
+    const port = Number(portDraft ?? current.port);
+    await action(
+      'Could not change fleet port',
+      async () => {
+        applyState(await api.invoke('fleet:set-port', { port }));
+        setPortDraft(null);
+      },
+      (failure) => rejectionMessage(failure) || 'Could not change fleet port.',
+    );
+  }
+
+  async function resetIdentity() {
+    if (!resetArmed) {
+      setResetArmed(true);
+      return;
+    }
+    setResetArmed(false);
+    await action('Could not reset fleet identity', async () => {
+      applyState(await api.invoke('fleet:reset-identity', undefined));
     });
   }
 
@@ -656,6 +761,20 @@ export function FleetPanel() {
         <p role="alert" className="mt-3 text-base text-[--danger]">
           {state.error}
         </p>
+      )}
+      {state?.recovery === 'reset-identity' && (
+        <div className="mt-3">
+          <IdentityRecovery armed={resetArmed} busy={busy} onClick={() => void resetIdentity()} />
+        </div>
+      )}
+      {state && (
+        <PortSettings
+          port={state.port}
+          value={portDraft ?? String(state.port)}
+          busy={busy}
+          onChange={setPortDraft}
+          onSave={() => void savePort(state)}
+        />
       )}
       {state && !state.enabled && (
         <p className="mt-4 text-base text-[--text-muted]">

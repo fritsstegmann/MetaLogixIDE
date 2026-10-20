@@ -97,6 +97,7 @@ const flush = async () => {
 };
 const peer = (status: FleetState['peers'][number]['status'], code?: string): FleetState => ({
   enabled: true,
+  port: 43872,
   peers: [
     { id: 'machine-b', name: 'Build Mac', status, ...(code ? { verificationCode: code } : {}) },
   ],
@@ -121,7 +122,7 @@ function text(node: ReactNode): string {
   if (!isValidElement(node)) return '';
   return text((node.props as { children?: ReactNode }).children);
 }
-function mount(state: FleetState = { enabled: false, peers: [] }, loadError = false) {
+function mount(state: FleetState = { enabled: false, peers: [], port: 43872 }, loadError = false) {
   let shown = remote;
   invoke.mockImplementation((channel: string) => {
     if (channel === 'fleet:get-state' && loadError)
@@ -213,6 +214,7 @@ describe('FleetPanel', () => {
     const app = mount({
       enabled: true,
       peers: [],
+      port: 43872,
       error: 'Fleet network unavailable. Check the local network and firewall.',
     });
     await app.load();
@@ -329,7 +331,7 @@ describe('FleetPanel', () => {
     expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.anything());
     await app.control('Revoke link').onClick();
     expect(invoke).toHaveBeenCalledWith('fleet:revoke', { peerId: 'machine-b' });
-    app.emit({ enabled: true, peers: [] });
+    app.emit({ enabled: true, peers: [], port: 43872 });
     expect(app.markup()).not.toContain('Build Mac');
     expect(app.markup()).not.toContain('Service');
   });
@@ -351,7 +353,7 @@ describe('FleetPanel', () => {
     const app = mount(peer('linked'));
     await app.load();
     const launch = app.control('Launch shell on Build Mac in Service').onClick;
-    app.emit({ enabled: false, peers: peer('linked').peers });
+    app.emit({ enabled: false, peers: peer('linked').peers, port: 43872 });
     launch();
     expect(app.markup()).toContain('Fleet is off');
     expect(invoke).not.toHaveBeenCalledWith('fleet:launch', expect.anything());
@@ -441,6 +443,7 @@ describe('FleetPanel', () => {
     }> = [];
     const both: FleetState = {
       enabled: true,
+      port: 43872,
       peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
     };
     const app = mount(both);
@@ -479,6 +482,7 @@ describe('FleetPanel', () => {
     }> = [];
     const both: FleetState = {
       enabled: true,
+      port: 43872,
       peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
     };
     const app = mount(both);
@@ -505,6 +509,7 @@ describe('FleetPanel', () => {
     const answers: Array<{ peerId: string; resolve: (status: FleetStatus) => void }> = [];
     const both: FleetState = {
       enabled: true,
+      port: 43872,
       peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
     };
     const app = mount(both);
@@ -612,5 +617,153 @@ describe('FleetPanel', () => {
     await app.load();
     expect(app.markup()).toContain('Build Mac');
     expect(app.markup()).toContain('Service');
+  });
+
+  describe('port and identity recovery', () => {
+    function intercept(handler: (channel: string, request: unknown) => unknown) {
+      const base = invoke.getMockImplementation();
+      invoke.mockImplementation((channel: string, request: unknown) => {
+        const result = handler(channel, request);
+        return result === undefined ? base?.(channel, request) : result;
+      });
+    }
+    const field = (app: ReturnType<typeof mount>) => app.field('Fleet port');
+
+    it('shows the current port with the firewall rules for that port', async () => {
+      const app = mount({ enabled: false, peers: [], port: 45123 });
+      await app.load();
+      const markup = app.markup();
+      expect(markup).toContain('sudo ufw allow 43871/udp');
+      expect(markup).toContain('sudo ufw allow 45123/tcp');
+      expect(markup).not.toContain('43872/tcp');
+      expect(field(app)).toMatchObject({ value: '45123' });
+    });
+
+    it('saves the typed port through fleet:set-port and shows the returned port', async () => {
+      const app = mount();
+      await app.load();
+      intercept((channel, request) =>
+        channel === 'fleet:set-port'
+          ? Promise.resolve({ enabled: false, peers: [], port: (request as { port: number }).port })
+          : undefined,
+      );
+      field(app).onChange({ target: { value: '45000' } });
+      await app.control('Save port').onClick();
+      await flush();
+      expect(invoke).toHaveBeenCalledWith('fleet:set-port', { port: 45000 });
+      expect(app.markup()).toContain('sudo ufw allow 45000/tcp');
+    });
+
+    it('shows the main-side rejection message and keeps the old port', async () => {
+      const app = mount();
+      await app.load();
+      intercept((channel) =>
+        channel === 'fleet:set-port'
+          ? Promise.reject(
+              new Error(
+                "Error invoking remote method 'fleet:set-port': Error: Fleet port 1000 is already in use",
+              ),
+            )
+          : undefined,
+      );
+      field(app).onChange({ target: { value: '1000' } });
+      await app.control('Save port').onClick();
+      await flush();
+      expect(app.markup()).toContain('Fleet port 1000 is already in use');
+      expect(app.markup()).not.toContain('Error invoking remote method');
+      expect(app.markup()).toContain('sudo ufw allow 43872/tcp');
+    });
+
+    it('disables Save while the port field is empty or unchanged', async () => {
+      const app = mount();
+      await app.load();
+      expect(app.control('Save port').disabled).toBe(true);
+      field(app).onChange({ target: { value: '' } });
+      expect(app.control('Save port').disabled).toBe(true);
+      field(app).onChange({ target: { value: '43873' } });
+      expect(app.control('Save port').disabled).toBe(false);
+    });
+
+    it('shows the specific listener error instead of the generic action failure when enabling fails', async () => {
+      const app = mount();
+      await app.load();
+      intercept((channel) => {
+        if (channel === 'fleet:set-enabled')
+          return Promise.reject(new Error('internal keychain diagnostics'));
+        if (channel === 'fleet:get-state')
+          return Promise.resolve({
+            enabled: false,
+            peers: [],
+            port: 43872,
+            error: 'Fleet port 43872 is already in use',
+          });
+        return undefined;
+      });
+      await app.control('Enable fleet').onClick();
+      await flush();
+      const markup = app.markup();
+      expect(markup).toContain('Fleet port 43872 is already in use');
+      expect(markup).not.toContain('Could not change fleet setting');
+      expect(markup).not.toContain('keychain diagnostics');
+    });
+
+    it('keeps the generic failure when enabling fails without a specific state error', async () => {
+      const app = mount();
+      await app.load();
+      intercept((channel) =>
+        channel === 'fleet:set-enabled' ? Promise.reject(new Error('boom')) : undefined,
+      );
+      await app.control('Enable fleet').onClick();
+      await flush();
+      expect(app.markup()).toContain('Could not change fleet setting');
+    });
+
+    it('offers Reset identity only in the recovery state', async () => {
+      const healthy = mount();
+      await healthy.load();
+      expect(healthy.markup()).not.toContain('Reset identity');
+      runtime.unmount();
+      runtime.reset();
+      const stuck = mount({
+        enabled: false,
+        peers: [],
+        port: 43872,
+        recovery: 'reset-identity',
+        error: 'Fleet identity in the credential store is unreadable.',
+      });
+      await stuck.load();
+      expect(stuck.markup()).toContain('unreadable');
+      expect(stuck.markup()).toContain('Reset identity');
+    });
+
+    it('arms on first click and only resets on the second', async () => {
+      const app = mount({ enabled: false, peers: [], port: 43872, recovery: 'reset-identity' });
+      await app.load();
+      intercept((channel) =>
+        channel === 'fleet:reset-identity'
+          ? Promise.resolve({ enabled: false, peers: [], port: 43872 })
+          : undefined,
+      );
+      await app.control('Reset identity').onClick();
+      await flush();
+      expect(invoke).not.toHaveBeenCalledWith('fleet:reset-identity', undefined);
+      expect(app.markup()).toContain('Confirm reset — paired devices must pair again');
+      await app.control('Confirm reset — paired devices must pair again').onClick();
+      await flush();
+      expect(invoke).toHaveBeenCalledWith('fleet:reset-identity', undefined);
+      expect(app.markup()).not.toContain('Reset identity');
+      expect(app.markup()).not.toContain('Confirm reset');
+    });
+
+    it('disarms when recovery ends elsewhere so a stale confirm cannot fire later', async () => {
+      const app = mount({ enabled: false, peers: [], port: 43872, recovery: 'reset-identity' });
+      await app.load();
+      await app.control('Reset identity').onClick();
+      await flush();
+      app.emit({ enabled: false, peers: [], port: 43872 });
+      app.emit({ enabled: false, peers: [], port: 43872, recovery: 'reset-identity' });
+      expect(app.markup()).toContain('Reset identity');
+      expect(app.markup()).not.toContain('Confirm reset');
+    });
   });
 });

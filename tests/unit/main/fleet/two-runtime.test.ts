@@ -20,6 +20,9 @@ const keychain = {
   async setPassword(service: string, account: string, password: string) {
     secrets.set(`${service}:${account}`, password);
   },
+  async deletePassword(service: string, account: string) {
+    return secrets.delete(`${service}:${account}`);
+  },
 };
 const instances: FleetService[] = [];
 afterAll(async () => {

@@ -7,6 +7,7 @@ import { FleetChannel } from './channel';
 import { FleetDiscovery, type Presence } from './discovery';
 import {
   FleetIdentityStore,
+  FleetCredentialError,
   type FleetIdentity,
   type FleetKeychain,
   type FleetTrust,
@@ -38,6 +39,10 @@ export interface FleetOptions {
   readonly storageDir: string;
   readonly operations: FleetOperations;
   readonly keychain?: FleetKeychain;
+  /** Current TCP listener port; defaults to 0 (ephemeral) so concurrent test services never collide. */
+  readonly getPort?: () => number;
+  /** Persists a validated port chosen through setPort. */
+  readonly savePort?: (port: number) => void;
 }
 interface Session {
   readonly id: string;
@@ -58,6 +63,25 @@ interface Session {
   statusPending: number;
 }
 const ID = /^[a-f0-9]{64}$/;
+const GENERIC_FAILURE =
+  'Fleet network unavailable. Check the local network and credential store, then disable and re-enable fleet.';
+const CREDENTIAL_FAILURE =
+  'Fleet identity in the credential store is unreadable. Reset identity to create a new one; paired devices must pair again.';
+
+/** Raised when the TLS listener cannot bind because another process already holds the port. */
+class FleetPortInUseError extends Error {
+  constructor(port: number, options?: ErrorOptions) {
+    super(`Fleet port ${port} is already in use`, options);
+    this.name = 'FleetPortInUseError';
+  }
+}
+
+/** Accepts only integers 1024..65535 from untrusted input; anything else throws. */
+export function parseFleetPort(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1024 || value > 65535)
+    throw new Error('Fleet port must be an integer between 1024 and 65535');
+  return value;
+}
 
 /** Owns local trust, multicast discovery, mutual TLS lifecycle and authorization per operation. */
 export class FleetService {
@@ -74,6 +98,7 @@ export class FleetService {
   private started = false;
   private starting: Promise<void> | null = null;
   private networkError: string | null = null;
+  private recovery: 'reset-identity' | null = null;
   private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: FleetOptions) {
@@ -90,11 +115,10 @@ export class FleetService {
         this.trust = await this.store.load();
         this.started = true;
         if (this.trust.enabled) await this.open();
-        this.networkError = null;
-      } catch {
+        this.clearFailure();
+      } catch (error) {
         this.started = true;
-        this.networkError =
-          'Fleet network unavailable. Check the local network and credential store, then disable and re-enable fleet.';
+        this.recordFailure(error, GENERIC_FAILURE);
         await this.closeNetwork();
       }
       this.notify();
@@ -161,8 +185,74 @@ export class FleetService {
     return {
       enabled: this.trust.enabled && this.started,
       peers,
+      port: this.options.getPort?.() ?? 0,
       ...(this.networkError ? { error: this.networkError } : {}),
+      ...(this.recovery ? { recovery: this.recovery } : {}),
     };
+  }
+
+  private recordFailure(error: unknown, generic: string): void {
+    this.recovery = error instanceof FleetCredentialError ? 'reset-identity' : null;
+    this.networkError =
+      error instanceof FleetCredentialError
+        ? CREDENTIAL_FAILURE
+        : error instanceof FleetPortInUseError
+          ? error.message
+          : generic;
+  }
+
+  private clearFailure(): void {
+    this.networkError = null;
+    this.recovery = null;
+  }
+
+  /** Validates and persists a new listener port, then re-binds a running listener; a failed re-bind restores the old port. */
+  setPort(value: unknown): Promise<FleetState> {
+    return this.runLifecycle(async () => {
+      const port = parseFleetPort(value);
+      const prior = this.options.getPort?.() ?? 0;
+      this.options.savePort?.(port);
+      if (this.server) {
+        await this.closeNetwork();
+        try {
+          await this.open();
+        } catch (error) {
+          this.options.savePort?.(prior);
+          this.recordFailure(error, GENERIC_FAILURE);
+          try {
+            await this.open();
+            this.clearFailure();
+          } catch {
+            await this.closeNetwork();
+          }
+          this.notify();
+          throw error;
+        }
+      }
+      this.notify();
+      return this.state();
+    });
+  }
+
+  /** Replaces an unreadable identity with a fresh one, clearing trusted peers but keeping revocations; only allowed in the reset-identity recovery state. */
+  resetIdentity(): Promise<FleetState> {
+    return this.runLifecycle(async () => {
+      if (this.recovery !== 'reset-identity')
+        throw new Error('Fleet identity reset is not available');
+      await this.closeNetwork();
+      await this.store.deleteIdentity();
+      this.identity = await this.store.loadIdentity(false);
+      const fresh: FleetTrust = { enabled: false, trusted: [], revoked: this.trust.revoked };
+      try {
+        await this.store.save(fresh);
+      } catch (error) {
+        return this.failClosed(error, fresh);
+      }
+      this.trust = fresh;
+      this.clearFailure();
+      this.notify();
+      return this.state();
+    });
   }
 
   /** Subscribes to discovery, pairing, connectivity and trust changes. */
@@ -198,8 +288,10 @@ export class FleetService {
           await this.open();
         } catch (error) {
           this.trust = prior;
-          this.networkError =
-            'Fleet network unavailable. Check the local network and credential store, then retry.';
+          this.recordFailure(
+            error,
+            'Fleet network unavailable. Check the local network and credential store, then retry.',
+          );
           await this.closeNetwork();
           try {
             await this.store.save(prior);
@@ -210,7 +302,7 @@ export class FleetService {
           throw error;
         }
       } else await this.closeNetwork();
-      this.networkError = null;
+      this.clearFailure();
       this.notify();
       return this.state();
     });
@@ -271,6 +363,7 @@ export class FleetService {
 
   private async open(): Promise<void> {
     if (this.server) return;
+    const port = this.options.getPort?.() ?? 0;
     this.identity = await this.store.loadIdentity(
       this.trust.trusted.length > 0 || this.trust.revoked.length > 0,
     );
@@ -301,9 +394,14 @@ export class FleetService {
     });
     try {
       await new Promise<void>((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, '0.0.0.0', () => {
-          server.removeListener('error', reject);
+        const onError = (error: NodeJS.ErrnoException): void => {
+          reject(
+            error.code === 'EADDRINUSE' ? new FleetPortInUseError(port, { cause: error }) : error,
+          );
+        };
+        server.once('error', onError);
+        server.listen(port, '0.0.0.0', () => {
+          server.removeListener('error', onError);
           resolve();
         });
       });

@@ -385,6 +385,8 @@ export interface IpcContract {
   /** Fleet transport and trust live only in main; the renderer sees approved peer state. */
   'fleet:get-state':   { request: undefined; response: FleetState };
   'fleet:set-enabled': { request: { enabled: boolean }; response: FleetState };
+  'fleet:set-port':    { request: { port: number }; response: FleetState };
+  'fleet:reset-identity': { request: undefined; response: FleetState };
   'fleet:pair':        { request: { peerId: string }; response: { ok: true } };
   'fleet:approve':     { request: { peerId: string; verificationCode: string }; response: { ok: true } };
   'fleet:revoke':      { request: { peerId: string }; response: { ok: true } };
