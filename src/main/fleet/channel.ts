@@ -119,7 +119,7 @@ export class FleetChannel {
 
   private allowFrame(): boolean {
     const now = Date.now();
-    if (now - this.window > 1000) {
+    if (now < this.window || now - this.window > 1000) {
       this.window = now;
       this.count = 0;
     }

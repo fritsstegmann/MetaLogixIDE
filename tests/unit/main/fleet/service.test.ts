@@ -20,7 +20,7 @@ const keychain: FleetKeychain = {
   },
 };
 const operations = (): FleetOperations => ({
-  status: () => ({ projects: [{ id: 1, name: 'Project' }], shells: [] }),
+  status: () => ({ roots: [{ id: 2, name: 'Workspace' }], projects: [{ id: 1, rootId: 2, name: 'Project' }], shells: [] }),
   launch: async () => ({ shellIndex: 0 }),
   launchClaude: async () => ({ shellIndex: 0 }),
   stop: async () => {},
@@ -109,7 +109,7 @@ describe('fleet authorization', () => {
   it('defaults disabled and forbids unknown, revoked and offline status and shell operations', async () => {
     const fleet = service('Local');
     await fleet.start();
-    expect(fleet.state()).toEqual({ enabled: false, peers: [] });
+    expect(fleet.state()).toEqual({ enabled: false, peers: [], controls: [] });
     await expect(fleet.status('a'.repeat(64))).rejects.toThrow();
     await expect(fleet.launch('a'.repeat(64), 1)).rejects.toThrow();
     await expect(fleet.stopShell('a'.repeat(64), 1, 0)).rejects.toThrow();
@@ -384,7 +384,7 @@ describe('fleet authorization', () => {
       keychain,
     });
     await restarted.start();
-    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    expect(restarted.state()).toEqual({ enabled: false, peers: [], controls: [] });
     expect((await store.load()).revoked).toEqual([peerId]);
     await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
     await restarted.stop();
@@ -417,7 +417,7 @@ describe('fleet authorization', () => {
       keychain,
     });
     await restarted.start();
-    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    expect(restarted.state()).toEqual({ enabled: false, peers: [], controls: [] });
     await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
     await restarted.stop();
   });
@@ -525,13 +525,17 @@ describe('fleet authorization', () => {
     const channel = linkedChannel(fleet, peerId);
     const request = vi.spyOn(channel, 'request');
     const first = {
+      roots: [{ id: 2, name: 'Workspace' }],
       projects: Array.from({ length: STATUS_PAGE_SIZE }, (_, index) => ({
         id: index + 1,
+        rootId: 2,
         name: `Project ${index + 1}`,
       })),
       shells: [],
+      rootOffset: 0,
       projectOffset: 0,
       shellOffset: 0,
+      rootTotal: 1,
       projectTotal: STATUS_PAGE_SIZE + 1,
       shellTotal: 0,
       token: 'f'.repeat(32),
@@ -543,21 +547,66 @@ describe('fleet authorization', () => {
     request.mockResolvedValueOnce(first).mockResolvedValueOnce({
       ...first,
       projectOffset: STATUS_PAGE_SIZE,
+      rootOffset: 1,
+      roots: [],
       projectTotal: STATUS_PAGE_SIZE + 2,
       projects: [
-        { id: 13, name: 'Thirteen' },
-        { id: 14, name: 'Fourteen' },
+        { id: 13, rootId: 2, name: 'Thirteen' },
+        { id: 14, rootId: 2, name: 'Fourteen' },
       ],
     });
     await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
     request.mockResolvedValueOnce(first).mockResolvedValueOnce({
       ...first,
+      rootOffset: 1,
+      roots: [],
       projectOffset: STATUS_PAGE_SIZE,
-      projects: [{ id: 13, name: 'Thirteen' }],
+      projects: [{ id: 13, rootId: 2, name: 'Thirteen' }],
       token: 'e'.repeat(32),
     });
     await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
     expect(request).toHaveBeenCalledTimes(7);
+    channel.close();
+  });
+  it('rejects duplicate roots and orphan references across complete pages', async () => {
+    const fleet = service('Local');
+    const peerId = 'c'.repeat(64);
+    const channel = linkedChannel(fleet, peerId);
+    const request = vi.spyOn(channel, 'request');
+    const first = {
+      roots: Array.from({ length: 2 }, (_, index) => ({
+        id: index + 1, name: `Root ${index + 1}`,
+      })),
+      projects: [{ id: 1, rootId: 1, name: 'First' }],
+      shells: [],
+      rootOffset: 0, projectOffset: 0, shellOffset: 0,
+      rootTotal: 3, projectTotal: 1, shellTotal: 0, token: 'a'.repeat(32),
+    };
+    const last = {
+      ...first, rootOffset: 2, projectOffset: 1,
+      roots: [{ id: 3, name: 'Last' }], projects: [],
+    };
+    const cases = [
+      [first, { ...last, roots: [{ id: 1, name: 'Duplicate' }] }],
+      [{ ...first, projects: [{ id: 1, rootId: 99, name: 'Orphan' }] }, last],
+      [{ ...first, shells: [{ projectId: 99, shellIndex: 0, agent: null, state: 'idle' }],
+        shellTotal: 1 }, { ...last, shellOffset: 1, shellTotal: 1 }],
+    ] as const;
+    for (const [start, end] of cases) {
+      request.mockResolvedValueOnce(start).mockResolvedValueOnce(end);
+      await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status');
+    }
+    request.mockResolvedValueOnce(first).mockResolvedValueOnce(last);
+    await expect(fleet.status(peerId)).resolves.toEqual({
+      roots: [...first.roots, ...last.roots], projects: first.projects, shells: [],
+    });
+    request.mockResolvedValueOnce({ ...first, projects: [{ id: 1, rootId: 3, name: 'Later' }] })
+      .mockResolvedValueOnce(last);
+    await expect(fleet.status(peerId)).resolves.toEqual({
+      roots: [...first.roots, ...last.roots],
+      projects: [{ id: 1, rootId: 3, name: 'Later' }],
+      shells: [],
+    });
     channel.close();
   });
   it.each(['saved', 'failed'] as const)(
@@ -676,7 +725,7 @@ describe('fleet authorization', () => {
                 type: 'request',
                 id: 'e'.repeat(32),
                 op: 'status',
-                args: { projectOffset: 0, shellOffset: 0 },
+                args: { rootOffset: 0, projectOffset: 0, shellOffset: 0 },
               })}\n`,
             ),
           );
@@ -694,7 +743,7 @@ describe('fleet authorization', () => {
             type: 'request',
             id: '0'.repeat(32),
             op: 'status',
-            args: { projectOffset: 0, shellOffset: 0 },
+            args: { rootOffset: 0, projectOffset: 0, shellOffset: 0 },
           });
           await new Promise<void>((resolve) => setImmediate(resolve));
           expect(status).not.toHaveBeenCalled();
@@ -717,7 +766,7 @@ describe('fleet authorization', () => {
             type: 'request',
             id: 'f'.repeat(32),
             op: 'status',
-            args: { projectOffset: 0, shellOffset: 0 },
+            args: { rootOffset: 0, projectOffset: 0, shellOffset: 0 },
           });
           await vi.waitFor(() => expect(status).toHaveBeenCalledTimes(1));
         }

@@ -108,16 +108,19 @@ describe('fleet network boundaries', () => {
   it('rejects malformed status page offsets, tokens and impossible page lengths', () => {
     const request = (args: unknown) =>
       decodeMessage(JSON.stringify({ type: 'request', id: 'c'.repeat(32), op: 'status', args }));
-    expect(request({ projectOffset: 0, shellOffset: 0 })).not.toBeNull();
+    expect(request({ rootOffset: 0, projectOffset: 0, shellOffset: 0 })).not.toBeNull();
     for (const args of [
       {},
-      { projectOffset: -1, shellOffset: 0 },
-      { projectOffset: 257, shellOffset: 0 },
-      { projectOffset: 1.5, shellOffset: 0 },
-      { projectOffset: 0, shellOffset: 0, token: 'bad' },
-      { projectOffset: 1, shellOffset: 0 },
-      { projectOffset: 0, shellOffset: 0, token: 'a'.repeat(32) },
-      { projectOffset: 0, shellOffset: 0, extra: true },
+      { rootOffset: -1, projectOffset: 0, shellOffset: 0 },
+      { rootOffset: 257, projectOffset: 0, shellOffset: 0 },
+      { rootOffset: 0, projectOffset: -1, shellOffset: 0 },
+      { rootOffset: 0, projectOffset: 257, shellOffset: 0 },
+      { rootOffset: 0, projectOffset: 1.5, shellOffset: 0 },
+      { rootOffset: 0, projectOffset: 0, shellOffset: 0, token: 'bad' },
+      { rootOffset: 0, projectOffset: 1, shellOffset: 0 },
+      { rootOffset: 1, projectOffset: 0, shellOffset: 0 },
+      { rootOffset: 0, projectOffset: 0, shellOffset: 0, token: 'a'.repeat(32) },
+      { rootOffset: 0, projectOffset: 0, shellOffset: 0, extra: true },
     ]) {
       expect(request(args)).toBeNull();
     }
@@ -125,10 +128,13 @@ describe('fleet network boundaries', () => {
 
   it('requires exact page shape, totals, and bounded progress', () => {
     const page = {
-      projects: [{ id: 1, name: 'safe' }],
+      roots: [{ id: 4, name: 'Workspace' }],
+      projects: [{ id: 1, rootId: 4, name: 'safe' }],
       shells: [],
+      rootOffset: 0,
       projectOffset: 0,
       shellOffset: 0,
+      rootTotal: 1,
       projectTotal: 1,
       shellTotal: 0,
       token: 'a'.repeat(32),
@@ -136,48 +142,53 @@ describe('fleet network boundaries', () => {
     expect(validateStatusPage(page)).toEqual(page);
     for (const invalid of [
       { ...page, projectOffset: -1 },
+      { ...page, rootOffset: 1 },
+      { ...page, rootTotal: 257 },
+      { ...page, rootTotal: 2 },
+      { ...page, roots: [{ id: 4, name: 'x'.repeat(161) }] },
+      { ...page, rootTotal: 2, roots: [...page.roots, ...page.roots] },
+      { ...page, roots: [{ id: 4, name: '/private/workspace' }] },
+      { ...page, roots: [{ id: 4, name: 'Workspace', path: '/secret' }] },
+      { ...page, projects: [{ id: 1, rootId: 0, name: 'safe' }] },
       { ...page, projectOffset: 1 },
       { ...page, projectTotal: 257 },
       { ...page, projectTotal: 2 },
       { ...page, shellTotal: 1 },
       { ...page, token: 'x' },
       { ...page, privatePath: '/secret' },
-      { ...page, projects: [{ id: 1, name: 'x'.repeat(161) }] },
+      { ...page, projects: [{ id: 1, rootId: 4, name: 'x'.repeat(161) }] },
       {
         ...page,
         projectTotal: 13,
-        projects: Array.from({ length: 13 }, (_, i) => ({ id: i + 1, name: 'ok' })),
+        projects: Array.from({ length: 13 }, (_, i) => ({ id: i + 1, rootId: 4, name: 'ok' })),
       },
     ])
       expect(validateStatusPage(invalid)).toBeNull();
   });
 
-  it('rejects paths, unexpected metadata, oversized output and malformed agent state', () => {
-    expect(
-      validateStatus({ projects: [{ id: 1, name: 'hello', path: '/secret' }], shells: [] }),
-    ).toBeNull();
-    expect(
-      validateStatus({
-        projects: [],
-        shells: [{ projectId: 1, shellIndex: 0, agent: null, state: 'unknown' }],
-      }),
-    ).toBeNull();
-    expect(
-      validateStatus({
-        projects: Array.from({ length: 257 }, (_, i) => ({ id: i, name: 'x' })),
-        shells: [],
-      }),
-    ).toBeNull();
+  it('rejects paths, invalid hierarchy, duplicate identities and malformed agent state', () => {
+    const valid = {
+      roots: [{ id: 4, name: 'Workspace' }],
+      projects: [{ id: 1, rootId: 4, name: 'safe' }],
+      shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
+    };
+    expect(validateStatus(valid)).toEqual(valid);
+    for (const invalid of [
+      { ...valid, roots: [{ id: 4, name: 'Workspace', path: '/secret' }] },
+      { ...valid, roots: [{ id: 4, name: '/private/workspace' }] },
+      { ...valid, projects: [{ id: 1, rootId: 4, name: 'C:\\private\\secret' }] },
+      { ...valid, roots: [{ id: 4, name: 'Workspace' }, { id: 4, name: 'Duplicate' }] },
+      { ...valid, roots: [{ id: 0, name: 'Workspace' }] },
+      { ...valid, roots: [{ id: 4, name: '\0' }] },
+      { ...valid, roots: Array.from({ length: 257 }, (_, i) => ({ id: i + 1, name: 'Root' })) },
+      { ...valid, projects: [{ id: 1, rootId: 99, name: 'orphan' }] },
+      { ...valid, projects: [{ id: 1, rootId: 4, name: 'safe', path: '/secret' }] },
+      { ...valid, projects: [{ id: 1, rootId: 4, name: 'safe' }, { id: 1, rootId: 4, name: 'duplicate' }] },
+      { ...valid, shells: [{ projectId: 99, shellIndex: 0, agent: null, state: 'idle' }] },
+      { ...valid, shells: [{ projectId: 1, shellIndex: 0, agent: null, state: 'unknown' }] },
+      { ...valid, shells: [...valid.shells, ...valid.shells] },
+    ]) expect(validateStatus(invalid)).toBeNull();
     expect(validateSnapshot({ output: 'x'.repeat(8193), alive: true })).toBeNull();
     expect(validateSnapshot({ output: 'ok', alive: true, token: 'secret' })).toBeNull();
-    expect(
-      validateStatus({
-        projects: [{ id: 1, name: 'safe' }],
-        shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
-      }),
-    ).toEqual({
-      projects: [{ id: 1, name: 'safe' }],
-      shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
-    });
   });
 });

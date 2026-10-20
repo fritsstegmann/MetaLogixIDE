@@ -84,24 +84,26 @@ previous revocation history is then lost. If storage cannot be written **or**
 removed, Fleet reports an error and cannot guarantee durable revocation until
 the storage fault is repaired (`src/main/fleet/service.ts`).
 
-A linked peer can read project names and live shell status; launch or reattach
-the remote machine's configured primary Claude command; launch a secondary
-plain shell; stop, resize and write to a shell; and subscribe to its terminal
-output. The remote machine enforces its own Claude permission-mode choice,
-launch command, project-path checks and shell limit. Plain shells start at
-index 1 so they cannot occupy the primary shell slot. Status travels in
-bounded pages from one captured snapshot, returning one complete project and
-shell list (`src/main/fleet/service.ts`, `src/main/ipc/register.ts`).
-At most 256 projects and 256 live shells per machine are published. A larger
-inventory is rejected rather than silently truncated.
-No peer can request project paths, environment values, arbitrary launch
-arguments or unrelated IPC operations. Shell input can execute arbitrary
-commands on the peer: **only link devices you trust**.
+A linked peer can read root display names, project names and live shell status.
+It can launch or reattach the remote machine's configured primary Claude
+command, launch a secondary plain shell, stop or write to a shell, and subscribe
+to terminal output. The remote machine enforces its own Claude permission
+mode, launch command, project-path checks and shell limit. Plain shells start
+at index 1 so they cannot occupy the primary shell slot. Status travels in
+bounded pages from one captured snapshot. It returns complete root, project
+and shell lists (`src/main/fleet/service.ts`, `src/main/ipc/register.ts`).
+At most 256 roots, 256 projects and 256 live shells per machine are published.
+A larger inventory is rejected rather than silently truncated.
+No peer can request full root or project paths, environment values, arbitrary
+launch arguments or unrelated IPC operations. Shell input can execute
+arbitrary commands on the peer: **only link devices you trust**.
 
 The Projects sidebar lists linked and offline machines below local folders.
 Each machine has its own collapsible heading with the same styling as the
-Projects heading. Each expanded online machine fetches its project folders.
-Selecting a remote folder opens an interactive xterm attached to its Claude
+Projects heading. An online machine publishes its root folder display names
+and groups projects beneath each root. The remote root headings show project
+counts and collapse independently. Full paths remain on the driven machine.
+Selecting a remote project opens an interactive xterm attached to its Claude
 shell. A plain shell is a separate action. Selecting a local folder restores
 the local workspace; local and remote numeric project IDs remain separate.
 The selected remote machine refreshes its status while visible. The Fleet
@@ -114,15 +116,19 @@ Discovery on/off also remains in Settings → Fleet
 
 Terminal attachment sends an ordered serialized screen snapshot, then a ready
 marker, live PTY output and exit events. The stream is authenticated against
-the linked peer and a per-attachment identifier; input and resize are bounded,
-and unsubscribe, link loss or revocation release the PTY listeners. Frames are
-limited to 16 KiB, paced at 50 per second per peer, with at most four active
+the linked peer and a per-attachment identifier. The controlling instance
+fits its xterm to the visible viewport and sends dimensions after attachment.
+The driven machine allows only one remote controller per shell. Its local
+terminal view displays the trusted controller's name instead of mounting a
+competing xterm. Its local resize cannot override the controller's dimensions;
+the local view returns when the attachment ends or the link closes. Input
+and resize are bounded. Unsubscribe, terminal exit, link loss or revocation
+release PTY listeners and clear the control notice. Frames are limited to
+16 KiB, paced at 50 per second per peer, with at most four active
 attachments in each direction per connection. An initial screen over 4 MiB
 ends that attachment; live output exceeding its buffer closes the peer
 connection rather than returning a partial terminal state
 (`src/main/fleet/channel.ts`, `protocol.ts`, `service.ts`).
-Only whitelisted launch failures leave the remote machine; its paths and
-credentials are never included in Fleet status or errors.
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts`).

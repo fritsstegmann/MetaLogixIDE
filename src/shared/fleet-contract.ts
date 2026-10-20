@@ -12,15 +12,30 @@ export interface FleetPeer {
 export interface FleetState {
   readonly enabled: boolean;
   readonly peers: readonly FleetPeer[];
+  readonly controls: readonly FleetControl[];
   /** A listener failure is distinct from an empty LAN; no sensitive details leave main. */
   readonly error?: string;
 }
 
-export interface FleetProject {
+/** A public root identity and display name, never its filesystem location. */
+export interface FleetRoot {
   readonly id: number;
   readonly name: string;
 }
 
+/** A project belongs to precisely one root in the remote hierarchy. */
+export interface FleetProject {
+  readonly id: number;
+  readonly rootId: number;
+  readonly name: string;
+}
+
+/** Identifies the trusted peer currently controlling one local shell. */
+export interface FleetControl {
+  readonly projectId: number;
+  readonly shellIndex: number;
+  readonly peerName: string;
+}
 export interface FleetShell {
   readonly projectId: number;
   readonly shellIndex: number;
@@ -29,6 +44,7 @@ export interface FleetShell {
 }
 
 export interface FleetStatus {
+  readonly roots: readonly FleetRoot[];
   readonly projects: readonly FleetProject[];
   readonly shells: readonly FleetShell[];
 }

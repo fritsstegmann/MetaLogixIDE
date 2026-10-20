@@ -626,7 +626,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
-  'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
+  'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => {
+    if (!s.fleet?.isRemotelyControlled(projectId, shellIndex))
+      s.ptyManager.resize(projectId, shellIndex, cols, rows);
+    return { ok: true } as const;
+  },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
   'agent-state:list': async (s) => {
     if (!s.agentStatus) throw new Error('agent status not installed');
@@ -1415,19 +1419,26 @@ function fleetName(name: string): string {
 export function createFleetOperations(services: Services): FleetOperations {
   return {
     status: () => {
+      const rootRows = services.roots.list();
       const projectRows = services.projects.list();
       const live = services.ptyManager.liveShells();
-      if (projectRows.length > 256 || live.length > 256) throw new Error('Fleet status exceeds the 256-project/shell limit');
-      const projects = projectRows.map(({ id, name }) => ({ id, name: fleetName(name) }));
+      if (rootRows.length > 256 || projectRows.length > 256 || live.length > 256)
+        throw new Error('Fleet status exceeds the 256-root/project/shell limit');
+      const roots = rootRows.map(({ id, path }) => ({ id, name: fleetName(basename(path)) }));
+      const projects = projectRows.map(({ id, rootId, name }) => ({
+        id, rootId, name: fleetName(name.replaceAll('\\', '/').split('/').at(-1) ?? ''),
+      }));
+      const visibleProjects = new Set(projectRows.map(({ id }) => id));
       const agents = new Map(
         (services.agentStatus?.list() ?? []).map((entry) =>
           [`${entry.projectId}:${entry.shellIndex}`, entry]),
       );
-      const shells = live.map(({ projectId, shellIndex }) => {
-        const agent = agents.get(`${projectId}:${shellIndex}`);
-        return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const };
-      });
-      return { projects, shells };
+      const shells = live.filter(({ projectId }) => visibleProjects.has(projectId))
+        .map(({ projectId, shellIndex }) => {
+          const agent = agents.get(`${projectId}:${shellIndex}`);
+          return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const };
+        });
+      return { roots, projects, shells };
     },
     launch: (projectId) => handlers['shells:launch-plain'](services, { projectId }),
     launchClaude: (projectId) => handlers['shells:launch'](services, { projectId }),
@@ -1450,7 +1461,7 @@ export function createFleetOperations(services: Services): FleetOperations {
       };
     },
     resize: async (projectId, shellIndex, cols, rows) => {
-      await handlers['shells:resize'](services, { projectId, shellIndex, cols, rows });
+      services.ptyManager.resize(projectId, shellIndex, cols, rows);
     },
     stop: async (projectId, shellIndex) => {
       await handlers['shells:kill'](services, { projectId, shellIndex });

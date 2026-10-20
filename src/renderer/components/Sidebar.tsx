@@ -7,7 +7,7 @@ import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { useOverallAgentState, useProjectAgentState } from '@renderer/hooks/useAgentStates';
 import type { Project, Root } from '@shared/types';
 import type { AgentState } from '@shared/agent-state';
-import type { FleetPeer, FleetState, FleetStatus } from '@shared/fleet-contract';
+import type { FleetPeer, FleetProject, FleetRoot, FleetState, FleetStatus } from '@shared/fleet-contract';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { AnimatePresence } from 'motion/react';
@@ -255,10 +255,29 @@ interface FleetMachineProps {
   readonly onLoad: (peerId: string) => Promise<void>;
 }
 
+const EMPTY_REMOTE_PROJECTS: readonly FleetProject[] = [];
+
 function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: FleetMachineProps) {
   const online = peer.status === 'linked';
   useEffect(() => { if (online && !status) void onLoad(peer.id); }, [online, status, onLoad, peer.id]);
-  const projects = online ? status?.data?.projects.filter((project) => project.name.toLowerCase().includes(filter.toLowerCase())) ?? [] : [];
+  const data = online && status?.kind !== 'error' ? status?.data : undefined;
+  const grouped = new Map<number, FleetProject[]>();
+  const shellStates = new Map<number, AgentState>();
+  if (data) {
+    const query = filter.toLowerCase();
+    for (const project of data.projects) {
+      if (query && !project.name.toLowerCase().includes(query)) continue;
+      const projects = grouped.get(project.rootId) ?? [];
+      projects.push(project);
+      grouped.set(project.rootId, projects);
+    }
+    for (const shell of data.shells) {
+      const previous = shellStates.get(shell.projectId);
+      if (!previous || shell.state === 'blocked' || (shell.state === 'busy' && previous === 'idle')) {
+        shellStates.set(shell.projectId, shell.state);
+      }
+    }
+  }
   return (
     <div className="min-w-0 pl-4">
       {online && !status && <button type="button" onClick={() => void onLoad(peer.id)} className="min-h-11 px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Load projects</button>}
@@ -270,39 +289,83 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
         </div>
       )}
       {!online && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">{peer.name} is offline. Reconnect to open projects.</p>}
-      {online && status?.kind === 'ready' && status.data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
-      {online && <ul aria-label={`Projects on ${peer.name}`} className="min-w-0">
-        {projects.map((project) => (
-          <li key={project.id}>
-            <button
-              type="button"
-              data-testid="remote-project-row"
-              aria-label={`${project.name} on ${peer.name}`}
-              aria-current={selected?.peerId === peer.id && selected.projectId === project.id ? 'true' : undefined}
-              disabled={status?.kind === 'error'}
-              onClick={() => onSelect({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name })}
-              className={`flex min-h-11 w-full min-w-0 items-center rounded-lg px-2.5 text-left text-base focus-visible:ring-2 focus-visible:ring-[--accent] disabled:opacity-50 ${selected?.peerId === peer.id && selected.projectId === project.id ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}
-            >
-              <span className="truncate">{project.name}</span>
-            </button>
-          </li>
-        ))}
+      {online && status?.kind === 'ready' && data?.roots.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote folders.</p>}
+      {online && status?.kind === 'ready' && data?.roots.length !== 0 && data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
+      {data?.roots.map((root) => (
+        <FleetRootBlock key={root.id} peer={peer} root={root} projects={grouped.get(root.id) ?? EMPTY_REMOTE_PROJECTS}
+          shellStates={shellStates} selected={selected} onSelect={onSelect} />
+      ))}
+    </div>
+  );
+}
+
+interface FleetRootBlockProps {
+  readonly peer: FleetPeer;
+  readonly root: FleetRoot;
+  readonly projects: readonly FleetProject[];
+  readonly shellStates: ReadonlyMap<number, AgentState>;
+  readonly selected: RemoteProjectSelection | null;
+  readonly onSelect: (project: RemoteProjectSelection) => void;
+}
+
+function FleetRootBlock({ peer, root, projects, shellStates, selected, onSelect }: FleetRootBlockProps) {
+  const persistKey = `fleet:${peer.id}:root:${root.id}`;
+  const [collapsedSet, setCollapsedSet] = useState<Set<string>>(() => readCollapsedKeys(FLEET_ROOT_COLLAPSED_KEY));
+  const open = !collapsedSet.has(persistKey);
+  function toggle() {
+    setCollapsedSet(() => {
+      const next = readCollapsedKeys(FLEET_ROOT_COLLAPSED_KEY);
+      if (next.has(persistKey)) next.delete(persistKey);
+      else next.add(persistKey);
+      writeCollapsedKeys(FLEET_ROOT_COLLAPSED_KEY, next);
+      return next;
+    });
+  }
+  let aliveCount = 0;
+  for (const project of projects) if (shellStates.has(project.id)) aliveCount += 1;
+  return (
+    <div className="mb-2">
+      <button type="button" onClick={toggle} aria-expanded={open} aria-label={`${root.name} on ${peer.name}, ${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}
+        data-testid="remote-root-toggle"
+        className="w-full min-h-11 text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] flex items-center gap-2.5">
+        <RootFolderGlyph color={rootHueVar(`${peer.id}:${root.name}`)} testId={null} />
+        <span className="truncate flex-1">{root.name}</span>
+        <span className="text-[10px] opacity-70">{aliveCount > 0 ? `${aliveCount}/${projects.length}` : projects.length}</span>
+        <ChevronIcon collapsed={!open} />
+      </button>
+      {open && <ul aria-label={`Projects in ${root.name} on ${peer.name}`} className="mt-2 space-y-2">
+        {projects.map((project) => {
+          const state = shellStates.get(project.id);
+          return (
+            <li key={project.id}>
+              <button type="button" data-testid="remote-project-row"
+                aria-label={`${project.name} on ${peer.name}`}
+                aria-current={selected?.peerId === peer.id && selected.projectId === project.id ? 'true' : undefined}
+                onClick={() => onSelect({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name })}
+                className={`flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg pl-6 pr-2.5 text-left text-base focus-visible:ring-2 focus-visible:ring-[--accent] ${selected?.peerId === peer.id && selected.projectId === project.id ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}>
+                {state && <StatusDot state={state} />}
+                <span className="truncate">{project.name}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>}
     </div>
   );
 }
 
 const SECTION_COLLAPSED_KEY = 'metaide.sectionsCollapsed';
-function readCollapsedSections(): Set<string> {
+const FLEET_ROOT_COLLAPSED_KEY = 'metaide.fleetRootsCollapsed';
+function readCollapsedKeys(key: string): Set<string> {
   try {
-    const raw = localStorage.getItem(SECTION_COLLAPSED_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return new Set();
     const arr = JSON.parse(raw) as string[];
     return new Set(Array.isArray(arr) ? arr : []);
   } catch { return new Set(); }
 }
-function writeCollapsedSections(set: Set<string>): void {
-  localStorage.setItem(SECTION_COLLAPSED_KEY, JSON.stringify([...set]));
+function writeCollapsedKeys(key: string, set: Set<string>): void {
+  localStorage.setItem(key, JSON.stringify([...set]));
 }
 
 function Section({
@@ -318,14 +381,14 @@ function Section({
   statusLabel?: string;
   children: React.ReactNode;
 }) {
-  const [collapsedSet, setCollapsedSet] = useState<Set<string>>(readCollapsedSections);
+  const [collapsedSet, setCollapsedSet] = useState<Set<string>>(() => readCollapsedKeys(SECTION_COLLAPSED_KEY));
   const collapsed = collapsedSet.has(persistKey);
   function toggle() {
     setCollapsedSet((prev) => {
       const next = new Set(prev);
       if (next.has(persistKey)) next.delete(persistKey);
       else next.add(persistKey);
-      writeCollapsedSections(next);
+      writeCollapsedKeys(SECTION_COLLAPSED_KEY, next);
       return next;
     });
   }
@@ -336,7 +399,7 @@ function Section({
         aria-label={statusLabel ? `${title}, ${statusLabel.toLowerCase()}` : undefined}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className="w-full h-[26px] mb-1 px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]"
+        className={`w-full ${statusLabel ? 'min-h-11 mb-2 focus-visible:ring-2 focus-visible:ring-[--accent]' : 'h-[26px] mb-1'} px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]`}
       >
         {accent && <StatusDot state={dotState ?? 'idle'} />}
         <span className={`flex-1 ${accent ? '' : 'text-[--text-muted]'}`}>{title}</span>

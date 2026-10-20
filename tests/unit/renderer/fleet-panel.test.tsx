@@ -54,7 +54,7 @@ const listeners = vi.hoisted(() => new Set<(state: FleetState) => void>());
 vi.mock('@renderer/api', () => ({ api: { invoke, on: vi.fn((_channel: string, listener: (state: FleetState) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }) } }));
 const { FleetPanel } = await import('@renderer/components/FleetPanel');
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
-const state = (status: FleetState['peers'][number]['status'], code?: string): FleetState => ({ enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status, ...(code ? { verificationCode: code } : {}) }] });
+const state = (status: FleetState['peers'][number]['status'], code?: string): FleetState => ({ enabled: true, controls: [], peers: [{ id: 'machine-b', name: 'Build Mac', status, ...(code ? { verificationCode: code } : {}) }] });
 
 function nodes(node: ReactNode): ReactElement[] {
   if (!isValidElement(node)) return [];
@@ -111,7 +111,7 @@ afterEach(() => { runtime.unmount(); });
 
 describe('FleetPanel discovery and trust', () => {
   it('does not enable discovery when the Fleet settings modal opens', async () => {
-    const app = mount({ enabled: false, peers: [] });
+    const app = mount({ enabled: false, peers: [], controls: [] });
     await app.loaded();
     app.control('Open Fleet settings').onClick();
     expect(app.onOpenSettings).toHaveBeenCalledOnce();
@@ -119,11 +119,11 @@ describe('FleetPanel discovery and trust', () => {
   });
 
   it('enables and disables discovery from Fleet while keeping the switch in sync', async () => {
-    const app = mount({ enabled: false, peers: [] });
+    const app = mount({ enabled: false, peers: [], controls: [] });
     await app.loaded();
     expect(app.switch()?.checked).toBe(false);
     invoke.mockImplementation((channel: string, args?: { enabled: boolean }) =>
-      channel === 'fleet:set-enabled' ? Promise.resolve({ enabled: args?.enabled, peers: [] }) : Promise.resolve({ enabled: false, peers: [] }));
+      channel === 'fleet:set-enabled' ? Promise.resolve({ enabled: args?.enabled, peers: [], controls: [] }) : Promise.resolve({ enabled: false, peers: [], controls: [] }));
     app.switch()?.onChange({ target: { checked: true } });
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:set-enabled', { enabled: true });
@@ -135,10 +135,10 @@ describe('FleetPanel discovery and trust', () => {
   });
 
   it('keeps discovery off after a failed toggle and exposes only a safe retryable error', async () => {
-    const app = mount({ enabled: false, peers: [] });
+    const app = mount({ enabled: false, peers: [], controls: [] });
     await app.loaded();
     invoke.mockImplementation((channel: string) => channel === 'fleet:set-enabled'
-      ? Promise.reject(new Error('private keychain path')) : Promise.resolve({ enabled: false, peers: [] }));
+      ? Promise.reject(new Error('private keychain path')) : Promise.resolve({ enabled: false, peers: [], controls: [] }));
     app.switch()?.onChange({ target: { checked: true } });
     await flush();
     expect(app.switch()?.checked).toBe(false);
@@ -181,7 +181,7 @@ describe('FleetPanel discovery and trust', () => {
   });
 
   it('makes failed initial load retryable without exposing private exception text', async () => {
-    const app = mount({ enabled: true, peers: [] }, true);
+    const app = mount({ enabled: true, peers: [], controls: [] }, true);
     await app.loaded();
     expect(app.visible()).not.toContain('private diagnostics');
     app.control('Retry').onClick();

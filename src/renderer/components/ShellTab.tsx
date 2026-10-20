@@ -36,6 +36,7 @@ import type { TerminalWeights } from '@shared/terminal-font-weight';
 import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
+import type { FleetState } from '@shared/fleet-contract';
 import {
   createTerminalFontUpdater,
   createTerminalGeometrySynchronizer,
@@ -80,20 +81,54 @@ const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out
   'zoom-reset': 'reset',
 };
 
-export function ShellTab({
+interface Props {
+  readonly projectId: number;
+  readonly shellIndex: number;
+  readonly onOpenFile?: HoverPreviewOpen;
+  readonly onOpenLaunchSettings?: () => void;
+  readonly primary?: boolean;
+  readonly popout?: boolean;
+}
+
+/** Displays local terminal only when no Fleet peer controls this precise shell. */
+export function ShellTab(props: Props) {
+  const [fleet, setFleet] = useState<FleetState | null | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    const off = api.on('fleet:changed', (next) => {
+      changed = true;
+      if (active) setFleet(next);
+    });
+    void api.invoke('fleet:get-state', undefined).then((next) => {
+      if (active && !changed) setFleet(next);
+    }).catch(() => {
+      if (active && !changed) setFleet(null);
+    });
+    return () => { active = false; off(); };
+  }, []);
+
+  const control = fleet?.controls.find((item) => item.projectId === props.projectId && item.shellIndex === props.shellIndex);
+  if (control) {
+    return (
+      <div role="status" aria-label="Terminal controlled remotely" className="flex h-full min-w-0 items-center justify-center px-4 text-center text-base text-[--text]">
+        <p className="max-w-full break-words">This terminal is controlled remotely by {control.peerName}. It will return here when control ends.</p>
+      </div>
+    );
+  }
+  if (!fleet) {
+    return (
+      <div role={fleet === null ? 'alert' : 'status'} className="flex h-full min-w-0 items-center justify-center px-4 text-center text-base text-[--text]">
+        {fleet === null ? 'Could not check terminal control. Reopen this terminal to retry.' : 'Checking terminal control…'}
+      </div>
+    );
+  }
+  return <LocalShellTab {...props} />;
+}
+
+function LocalShellTab({
   projectId, shellIndex, onOpenFile, onOpenLaunchSettings, primary = false, popout = false,
-}: {
-  projectId: number;
-  shellIndex: number;
-  /** Opens a file from terminal output; a click on the preview card or on the printed path passes `projectId` only when the peek found the file in another project. */
-  onOpenFile?: HoverPreviewOpen;
-  /** Opens Settings → Launch commands so the user can fix a broken launch command. */
-  onOpenLaunchSettings?: () => void;
-  /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
-  primary?: boolean;
-  /** Popout window: hover previews of another project's file cannot be opened from here. */
-  popout?: boolean;
-}) {
+}: Props) {
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
   platformRef.current = platform;
