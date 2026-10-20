@@ -11,6 +11,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // Keep main-process logging out of the user's real log file.
+    setupFiles: ['tests/unit/setup-log.ts'],
     // Cap the worker pool: the default uses every core, in every session sharing this machine.
     // minWorkers must be set too, or its core-count default conflicts with the cap.
     maxWorkers: 4,
