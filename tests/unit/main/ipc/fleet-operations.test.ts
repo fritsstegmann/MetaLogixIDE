@@ -40,7 +40,10 @@ describe('local Fleet operation boundary', () => {
         });
         await expect(operations.launch(project.id + 10_000)).rejects.toThrow(/no project/);
         expect(services.ptyManager.liveShells()).toEqual([]);
+        services.settings.set('claude_permission_mode', null);
+        await expect(operations.launchClaude(project.id)).rejects.toThrow('Choose a Claude permission mode first');
         const { shellIndex } = await operations.launch(project.id);
+        expect(shellIndex).toBe(1);
         expect((await operations.status()).shells).toEqual([
           { projectId: project.id, shellIndex, agent: null, state: 'idle' },
         ]);
@@ -72,6 +75,14 @@ describe('local Fleet operation boundary', () => {
         await operations.stop(project.id, shellIndex);
         expect((await operations.snapshot(project.id, shellIndex)).alive).toBe(false);
         expect((await operations.status()).shells).toEqual([]);
+        services.settings.set('claude_permission_mode', 'bypass');
+        const spawn = vi.spyOn(services.ptyManager, 'spawn').mockResolvedValue({ pid: 31415 });
+        expect(await operations.launchClaude(project.id)).toEqual({ shellIndex: 0 });
+        expect(spawn).toHaveBeenCalledWith(project.id, 0, expect.objectContaining({
+          argv: expect.arrayContaining([expect.stringContaining('claude')]),
+          cwd: projectPath,
+        }));
+        spawn.mockRestore();
         const unicodeOutput = '🙂'.repeat(2048) + 'x';
         vi.spyOn(services.ptyManager, 'getSnapshot').mockResolvedValue(unicodeOutput);
         const clipped = await operations.snapshot(project.id, shellIndex);
@@ -149,6 +160,8 @@ describe('registered Fleet IPC over two real services', () => {
       a.fleet = local;
       b.fleet = remote;
       const channels = new Map<string, (...args: unknown[]) => unknown>();
+      const broadcast = vi.fn();
+      local.onTerminal((event) => broadcast('fleet:terminal', event));
       registerIpc(
         {
           handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -156,7 +169,7 @@ describe('registered Fleet IPC over two real services', () => {
           },
         } as unknown as IpcMain,
         a,
-        vi.fn(),
+        broadcast,
       );
       const invoke = async (channel: string, req: unknown): Promise<unknown> => {
         const handler = channels.get(channel);
@@ -231,6 +244,12 @@ describe('registered Fleet IPC over two real services', () => {
         )
           throw new Error('Remote shell did not launch');
         const shellIndex = launched.shellIndex;
+        const attached = await invoke('fleet:subscribe', { peerId: peer.id, projectId: project.id, shellIndex });
+        if (!attached || typeof attached !== 'object' || !('subscriptionId' in attached) ||
+          typeof attached.subscriptionId !== 'string') throw new Error('No remote subscription');
+        await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith('fleet:terminal',
+          expect.objectContaining({ peerId: peer.id, subscriptionId: attached.subscriptionId, kind: 'ready' })));
+        await invoke('fleet:resize', { peerId: peer.id, projectId: project.id, shellIndex, cols: 91, rows: 35 });
         await invoke('fleet:write', {
           peerId: peer.id,
           projectId: project.id,
@@ -242,6 +261,10 @@ describe('registered Fleet IPC over two real services', () => {
             await invoke('fleet:snapshot', { peerId: peer.id, projectId: project.id, shellIndex }),
           ).toMatchObject({ alive: true, output: expect.stringContaining('FLEET_IPC_READY') }),
         );
+        await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith('fleet:terminal',
+          expect.objectContaining({ peerId: peer.id, subscriptionId: attached.subscriptionId,
+            kind: 'data', data: expect.stringContaining('FLEET_IPC_READY') })));
+        await invoke('fleet:unsubscribe', { peerId: peer.id, subscriptionId: attached.subscriptionId });
         await invoke('fleet:stop', { peerId: peer.id, projectId: project.id, shellIndex });
         expect(
           await invoke('fleet:snapshot', { peerId: peer.id, projectId: project.id, shellIndex }),

@@ -49,14 +49,18 @@ it('starts a default-off real Fleet service before opening a window and stops it
   const loadWindow = vi.fn(async () => {
     calls.push('window');
   });
+  const broadcasts = vi.fn();
+  const windows: TestWindow[] = [];
   class TestWindow {
     static getAllWindows() {
-      return [];
+      return windows;
     }
     static getFocusedWindow() {
       return null;
     }
-    webContents = { on: vi.fn(), setWindowOpenHandler: vi.fn() };
+    webContents = { on: vi.fn(), setWindowOpenHandler: vi.fn(), isDestroyed: () => false,
+      isCrashed: () => false, send: broadcasts };
+    constructor() { windows.push(this); }
     once = vi.fn();
     setOpacity = vi.fn();
     isDestroyed() {
@@ -97,6 +101,12 @@ it('starts a default-off real Fleet service before opening a window and stops it
     createFleetOperations: () => ({
       status: () => ({ projects: [], shells: [] }),
       launch: async () => ({ shellIndex: 0 }),
+      launchClaude: async () => ({ shellIndex: 0 }),
+      resize: async () => {},
+      isAlive: () => false,
+      hasProject: () => false,
+      watch: () => () => {},
+      terminalSnapshot: async () => '',
       stop: async () => {},
       write: async () => {},
       snapshot: async () => ({ output: '', alive: false }),
@@ -127,6 +137,15 @@ it('starts a default-off real Fleet service before opening a window and stops it
     expect(fleet.state().enabled).toBe(false);
     expect(registered).toHaveBeenCalledOnce();
     expect(calls).toEqual(['window']);
+    const listeners: unknown = Reflect.get(fleet, 'terminalListeners');
+    if (!(listeners instanceof Set)) throw new Error('Fleet terminal broadcast not installed');
+    const terminal = { peerId: 'a'.repeat(64), subscriptionId: 'b'.repeat(32),
+      projectId: 7, shellIndex: 0, kind: 'ready', data: '' };
+    for (const listener of listeners) {
+      if (typeof listener !== 'function') throw new Error('Invalid terminal listener');
+      listener(terminal);
+    }
+    expect(broadcasts).toHaveBeenCalledWith('fleet:terminal', terminal);
     events.get('before-quit')?.();
     await vi.waitFor(() => expect(Reflect.get(fleet, 'started')).toBe(false));
     expect(stopAgent).toHaveBeenCalledOnce();

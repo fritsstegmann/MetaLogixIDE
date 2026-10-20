@@ -86,6 +86,25 @@ describe('fleet network boundaries', () => {
     ).toBeNull();
   });
 
+  it('accepts only bounded terminal frames, exact subscription IDs, and safe launch errors', () => {
+    const request = (op: string, args: unknown) =>
+      decodeMessage(JSON.stringify({ type: 'request', id: 'c'.repeat(32), op, args }));
+    const terminal = (fields: Record<string, unknown>) =>
+      decodeMessage(JSON.stringify({ type: 'terminal', id: 'c'.repeat(32),
+        projectId: 1, shellIndex: 0, kind: 'data', data: '\x1b[31m🙂', ...fields }));
+    expect(request('launch-claude', { projectId: 1 })).toMatchObject({ op: 'launch-claude' });
+    expect(request('launch-claude', { projectId: 1, argv: ['sh'] })).toBeNull();
+    expect(request('subscribe', { projectId: 1, shellIndex: 0, subscriptionId: 'a'.repeat(32) })).toMatchObject({ op: 'subscribe' });
+    expect(request('subscribe', { projectId: 1, shellIndex: 0, subscriptionId: '../secret' })).toBeNull();
+    expect(request('resize', { projectId: 1, shellIndex: 0, cols: 500, rows: 200 })).toMatchObject({ op: 'resize' });
+    expect(request('resize', { projectId: 1, shellIndex: 0, cols: 501, rows: 200 })).toBeNull();
+    expect(terminal({})).toMatchObject({ data: '\x1b[31m🙂' });
+    expect(terminal({ data: 'x'.repeat(4097) })).toBeNull();
+    expect(terminal({ kind: 'ready', data: 'private' })).toBeNull();
+    expect(decodeMessage(JSON.stringify({ type: 'response', id: 'c'.repeat(32),
+      ok: false, error: '/secret/path' }))).toBeNull();
+  });
+
   it('rejects malformed status page offsets, tokens and impossible page lengths', () => {
     const request = (args: unknown) =>
       decodeMessage(JSON.stringify({ type: 'request', id: 'c'.repeat(32), op: 'status', args }));

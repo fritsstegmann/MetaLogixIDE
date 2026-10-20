@@ -36,3 +36,13 @@ export interface FleetStatus {
   readonly projects: readonly FleetProject[];
   readonly shells: readonly FleetShell[];
 }
+
+/** Ordered chunks of one remote terminal attachment; snapshot precedes ready and live data. */
+export interface FleetTerminalEvent {
+  readonly peerId: string;
+  readonly subscriptionId: string;
+  readonly projectId: number;
+  readonly shellIndex: number;
+  readonly kind: 'snapshot' | 'ready' | 'data' | 'exit';
+  readonly data: string;
+}

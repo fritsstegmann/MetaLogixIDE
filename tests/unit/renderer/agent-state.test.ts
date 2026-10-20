@@ -243,7 +243,8 @@ describe('status dot consumers (AC8, AC9)', () => {
       const { createElement: h } = await import('react');
       const { renderToStaticMarkup: render } = await import('react-dom/server');
       const html = render(h(Sidebar, {
-        selectedProjectId: 7, onSelect: vi.fn(), onEditEnv: vi.fn(), onProjectSettings: vi.fn(),
+        selectedProjectId: 7, selectedRemote: null, onSelectRemote: vi.fn(),
+        onSelect: vi.fn(), onEditEnv: vi.fn(), onProjectSettings: vi.fn(),
       }));
       expect(html).toContain('In use');
       expect(projectState).toHaveBeenCalledWith(7);

@@ -2,7 +2,7 @@
 import type { Socket } from 'node:net';
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { connect, createServer, type Server, type TLSSocket } from 'node:tls';
-import type { FleetState, FleetStatus } from '../../shared/fleet-contract';
+import type { FleetState, FleetStatus, FleetTerminalEvent } from '../../shared/fleet-contract';
 import { FleetChannel } from './channel';
 import { FleetDiscovery, type Presence } from './discovery';
 import {
@@ -27,8 +27,14 @@ import {
 export interface FleetOperations {
   readonly status: () => Promise<FleetStatus> | FleetStatus;
   readonly launch: (projectId: number) => Promise<{ shellIndex: number }>;
+  readonly launchClaude: (projectId: number) => Promise<{ shellIndex: number }>;
   readonly stop: (projectId: number, shellIndex: number) => Promise<void>;
   readonly write: (projectId: number, shellIndex: number, data: string) => Promise<void>;
+  readonly resize: (projectId: number, shellIndex: number, cols: number, rows: number) => Promise<void>;
+  readonly isAlive: (projectId: number, shellIndex: number) => boolean;
+  readonly hasProject: (projectId: number) => boolean;
+  readonly watch: (projectId: number, shellIndex: number, onData: (data: string) => void, onExit: () => void) => () => void;
+  readonly terminalSnapshot: (projectId: number, shellIndex: number) => Promise<string>;
   readonly snapshot: (
     projectId: number,
     shellIndex: number,
@@ -43,6 +49,18 @@ export interface FleetOptions {
   readonly getPort?: () => number;
   /** Persists a validated port chosen through setPort. */
   readonly savePort?: (port: number) => void;
+}
+interface TerminalSubscription {
+  readonly id: string;
+  readonly projectId: number;
+  readonly shellIndex: number;
+  unsubscribe: () => void;
+  snapshot: string | null;
+  offset: number;
+  ready: boolean;
+  readonly pending: WireMessage[];
+  pendingBytes: number;
+  deadline?: NodeJS.Timeout;
 }
 interface Session {
   readonly id: string;
@@ -62,6 +80,10 @@ interface Session {
     { status: FleetStatus; expires: number; projectOffset: number; shellOffset: number }
   >;
   statusPending: number;
+  readonly incoming: Map<string, TerminalSubscription>;
+  readonly outgoing: Map<string, { projectId: number; shellIndex: number }>;
+  streamTimer?: NodeJS.Timeout;
+  streamCursor: number;
 }
 const ID = /^[a-f0-9]{64}$/;
 const GENERIC_FAILURE =
@@ -88,6 +110,7 @@ export function parseFleetPort(value: unknown): number {
 export class FleetService {
   private readonly store: FleetIdentityStore;
   private readonly listeners = new Set<(state: FleetState) => void>();
+  private readonly terminalListeners = new Set<(event: FleetTerminalEvent) => void>();
   private readonly sessions = new Map<string, Session>();
   private readonly attempts = new Map<string, { count: number; since: number }>();
   private trust: FleetTrust = { enabled: false, trusted: [], revoked: [] };
@@ -262,6 +285,11 @@ export class FleetService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+  /** Observes only terminal events from live authenticated subscriptions. */
+  onTerminal(listener: (event: FleetTerminalEvent) => void): () => void {
+    this.terminalListeners.add(listener);
+    return () => this.terminalListeners.delete(listener);
   }
 
   private notify(): void {
@@ -618,11 +646,15 @@ export class FleetService {
       approvedLocal: false,
       approvedRemote: false,
       statusSnapshots: new Map(),
+      incoming: new Map(),
+      outgoing: new Map(),
+      streamCursor: 0,
       statusPending: 0,
     };
     this.sessions.set(id, session);
     replaced?.channel.close();
     channel.onClose(() => {
+      this.clearSessionStreams(session);
       clearTimeout(session.deadline);
       if (this.sessions.get(id) === session) {
         this.sessions.delete(id);
@@ -696,6 +728,10 @@ export class FleetService {
       await this.finishPair(session);
       return;
     }
+    if (message.type === 'terminal') {
+      this.forwardTerminal(session, message);
+      return;
+    }
     if (message.type !== 'request') {
       session.channel.close();
       return;
@@ -762,45 +798,202 @@ export class FleetService {
     let value: unknown;
     try {
       if (op === 'status') value = await this.statusPage(session, args);
-      else if (op === 'launch') {
-        const launched: unknown = await this.options.operations.launch(Number(args.projectId));
-        if (
-          !launched ||
-          typeof launched !== 'object' ||
-          !('shellIndex' in launched) ||
-          !Number.isSafeInteger(launched.shellIndex) ||
-          Number(launched.shellIndex) < 0 ||
-          Number(launched.shellIndex) > 1_000_000
-        )
+      else if (op === 'launch' || op === 'launch-claude') {
+        const launched: unknown = await (op === 'launch'
+          ? this.options.operations.launch(Number(args.projectId))
+          : this.options.operations.launchClaude(Number(args.projectId)));
+        if (!launched || typeof launched !== 'object' || !('shellIndex' in launched) ||
+          !Number.isSafeInteger(launched.shellIndex) || Number(launched.shellIndex) < 0 ||
+          Number(launched.shellIndex) > 1_000_000)
           throw new Error('Invalid fleet launch result');
         value = { shellIndex: Number(launched.shellIndex) };
+      } else if (op === 'subscribe') {
+        value = this.acceptSubscription(session, Number(args.projectId), Number(args.shellIndex), String(args.subscriptionId));
+      } else if (op === 'unsubscribe') {
+        if (!session.incoming.has(String(args.subscriptionId))) throw new Error('Unknown subscription');
+        this.removeSubscription(session, String(args.subscriptionId));
+        value = { ok: true };
+      } else if (op === 'resize') {
+        if (!this.options.operations.isAlive(Number(args.projectId), Number(args.shellIndex)))
+          throw new Error('Shell unavailable');
+        await this.options.operations.resize(Number(args.projectId), Number(args.shellIndex), Number(args.cols), Number(args.rows));
+        value = { ok: true };
       } else if (op === 'stop') {
         await this.options.operations.stop(Number(args.projectId), Number(args.shellIndex));
         value = { ok: true };
       } else if (op === 'write') {
-        await this.options.operations.write(
-          Number(args.projectId),
-          Number(args.shellIndex),
-          String(args.data),
-        );
+        if (!this.options.operations.isAlive(Number(args.projectId), Number(args.shellIndex)))
+          throw new Error('Shell unavailable');
+        await this.options.operations.write(Number(args.projectId), Number(args.shellIndex), String(args.data));
         value = { ok: true };
       } else
-        value = validateSnapshot(
-          await this.options.operations.snapshot(Number(args.projectId), Number(args.shellIndex)),
-        );
+        value = validateSnapshot(await this.options.operations.snapshot(Number(args.projectId), Number(args.shellIndex)));
       if (value === null) throw new Error('Invalid fleet operation result');
-      if (
-        this.sessions.get(session.id) !== session ||
+      if (this.sessions.get(session.id) !== session ||
         !this.trust.trusted.some((peer) => peer.id === session.id) ||
-        this.trust.revoked.includes(session.id)
-      )
+        this.trust.revoked.includes(session.id)) {
+        if (op === 'subscribe') this.removeSubscription(session, String(args.subscriptionId));
         return;
+      }
       session.channel.send({ type: 'response', id, ok: true, value });
-    } catch {
+    } catch (error) {
+      if (op === 'subscribe') this.removeSubscription(session, String(args.subscriptionId));
+      const safeError = op === 'launch-claude' ? this.launchFailure(error) : undefined;
       if (this.sessions.get(session.id) === session && !this.trust.revoked.includes(session.id))
-        session.channel.send({ type: 'response', id, ok: false });
+        session.channel.send({ type: 'response', id, ok: false,
+          ...(safeError ? { error: safeError } : {}) });
     }
   }
+  private launchFailure(error: unknown): 'permission-mode' | 'claude-missing' | 'shell-cap' | 'project-unavailable' | undefined {
+    if (!(error instanceof Error)) return undefined;
+    if (error.message === 'Choose a Claude permission mode first') return 'permission-mode';
+    if (error.message === 'all shells are pinned — unpin one or raise cap') return 'shell-cap';
+    if (/^no project \d+$|^Project folder no longer exists at /i.test(error.message))
+      return 'project-unavailable';
+    if (/(?:ENOENT|not found|not recognized|no such file)/i.test(error.message) &&
+      /(?:claude|spawn)/i.test(error.message)) return 'claude-missing';
+    return undefined;
+  }
+
+  private clearSessionStreams(session: Session): void {
+    clearInterval(session.streamTimer);
+    session.streamTimer = undefined;
+    for (const id of session.incoming.keys()) this.removeSubscription(session, id);
+    session.outgoing.clear();
+  }
+
+  private removeSubscription(session: Session, id: string): void {
+    const subscription = session.incoming.get(id);
+    if (!subscription) return;
+    clearTimeout(subscription.deadline);
+    session.incoming.delete(id);
+    subscription.pending.length = 0;
+    subscription.unsubscribe();
+    if (session.incoming.size === 0) {
+      clearInterval(session.streamTimer);
+      session.streamTimer = undefined;
+    }
+  }
+
+  private queueOutput(session: Session, subscription: TerminalSubscription, kind: 'data' | 'exit', data: string): void {
+    if (session.incoming.get(subscription.id) !== subscription) return;
+    if (subscription.pendingBytes + Buffer.byteLength(data, 'utf8') > 262_144) {
+      session.channel.close();
+      return;
+    }
+    for (let offset = 0; offset < data.length;) {
+      const end = this.chunkEnd(data, offset);
+      const chunk = data.slice(offset, end);
+      subscription.pending.push({ type: 'terminal', id: subscription.id, projectId: subscription.projectId,
+        shellIndex: subscription.shellIndex, kind: 'data', data: chunk });
+      subscription.pendingBytes += Buffer.byteLength(chunk, 'utf8');
+      offset = end;
+    }
+    if (kind === 'exit') subscription.pending.push({ type: 'terminal', id: subscription.id,
+      projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
+  }
+
+  private chunkEnd(data: string, offset: number): number {
+    let end = Math.min(offset + 2048, data.length);
+    while (Buffer.byteLength(data.slice(offset, end), 'utf8') > 4096)
+      end = offset + Math.floor((end - offset) / 2);
+    if (end < data.length && end > offset && data.charCodeAt(end - 1) >= 0xd800 &&
+      data.charCodeAt(end - 1) <= 0xdbff) end--;
+    return end;
+  }
+
+  private failSubscription(session: Session, subscription: TerminalSubscription): void {
+    if (session.incoming.get(subscription.id) !== subscription) return;
+    this.removeSubscription(session, subscription.id);
+    if (this.sessions.get(session.id) !== session || !this.trust.enabled ||
+      this.trust.revoked.includes(session.id)) return;
+    try {
+      session.channel.send({ type: 'terminal', id: subscription.id,
+        projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
+    } catch {
+      session.channel.close();
+    }
+  }
+
+  private acceptSubscription(session: Session, projectId: number, shellIndex: number, id: string): { subscriptionId: string } {
+    if (session.incoming.size >= 4 || session.incoming.has(id) ||
+      !this.options.operations.hasProject(projectId) ||
+      !this.options.operations.isAlive(projectId, shellIndex))
+      throw new Error('Shell unavailable');
+    const snapshot = this.options.operations.terminalSnapshot(projectId, shellIndex);
+    const subscription: TerminalSubscription = {
+      id, projectId, shellIndex, unsubscribe: () => {}, snapshot: null,
+      offset: 0, ready: false, pending: [], pendingBytes: 0,
+    };
+    session.incoming.set(id, subscription);
+    const unsubscribe = this.options.operations.watch(projectId, shellIndex,
+      (data) => this.queueOutput(session, subscription, 'data', data),
+      () => this.queueOutput(session, subscription, 'exit', ''));
+    subscription.unsubscribe = unsubscribe;
+    subscription.deadline = setTimeout(() => this.failSubscription(session, subscription), 10_000);
+    void snapshot.then((output) => {
+      if (session.incoming.get(id) !== subscription) return;
+      clearTimeout(subscription.deadline);
+      if (Buffer.byteLength(output, 'utf8') > 4_194_304)
+        this.failSubscription(session, subscription);
+      else subscription.snapshot = output;
+    }, () => this.failSubscription(session, subscription));
+    session.streamTimer ??= setInterval(() => this.drainStreams(session), 20);
+    return { subscriptionId: id };
+  }
+
+  private drainStreams(session: Session): void {
+    if (this.sessions.get(session.id) !== session || !this.trust.enabled ||
+      this.trust.revoked.includes(session.id)) {
+      session.channel.close();
+      return;
+    }
+    const count = session.incoming.size;
+    if (count === 0) return;
+    const slot = session.streamCursor++ % count;
+    const subscribers = session.incoming.values();
+    for (let index = 0; index < slot; index++) subscribers.next();
+    const subscription = subscribers.next().value;
+    if (!subscription || subscription.snapshot === null) return;
+    let frame: WireMessage;
+    if (subscription.offset < subscription.snapshot.length) {
+      const end = this.chunkEnd(subscription.snapshot, subscription.offset);
+      frame = { type: 'terminal', id: subscription.id, projectId: subscription.projectId,
+        shellIndex: subscription.shellIndex, kind: 'snapshot',
+        data: subscription.snapshot.slice(subscription.offset, end) };
+      subscription.offset = end;
+      if (end === subscription.snapshot.length) subscription.snapshot = '';
+    } else if (!subscription.ready) {
+      subscription.ready = true;
+      frame = { type: 'terminal', id: subscription.id, projectId: subscription.projectId,
+        shellIndex: subscription.shellIndex, kind: 'ready', data: '' };
+    } else {
+      const pending = subscription.pending.shift();
+      if (!pending) return;
+      frame = pending;
+      if (pending.type === 'terminal') subscription.pendingBytes -= Buffer.byteLength(pending.data, 'utf8');
+    }
+    try {
+      session.channel.send(frame);
+      if (frame.type === 'terminal' && frame.kind === 'exit') this.removeSubscription(session, subscription.id);
+    } catch {
+      session.channel.close();
+    }
+  }
+
+  private forwardTerminal(session: Session, frame: Extract<WireMessage, { type: 'terminal' }>): void {
+    const subscription = session.outgoing.get(frame.id);
+    if (!subscription || subscription.projectId !== frame.projectId ||
+      subscription.shellIndex !== frame.shellIndex ||
+      this.sessions.get(session.id) !== session ||
+      !this.trust.enabled || this.trust.revoked.includes(session.id) ||
+      !this.trust.trusted.some((peer) => peer.id === session.id)) return;
+    if (frame.kind === 'exit') session.outgoing.delete(frame.id);
+    const event: FleetTerminalEvent = { peerId: session.id, subscriptionId: frame.id,
+      projectId: frame.projectId, shellIndex: frame.shellIndex, kind: frame.kind, data: frame.data };
+    for (const listener of this.terminalListeners) listener(event);
+  }
+
   private async captureStatus(session: Session): Promise<{ status: FleetStatus; token: string }> {
     if (session.statusSnapshots.size + session.statusPending >= 4)
       throw new Error('Too many status snapshots');
@@ -974,7 +1167,8 @@ export class FleetService {
 
   /** Launches a shell through the peer's existing local shell policy. */
   async launch(peerId: string, projectId: number): Promise<{ shellIndex: number }> {
-    if (!Number.isSafeInteger(projectId) || projectId < 1) throw new Error('Invalid project ID');
+    if (!Number.isSafeInteger(projectId) || projectId < 1 || projectId > 1_000_000)
+      throw new Error('Invalid project ID');
     const value = await this.linked(peerId).request('launch', { projectId });
     if (
       !value ||
@@ -985,6 +1179,56 @@ export class FleetService {
     )
       throw new Error('Invalid peer shell');
     return { shellIndex: Number(value.shellIndex) };
+  }
+
+  /** Launches or reattaches the peer's primary Claude shell under its own configuration. */
+  async launchClaude(peerId: string, projectId: number): Promise<{ shellIndex: number }> {
+    if (!Number.isSafeInteger(projectId) || projectId < 1 || projectId > 1_000_000)
+      throw new Error('Invalid project ID');
+    const value = await this.linked(peerId).request('launch-claude', { projectId });
+    if (!value || typeof value !== 'object' || !('shellIndex' in value) ||
+      !Number.isSafeInteger(value.shellIndex) || Number(value.shellIndex) < 0 ||
+      Number(value.shellIndex) > 1_000_000) throw new Error('Invalid peer shell');
+    return { shellIndex: Number(value.shellIndex) };
+  }
+
+  /** Attaches to an existing remote PTY, with terminal events allowed before acknowledgement. */
+  async subscribe(peerId: string, projectId: number, shellIndex: number): Promise<{ subscriptionId: string }> {
+    this.validateShell(projectId, shellIndex);
+    const channel = this.linked(peerId);
+    const session = this.sessions.get(peerId);
+    if (!session || session.channel !== channel || session.outgoing.size >= 4)
+      throw new Error('Fleet subscription unavailable');
+    const subscriptionId = randomBytes(16).toString('hex');
+    session.outgoing.set(subscriptionId, { projectId, shellIndex });
+    try {
+      const result = await channel.request('subscribe', { projectId, shellIndex, subscriptionId });
+      if (this.linked(peerId) !== channel || !result || typeof result !== 'object' ||
+        !('subscriptionId' in result) || result.subscriptionId !== subscriptionId)
+        throw new Error('Invalid peer subscription');
+      return { subscriptionId };
+    } catch (error) {
+      session.outgoing.delete(subscriptionId);
+      throw error;
+    }
+  }
+
+  /** Stops all renderer delivery for one session-scoped remote attachment. */
+  async unsubscribe(peerId: string, subscriptionId: string): Promise<void> {
+    const channel = this.linked(peerId);
+    const session = this.sessions.get(peerId);
+    if (!session || session.channel !== channel || !/^[a-f0-9]{32}$/.test(subscriptionId) ||
+      !session.outgoing.delete(subscriptionId)) throw new Error('Unknown fleet subscription');
+    await channel.request('unsubscribe', { subscriptionId });
+  }
+
+  /** Resizes only an existing remote shell within terminal dimension bounds. */
+  async resize(peerId: string, projectId: number, shellIndex: number, cols: number, rows: number): Promise<void> {
+    this.validateShell(projectId, shellIndex);
+    if (!Number.isSafeInteger(cols) || cols < 2 || cols > 500 ||
+      !Number.isSafeInteger(rows) || rows < 2 || rows > 200)
+      throw new Error('Invalid terminal dimensions');
+    await this.linked(peerId).request('resize', { projectId, shellIndex, cols, rows });
   }
 
   /** Stops an authorized live peer shell. */
@@ -1018,9 +1262,9 @@ export class FleetService {
   private validateShell(projectId: number, shellIndex: number): void {
     if (
       !Number.isSafeInteger(projectId) ||
-      projectId < 1 ||
+      projectId < 1 || projectId > 1_000_000 ||
       !Number.isSafeInteger(shellIndex) ||
-      shellIndex < 0
+      shellIndex < 0 || shellIndex > 1_000_000
     )
       throw new Error('Invalid shell identity');
   }

@@ -7,7 +7,7 @@ import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
-import type { FleetState, FleetStatus } from './fleet-contract';
+import type { FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -392,6 +392,12 @@ export interface IpcContract {
   'fleet:revoke':      { request: { peerId: string }; response: { ok: true } };
   'fleet:status':      { request: { peerId: string }; response: FleetStatus };
   'fleet:launch':      { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  /** Launches or reattaches Claude using the remote host's existing project policy. */
+  'fleet:launch-claude': { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  /** One active terminal attachment streams a full screen snapshot, then live PTY output. */
+  'fleet:subscribe': { request: { peerId: string; projectId: number; shellIndex: number }; response: { subscriptionId: string } };
+  'fleet:unsubscribe': { request: { peerId: string; subscriptionId: string }; response: { ok: true } };
+  'fleet:resize': { request: { peerId: string; projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
   'fleet:stop':        { request: { peerId: string; projectId: number; shellIndex: number }; response: { ok: true } };
   'fleet:write':       { request: { peerId: string; projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'fleet:snapshot':    { request: { peerId: string; projectId: number; shellIndex: number }; response: { output: string; alive: boolean } };
@@ -432,5 +438,6 @@ export interface IpcEvents {
    */
   'app:open-file-request':  { path: string };
   'fleet:changed':         FleetState;
+  'fleet:terminal':        FleetTerminalEvent;
 }
 export type IpcEventName = keyof IpcEvents;

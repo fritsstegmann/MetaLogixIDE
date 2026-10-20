@@ -51,14 +51,133 @@ function announceTo(receiver: FleetService, remote: FleetService, name: string) 
   );
 }
 
+it('streams a remote Claude shell through one authenticated subscription and cancels on revoke', async () => {
+  let output: ((data: string) => void) | undefined;
+  let exit: (() => void) | undefined;
+  const launchClaude = vi.fn(async () => ({ shellIndex: 0 }));
+  const resize = vi.fn(async () => {});
+  const remoteOps: FleetOperations = {
+    status: () => ({ projects: [{ id: 7, name: 'Remote' }], shells: [{ projectId: 7, shellIndex: 0, agent: 'claude', state: 'busy' }] }),
+    launch: async () => ({ shellIndex: 1 }),
+    launchClaude,
+    stop: async () => {},
+    write: async () => {},
+    resize,
+    isAlive: (projectId, shellIndex) => projectId === 7 && shellIndex === 0,
+    hasProject: (projectId) => projectId === 7,
+    watch: (_projectId, _shellIndex, onData, onExit) => {
+      output = onData;
+      exit = onExit;
+      return () => { output = undefined; exit = undefined; };
+    },
+    terminalSnapshot: async () => '\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m',
+    snapshot: async () => ({ output: '', alive: true }),
+  };
+  const localOps: FleetOperations = {
+    ...remoteOps,
+    status: () => ({ projects: [], shells: [] }),
+    isAlive: () => false,
+  };
+  const instance = (name: string, operations: FleetOperations): FleetService => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-stream-'));
+    roots.push(root);
+    const fleet = new FleetService({ name, storageDir: join(root, 'fleet'), operations, keychain });
+    instances.push(fleet);
+    return fleet;
+  };
+  const a = instance('stream A', localOps);
+  const b = instance('stream B', remoteOps);
+  await a.start();
+  await b.start();
+  await a.setEnabled(true);
+  await b.setEnabled(true);
+  announceTo(a, b, 'stream B');
+  announceTo(b, a, 'stream A');
+  const peer = a.state().peers.find(({ name }) => name === 'stream B');
+  const local = b.state().peers.find(({ name }) => name === 'stream A');
+  if (!peer || !local) throw new Error('Discovery missing');
+  await expect(a.subscribe(peer.id, 7, 0)).rejects.toThrow();
+  await a.pair(peer.id);
+  await vi.waitFor(() => expect(b.state().peers.find(({ id }) => id === local.id)?.verificationCode).toBeTruthy());
+  const code = a.state().peers.find(({ id }) => id === peer.id)?.verificationCode;
+  if (!code) throw new Error('Comparison code missing');
+  await a.approve(peer.id, code);
+  await b.approve(local.id, code);
+  await vi.waitFor(() => expect(a.state().peers.find(({ id }) => id === peer.id)?.status).toBe('linked'));
+  await expect(a.subscribe(peer.id, 8, 0)).rejects.toThrow();
+  launchClaude.mockRejectedValueOnce(new Error('Choose a Claude permission mode first'));
+  await expect(a.launchClaude(peer.id, 7)).rejects.toThrow('Choose a Claude permission mode on the remote machine first');
+  launchClaude.mockRejectedValueOnce(new Error('shell failed to start: spawn claude ENOENT /private/secret'));
+  await expect(a.launchClaude(peer.id, 7)).rejects.toThrow('Claude is unavailable on the remote machine');
+  launchClaude.mockRejectedValueOnce(new Error('all shells are pinned — unpin one or raise cap'));
+  await expect(a.launchClaude(peer.id, 7)).rejects.toThrow('Remote shell limit reached');
+  launchClaude.mockRejectedValueOnce(new Error('Project folder no longer exists at /private/secret'));
+  await expect(a.launchClaude(peer.id, 7)).rejects.toThrow('Remote project folder is unavailable');
+  await expect(a.resize(peer.id, 7, 0, 501, 35)).rejects.toThrow('Invalid terminal dimensions');
+  expect(await a.launchClaude(peer.id, 7)).toEqual({ shellIndex: 0 });
+  expect(launchClaude).toHaveBeenCalledWith(7);
+  const events: Array<{ subscriptionId: string; kind: string; data: string }> = [];
+  a.onTerminal((event) => events.push(event));
+  const { subscriptionId } = await a.subscribe(peer.id, 7, 0);
+  output?.('\x1b[36mduring-snapshot\x1b[0m');
+  await vi.waitFor(() => expect(events.some((event) => event.kind === 'ready')).toBe(true));
+  expect(events.filter((event) => event.kind === 'snapshot').map((event) => event.data).join('')).toBe('\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m');
+  expect(events.every((event) => event.subscriptionId === subscriptionId)).toBe(true);
+  const remoteSessions: unknown = Reflect.get(b, 'sessions');
+  if (!(remoteSessions instanceof Map)) throw new Error('Remote sessions missing');
+  const remoteSession: unknown = remoteSessions.get(local.id);
+  if (!remoteSession || typeof remoteSession !== 'object' || !('channel' in remoteSession) ||
+    !(remoteSession.channel instanceof FleetChannel)) throw new Error('Remote channel missing');
+  remoteSession.channel.send({ type: 'terminal', id: 'f'.repeat(32),
+    projectId: 7, shellIndex: 0, kind: 'data', data: 'forged subscription' });
+  remoteSession.channel.send({ type: 'terminal', id: subscriptionId,
+    projectId: 8, shellIndex: 0, kind: 'data', data: 'forged project' });
+  await a.status(peer.id);
+  expect(events.some((event) => event.data.includes('forged'))).toBe(false);
+  await vi.waitFor(() => expect(events.some((event) => event.kind === 'data')).toBe(true));
+  expect(events.findIndex((event) => event.kind === 'ready')).toBeLessThan(
+    events.findIndex((event) => event.kind === 'data'),
+  );
+  await a.resize(peer.id, 7, 0, 91, 35);
+  expect(resize).toHaveBeenCalledWith(7, 0, 91, 35);
+  output?.('\x1b[32mready\x1b[0m');
+  await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ kind: 'data', data: '\x1b[32mready\x1b[0m' }));
+  await a.unsubscribe(peer.id, subscriptionId);
+  expect(output).toBeUndefined();
+  await expect(a.unsubscribe(peer.id, subscriptionId)).rejects.toThrow();
+  const next = await a.subscribe(peer.id, 7, 0);
+  await vi.waitFor(() => expect(events.some((event) => event.subscriptionId === next.subscriptionId && event.kind === 'ready')).toBe(true));
+  exit?.();
+  await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ subscriptionId: next.subscriptionId, kind: 'exit' }));
+  expect(output).toBeUndefined();
+  vi.spyOn(remoteOps, 'terminalSnapshot').mockResolvedValueOnce('x'.repeat(4_194_305));
+  const oversized = await a.subscribe(peer.id, 7, 0);
+  await vi.waitFor(() => expect(events.some((event) =>
+    event.subscriptionId === oversized.subscriptionId && event.kind === 'exit')).toBe(true));
+  expect(events.filter((event) => event.subscriptionId === oversized.subscriptionId)
+    .map((event) => event.kind)).toEqual(['exit']);
+  expect(output).toBeUndefined();
+  const revoked = await a.subscribe(peer.id, 7, 0);
+  await vi.waitFor(() => expect(events.some((event) => event.subscriptionId === revoked.subscriptionId && event.kind === 'ready')).toBe(true));
+  await a.revoke(peer.id);
+  await vi.waitFor(() => expect(output).toBeUndefined());
+  expect(events.filter((event) => event.subscriptionId === revoked.subscriptionId).at(-1)?.kind).toBe('ready');
+}, 20_000);
+
 it('links two distinct IDE runtimes over real TLS after local discovery; controls and revokes a remote shell', async () => {
   const writes: string[] = [];
   const stopped: string[] = [];
   const localOps: FleetOperations = {
     status: () => ({ projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
+    launchClaude: async () => ({ shellIndex: 0 }),
     stop: async () => {},
     write: async () => {},
+    resize: async () => {},
+    isAlive: () => false,
+    hasProject: () => false,
+    watch: () => () => {},
+    terminalSnapshot: async () => '',
     snapshot: async () => ({ output: '', alive: false }),
   };
   let remoteStatus: FleetStatus = {
@@ -75,12 +194,18 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
       expect(id).toBe(1);
       return { shellIndex: 0 };
     },
+    launchClaude: async () => ({ shellIndex: 0 }),
     stop: async (id, index) => {
       stopped.push(`${id}:${index}`);
     },
     write: async (_id, _index, text) => {
       writes.push(text);
     },
+    resize: async () => {},
+    isAlive: () => true,
+    hasProject: (projectId) => projectId === 1,
+    watch: () => () => {},
+    terminalSnapshot: async () => '<terminal text>',
     snapshot: async () => ({ output: '<terminal text>', alive: true }),
   };
   function instance(name: string, operations: FleetOperations) {
@@ -371,8 +496,14 @@ it('keeps one comparison code when both devices request a link at once', async (
   const operations: FleetOperations = {
     status: () => ({ projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
+    launchClaude: async () => ({ shellIndex: 0 }),
     stop: async () => {},
     write: async () => {},
+    resize: async () => {},
+    isAlive: () => false,
+    hasProject: () => false,
+    watch: () => () => {},
+    terminalSnapshot: async () => '',
     snapshot: async () => ({ output: '', alive: false }),
   };
   function instance(name: string) {
