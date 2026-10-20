@@ -116,7 +116,7 @@ export class FleetChannel {
       this.count = 0;
     }
     this.count++;
-    return this.count <= 32;
+    return this.count <= 128;
   }
 
   /** Disconnects immediately and rejects outstanding requests. */

@@ -357,6 +357,203 @@ describe('FleetPanel', () => {
     expect(invoke).not.toHaveBeenCalledWith('fleet:launch', expect.anything());
   });
 
+  it('shows a status reply slower than multiple polling intervals without piling up requests', async () => {
+    vi.useFakeTimers();
+    let answer: ((status: FleetStatus) => void) | undefined;
+    const app = mount(peer('linked'));
+    invoke.mockImplementation((channel: string) =>
+      channel === 'fleet:status'
+        ? new Promise<FleetStatus>((resolve) => {
+            answer = resolve;
+          })
+        : Promise.resolve(peer('linked')),
+    );
+    await app.load();
+    vi.advanceTimersByTime(9_000);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:status')).toHaveLength(1);
+    answer?.(remote);
+    await flush();
+    expect(app.markup()).toContain('Service');
+    vi.advanceTimersByTime(3_000);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:status')).toHaveLength(2);
+  });
+
+  it('lets explicit refresh replace a slow status poll without accepting the old answer', async () => {
+    vi.useFakeTimers();
+    const answers: Array<(status: FleetStatus) => void> = [];
+    const app = mount(peer('linked'));
+    invoke.mockImplementation((channel: string) =>
+      channel === 'fleet:status'
+        ? new Promise<FleetStatus>((resolve) => {
+            answers.push(resolve);
+          })
+        : Promise.resolve(peer('linked')),
+    );
+    await app.load();
+    app.control('Refresh remote status').onClick();
+    expect(answers).toHaveLength(2);
+    answers[1]?.({ projects: [{ id: 12, name: 'Fresh' }], shells: [] });
+    await flush();
+    answers[0]?.(remote);
+    await flush();
+    expect(app.markup()).toContain('Fresh');
+    expect(app.markup()).not.toContain('Service');
+    vi.advanceTimersByTime(3_000);
+    expect(answers).toHaveLength(3);
+  });
+
+  it('serializes shell polls so an older live snapshot cannot overtake an exited one', async () => {
+    vi.useFakeTimers();
+    const answers: Array<(snapshot: { output: string; alive: boolean }) => void> = [];
+    const app = mount(peer('linked'));
+    await app.load();
+    invoke.mockImplementation((channel: string) =>
+      channel === 'fleet:snapshot'
+        ? new Promise<{ output: string; alive: boolean }>((resolve) => {
+            answers.push(resolve);
+          })
+        : Promise.resolve(remote),
+    );
+    app.control('View shell 3').onClick();
+    app.draw();
+    vi.advanceTimersByTime(4_500);
+    expect(answers).toHaveLength(1);
+    answers[0]?.({ output: 'older live output', alive: true });
+    await flush();
+    app.field('Input to Build Mac shell 3').onChange({ target: { value: 'pwd' } });
+    vi.advanceTimersByTime(1_500);
+    expect(answers).toHaveLength(2);
+    answers[1]?.({ output: 'shell exited', alive: false });
+    await flush();
+    expect(app.markup()).toContain('shell exited');
+    expect(app.markup()).not.toContain('older live output');
+    expect(app.markup()).toContain('This remote shell has exited');
+    expect(app.control('Send to Build Mac').disabled).toBe(true);
+    app.send();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.anything());
+  });
+
+  it('ignores a previous peer snapshot after switching to an exited shell on another peer', async () => {
+    vi.useFakeTimers();
+    const answers: Array<{
+      peerId: string;
+      resolve: (snapshot: { output: string; alive: boolean }) => void;
+    }> = [];
+    const both: FleetState = {
+      enabled: true,
+      peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
+    };
+    const app = mount(both);
+    await app.load();
+    invoke.mockImplementation((channel: string, args: { peerId?: string }) =>
+      channel === 'fleet:snapshot'
+        ? new Promise<{ output: string; alive: boolean }>((resolve) => {
+            answers.push({ peerId: args.peerId ?? '', resolve });
+          })
+        : Promise.resolve(channel === 'fleet:status' ? remote : both),
+    );
+    app.control('View shell 3').onClick();
+    app.draw();
+    expect(answers.map((answer) => answer.peerId)).toEqual(['machine-b']);
+    app.control('View Other Mac').onClick();
+    app.draw();
+    await flush();
+    app.control('View shell 3').onClick();
+    app.draw();
+    expect(answers.map((answer) => answer.peerId)).toEqual(['machine-b', 'machine-c']);
+    answers[1]?.resolve({ output: 'other shell exited', alive: false });
+    await flush();
+    answers[0]?.resolve({ output: 'old live output', alive: true });
+    await flush();
+    expect(app.markup()).toContain('other shell exited');
+    expect(app.markup()).not.toContain('old live output');
+    expect(app.control('Send to Other Mac').disabled).toBe(true);
+    app.send();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.anything());
+  });
+
+  it('does not let an old linked peer status replace the newly selected peer', async () => {
+    const answers: Array<{
+      peerId: string;
+      resolve: (status: FleetStatus) => void;
+    }> = [];
+    const both: FleetState = {
+      enabled: true,
+      peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
+    };
+    const app = mount(both);
+    invoke.mockImplementation((channel: string, args: { peerId?: string }) =>
+      channel === 'fleet:status'
+        ? new Promise<FleetStatus>((resolve) => {
+            answers.push({ peerId: args.peerId ?? '', resolve });
+          })
+        : Promise.resolve(both),
+    );
+    await app.load();
+    app.control('View Other Mac').onClick();
+    app.draw();
+    expect(answers.map((answer) => answer.peerId)).toEqual(['machine-b', 'machine-c']);
+    answers[1]?.resolve({ projects: [{ id: 12, name: 'Other project' }], shells: [] });
+    await flush();
+    answers[0]?.resolve(remote);
+    await flush();
+    expect(app.markup()).toContain('Other project');
+    expect(app.markup()).not.toContain('Service');
+  });
+
+  it('does not allow a captured old-peer refresh to displace a pending new-peer status', async () => {
+    const answers: Array<{ peerId: string; resolve: (status: FleetStatus) => void }> = [];
+    const both: FleetState = {
+      enabled: true,
+      peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
+    };
+    const app = mount(both);
+    invoke.mockImplementation((channel: string, args: { peerId?: string }) =>
+      channel === 'fleet:status'
+        ? new Promise<FleetStatus>((resolve) => {
+            answers.push({ peerId: args.peerId ?? '', resolve });
+          })
+        : Promise.resolve(both),
+    );
+    await app.load();
+    const oldRefresh = app.control('Refresh remote status').onClick;
+    app.control('View Other Mac').onClick();
+    app.draw();
+    oldRefresh();
+    expect(answers.map((answer) => answer.peerId)).toEqual(['machine-b', 'machine-c']);
+    answers[1]?.resolve({ projects: [{ id: 12, name: 'Other project' }], shells: [] });
+    await flush();
+    expect(app.markup()).toContain('Other project');
+  });
+
+  it('discards a pending snapshot after the peer goes offline and is linked again', async () => {
+    vi.useFakeTimers();
+    const answers: Array<(snapshot: { output: string; alive: boolean }) => void> = [];
+    const app = mount(peer('linked'));
+    await app.load();
+    invoke.mockImplementation((channel: string) =>
+      channel === 'fleet:snapshot'
+        ? new Promise<{ output: string; alive: boolean }>((resolve) => {
+            answers.push(resolve);
+          })
+        : Promise.resolve(channel === 'fleet:status' ? remote : peer('linked')),
+    );
+    app.control('View shell 3').onClick();
+    app.draw();
+    app.emit(peer('offline'));
+    app.draw();
+    answers[0]?.({ output: 'stale live shell', alive: true });
+    await flush();
+    app.emit(peer('linked'));
+    app.draw();
+    await flush();
+    expect(app.markup()).not.toContain('stale live shell');
+    app.control('View shell 3').onClick();
+    app.draw();
+    expect(answers).toHaveLength(2);
+    expect(app.control('Send to Build Mac').disabled).toBe(true);
+  });
+
   it('ignores late status from a disconnected peer', async () => {
     let answer: ((status: FleetStatus) => void) | undefined;
     const app = mount(peer('linked'));

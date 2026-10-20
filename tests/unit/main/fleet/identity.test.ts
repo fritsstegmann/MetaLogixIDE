@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FleetIdentityStore, type FleetKeychain } from '@main/fleet/identity';
@@ -69,6 +77,54 @@ describe('fleet trust persistence', () => {
     const outside = join(dir, 'outside');
     const store = new FleetIdentityStore(join(dir, 'fleet'), keychain);
     symlinkSync(outside, join(dir, 'fleet'));
+    await expect(store.load()).rejects.toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a planted trust-file symlink or newly permissive trust file',
+    async () => {
+      const { dir, keychain } = fixture();
+      const store = new FleetIdentityStore(dir, keychain);
+      const trust = { enabled: true, trusted: [{ id: 'a'.repeat(64), name: 'A' }], revoked: [] };
+      await store.save(trust);
+      chmodSync(join(dir, 'trust.json'), 0o644);
+      await expect(store.load()).rejects.toThrow('Unsafe fleet trust store');
+      await expect(store.save(trust)).rejects.toThrow('Unsafe fleet storage permissions');
+      rmSync(join(dir, 'trust.json'));
+      const outside = join(dir, 'outside');
+      writeFileSync(outside, JSON.stringify(trust), { mode: 0o600 });
+      symlinkSync(outside, join(dir, 'trust.json'));
+      await expect(store.load()).rejects.toThrow();
+      await expect(store.save(trust)).rejects.toThrow('Unsafe fleet storage path');
+    },
+  );
+
+  it('refuses lost or malformed identity instead of replacing a previously trusted certificate', async () => {
+    const { dir, keychain, values } = fixture();
+    const store = new FleetIdentityStore(dir, keychain);
+    await expect(store.loadIdentity(true)).rejects.toThrow('existing trust cannot be restored');
+    await store.loadIdentity();
+    const account = [...values.keys()][0];
+    if (!account) throw new Error('Missing credential account');
+    values.set(account, '{bad');
+    await expect(store.loadIdentity(true)).rejects.toThrow('Invalid fleet credential');
+    values.set(account, JSON.stringify({ cert: 'bad', key: 'bad' }));
+    await expect(store.loadIdentity(true)).rejects.toThrow();
+  });
+
+  it('rejects conflicting or malformed persisted trust without granting any peer access', async () => {
+    const { dir, keychain } = fixture();
+    const store = new FleetIdentityStore(dir, keychain);
+    await store.load();
+    for (const trust of [
+      { enabled: true, trusted: [{ id: 'a'.repeat(64), name: 'A' }], revoked: ['a'.repeat(64)] },
+      { enabled: true, trusted: [{ id: 'a'.repeat(64), name: 'A' }], revoked: ['b'] },
+      { enabled: true, trusted: [], revoked: [], token: 'secret' },
+    ]) {
+      await expect(store.save(trust)).rejects.toThrow();
+      expect(await store.load()).toEqual({ enabled: false, trusted: [], revoked: [] });
+    }
+    writeFileSync(join(dir, 'trust.json'), '{bad', { mode: 0o600 });
     await expect(store.load()).rejects.toThrow();
   });
 });

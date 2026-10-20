@@ -1,4 +1,5 @@
 /** Opt-in fleet service authenticates TLS peers before exposing local shell callbacks. */
+import type { Socket } from 'node:net';
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { connect, createServer, type Server, type TLSSocket } from 'node:tls';
 import type { FleetState, FleetStatus } from '../../shared/fleet-contract';
@@ -15,6 +16,9 @@ import {
   pairingCode,
   validateSnapshot,
   validateStatus,
+  validateStatusPage,
+  STATUS_PAGE_SIZE,
+  type StatusPage,
   type WireMessage,
 } from './protocol';
 
@@ -45,7 +49,13 @@ interface Session {
   code?: string;
   approvedLocal: boolean;
   approvedRemote: boolean;
+  pairSaving?: Promise<void>;
   deadline?: NodeJS.Timeout;
+  readonly statusSnapshots: Map<
+    string,
+    { status: FleetStatus; expires: number; projectOffset: number; shellOffset: number }
+  >;
+  statusPending: number;
 }
 const ID = /^[a-f0-9]{64}$/;
 
@@ -118,21 +128,20 @@ export class FleetService {
       .filter((peer) => !this.trust.revoked.includes(peer.id))
       .map((peer) => {
         const session = this.sessions.get(peer.id);
-        const linked = this.trust.trusted.some((item) => item.id === peer.id);
+        const linked = this.trust.trusted.some((item) => item.id === peer.id) && !session?.code;
         return {
           id: peer.id,
           name: linked
             ? (this.trust.trusted.find((item) => item.id === peer.id)?.name ?? peer.name)
             : peer.name,
-          status:
-            session?.code && !linked
-              ? ('pending' as const)
-              : linked && session?.remoteNonce
-                ? ('linked' as const)
-                : linked
-                  ? ('offline' as const)
-                  : ('discovered' as const),
-          ...(session?.code && !linked ? { verificationCode: session.code } : {}),
+          status: session?.code
+            ? ('pending' as const)
+            : linked && session?.remoteNonce
+              ? ('linked' as const)
+              : linked
+                ? ('offline' as const)
+                : ('discovered' as const),
+          ...(session?.code ? { verificationCode: session.code } : {}),
         };
       });
     for (const trusted of this.trust.trusted)
@@ -241,7 +250,7 @@ export class FleetService {
         rejectUnauthorized: false,
         minVersion: 'TLSv1.2',
         maxVersion: 'TLSv1.3',
-        handshakeTimeout: 10_000,
+        handshakeTimeout: 3_000,
       },
       (socket) => {
         try {
@@ -251,7 +260,8 @@ export class FleetService {
         }
       },
     );
-    server.maxConnections = 16;
+    this.guardPreAuth(server);
+    server.maxConnections = 25;
     this.server = server;
     server.on('error', () => this.networkFailed());
     try {
@@ -262,26 +272,65 @@ export class FleetService {
           resolve();
         });
       });
-      const address = server.address();
-      if (!address || typeof address === 'string') throw new Error('Fleet listener unavailable');
-      this.discovery = new FleetDiscovery(
-        identity.id,
-        this.options.name,
-        (peers) => {
-          this.presence = peers;
-          this.notify();
-          this.reconnect();
-        },
-        () => this.networkFailed(),
-      );
-      await this.discovery.start(address.port);
-      this.reconnectTimer = setInterval(() => {
-        this.reconnect();
-      }, 5000);
+      await this.startDiscovery(server, identity);
     } catch (error) {
       await this.closeNetwork();
       throw error;
     }
+  }
+
+  private guardPreAuth(server: Server): void {
+    const preAuth = new Map<Socket, string>();
+    server.on('connection', (socket: Socket) => {
+      const address = socket.remoteAddress ?? '';
+      let oldest: Socket | undefined;
+      let oldestFromAddress: Socket | undefined;
+      let sameAddress = 0;
+      for (const [pending, origin] of preAuth) {
+        if (pending.destroyed) {
+          preAuth.delete(pending);
+          continue;
+        }
+        oldest ??= pending;
+        if (origin === address) {
+          oldestFromAddress ??= pending;
+          sameAddress++;
+        }
+      }
+      if (sameAddress >= 2) oldestFromAddress?.destroy();
+      else if (preAuth.size >= 8) oldest?.destroy();
+      preAuth.set(socket, address);
+      socket.setTimeout(3_000, () => socket.destroy());
+      socket.once('close', () => preAuth.delete(socket));
+    });
+    server.on('secureConnection', (socket: TLSSocket) => {
+      for (const [candidate, address] of preAuth) {
+        if (address === socket.remoteAddress && candidate.remotePort === socket.remotePort) {
+          candidate.setTimeout(0);
+          preAuth.delete(candidate);
+          break;
+        }
+      }
+    });
+  }
+
+  private async startDiscovery(server: Server, identity: FleetIdentity): Promise<void> {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Fleet listener unavailable');
+    this.discovery = new FleetDiscovery(
+      identity.id,
+      this.options.name,
+      (peers) => {
+        this.presence = peers;
+        this.notify();
+        this.reconnect();
+      },
+      () => this.networkFailed(),
+    );
+    await this.discovery.start(address.port);
+    this.reconnectTimer = setInterval(() => {
+      this.reconnect();
+    }, 5000);
   }
 
   private reconnect(): void {
@@ -363,7 +412,7 @@ export class FleetService {
   }
 
   private accept(socket: TLSSocket, expected?: string): boolean {
-    if (!this.trust.enabled || !this.identity || this.sessions.size >= 16) {
+    if (!this.trust.enabled || !this.identity) {
       socket.destroy();
       return false;
     }
@@ -389,12 +438,20 @@ export class FleetService {
       socket.destroy();
       return false;
     }
+    if (this.sessions.size >= 16 && !this.sessions.has(id)) {
+      socket.destroy();
+      return false;
+    }
     if (!this.limit(socket.remoteAddress ?? id)) {
       socket.destroy();
       return false;
     }
-    const old = this.sessions.get(id);
-    if (old) old.channel.close();
+    this.attachSession(socket, id);
+    return true;
+  }
+
+  private attachSession(socket: TLSSocket, id: string): void {
+    this.sessions.get(id)?.channel.close();
     socket.setKeepAlive(true, 10_000);
     const channel = new FleetChannel(socket);
     const session: Session = {
@@ -404,6 +461,8 @@ export class FleetService {
       helloId: randomBytes(16).toString('hex'),
       approvedLocal: false,
       approvedRemote: false,
+      statusSnapshots: new Map(),
+      statusPending: 0,
     };
     this.sessions.set(id, session);
     channel.onClose(() => {
@@ -419,10 +478,9 @@ export class FleetService {
       });
     });
     session.deadline = setTimeout(() => {
-      if (!this.trust.trusted.some((peer) => peer.id === id)) channel.close();
+      if (session.code || !this.trust.trusted.some((peer) => peer.id === id)) channel.close();
     }, 90_000);
     channel.send({ type: 'hello', id: session.helloId, nonce: session.localNonce });
-    return true;
   }
 
   private limit(address: string): boolean {
@@ -481,7 +539,24 @@ export class FleetService {
       await this.finishPair(session);
       return;
     }
-    if (message.type !== 'request' || !this.trust.trusted.some((peer) => peer.id === session.id)) {
+    if (message.type !== 'request') {
+      session.channel.close();
+      return;
+    }
+    if (session.pairSaving) {
+      try {
+        await session.pairSaving;
+      } catch {
+        session.channel.close();
+        return;
+      }
+    }
+    if (
+      this.sessions.get(session.id) !== session ||
+      !this.trust.enabled ||
+      this.trust.revoked.includes(session.id) ||
+      !this.trust.trusted.some((peer) => peer.id === session.id)
+    ) {
       session.channel.close();
       return;
     }
@@ -507,13 +582,15 @@ export class FleetService {
       ],
     };
     this.trust = next;
+    session.pairSaving = this.store.save(next);
     try {
-      await this.store.save(next);
+      await session.pairSaving;
     } catch (error) {
       if (this.trust === next) this.trust = prior;
       session.channel.close();
       throw error;
     }
+    session.pairSaving = undefined;
     if (this.trust !== next || this.sessions.get(session.id) !== session) return;
     session.code = undefined;
     clearTimeout(session.deadline);
@@ -525,9 +602,9 @@ export class FleetService {
     message: Extract<WireMessage, { type: 'request' }>,
   ): Promise<void> {
     const { op, args, id } = message;
+    let value: unknown;
     try {
-      let value: unknown;
-      if (op === 'status') value = validateStatus(await this.options.operations.status());
+      if (op === 'status') value = await this.statusPage(session, args);
       else if (op === 'launch') {
         const launched: unknown = await this.options.operations.launch(Number(args.projectId));
         if (
@@ -566,6 +643,72 @@ export class FleetService {
       if (this.sessions.get(session.id) === session && !this.trust.revoked.includes(session.id))
         session.channel.send({ type: 'response', id, ok: false });
     }
+  }
+  private async captureStatus(session: Session): Promise<{ status: FleetStatus; token: string }> {
+    if (session.statusSnapshots.size + session.statusPending >= 4)
+      throw new Error('Too many status snapshots');
+    session.statusPending++;
+    try {
+      const status = validateStatus(await this.options.operations.status());
+      if (!status) throw new Error('Invalid fleet status');
+      const token = randomBytes(16).toString('hex');
+      session.statusSnapshots.set(token, {
+        status,
+        expires: Date.now() + 10_000,
+        projectOffset: 0,
+        shellOffset: 0,
+      });
+      return { status, token };
+    } finally {
+      session.statusPending--;
+    }
+  }
+
+  private async statusPage(session: Session, args: Record<string, unknown>): Promise<StatusPage> {
+    const projectOffset = Number(args.projectOffset);
+    const shellOffset = Number(args.shellOffset);
+    const now = Date.now();
+    for (const [token, snapshot] of session.statusSnapshots)
+      if (snapshot.expires <= now) session.statusSnapshots.delete(token);
+    let token: string;
+    let status: FleetStatus;
+    if (projectOffset === 0 && shellOffset === 0) {
+      ({ status, token } = await this.captureStatus(session));
+    } else {
+      token = String(args.token);
+      const snapshot = session.statusSnapshots.get(token);
+      if (
+        !snapshot ||
+        snapshot.expires <= now ||
+        snapshot.projectOffset !== projectOffset ||
+        snapshot.shellOffset !== shellOffset
+      )
+        throw new Error('Invalid fleet status offset');
+      status = snapshot.status;
+      snapshot.expires = now + 10_000;
+    }
+    if (projectOffset > status.projects.length || shellOffset > status.shells.length)
+      throw new Error('Invalid fleet status offset');
+    const page: StatusPage = {
+      projects: status.projects.slice(projectOffset, projectOffset + STATUS_PAGE_SIZE),
+      shells: status.shells.slice(shellOffset, shellOffset + STATUS_PAGE_SIZE),
+      projectOffset,
+      shellOffset,
+      projectTotal: status.projects.length,
+      shellTotal: status.shells.length,
+      token,
+    };
+    const snapshot = session.statusSnapshots.get(token);
+    if (snapshot) {
+      snapshot.projectOffset = projectOffset + page.projects.length;
+      snapshot.shellOffset = shellOffset + page.shells.length;
+    }
+    if (
+      projectOffset + page.projects.length === page.projectTotal &&
+      shellOffset + page.shells.length === page.shellTotal
+    )
+      session.statusSnapshots.delete(token);
+    return page;
   }
 
   /** Opens a time-bound TLS pairing session to a discovered certificate identity. */
@@ -630,17 +773,44 @@ export class FleetService {
       !this.trust.enabled ||
       !this.trust.trusted.some((peer) => peer.id === peerId) ||
       this.trust.revoked.includes(peerId) ||
-      !session?.remoteNonce
+      !session?.remoteNonce ||
+      !!session.code
     )
       throw new Error('Peer is not linked and online');
     return session.channel;
   }
 
-  /** Returns bounded projects and shell status from a linked, online peer. */
+  /** Returns complete bounded projects and shell status from a linked, online peer. */
   async status(peerId: string): Promise<FleetStatus> {
-    const result = validateStatus(await this.linked(peerId).request('status', {}));
-    if (!result) throw new Error('Invalid peer status');
-    return result;
+    const channel = this.linked(peerId);
+    const projects: FleetStatus['projects'][number][] = [];
+    const shells: FleetStatus['shells'][number][] = [];
+    let token: string | undefined;
+    let projectTotal: number | undefined;
+    let shellTotal: number | undefined;
+    do {
+      if (this.linked(peerId) !== channel) throw new Error('Fleet peer changed during status');
+      const args = token
+        ? { projectOffset: projects.length, shellOffset: shells.length, token }
+        : { projectOffset: 0, shellOffset: 0 };
+      const page = validateStatusPage(await channel.request('status', args));
+      if (
+        !page ||
+        page.projectOffset !== projects.length ||
+        page.shellOffset !== shells.length ||
+        (token && page.token !== token) ||
+        (projectTotal !== undefined && page.projectTotal !== projectTotal) ||
+        (shellTotal !== undefined && page.shellTotal !== shellTotal)
+      )
+        throw new Error('Invalid peer status page');
+      token = page.token;
+      projectTotal = page.projectTotal;
+      shellTotal = page.shellTotal;
+      projects.push(...page.projects);
+      shells.push(...page.shells);
+    } while (projects.length < projectTotal || shells.length < shellTotal);
+    if (this.linked(peerId) !== channel) throw new Error('Fleet peer changed during status');
+    return { projects, shells };
   }
 
   /** Launches a shell through the peer's existing local shell policy. */

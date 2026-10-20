@@ -7,6 +7,7 @@ import {
   pairingCode,
   validateSnapshot,
   validateStatus,
+  validateStatusPage,
 } from '@main/fleet/protocol';
 
 const id = 'a'.repeat(64);
@@ -83,6 +84,53 @@ describe('fleet network boundaries', () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it('rejects malformed status page offsets, tokens and impossible page lengths', () => {
+    const request = (args: unknown) =>
+      decodeMessage(JSON.stringify({ type: 'request', id: 'c'.repeat(32), op: 'status', args }));
+    expect(request({ projectOffset: 0, shellOffset: 0 })).not.toBeNull();
+    for (const args of [
+      {},
+      { projectOffset: -1, shellOffset: 0 },
+      { projectOffset: 257, shellOffset: 0 },
+      { projectOffset: 1.5, shellOffset: 0 },
+      { projectOffset: 0, shellOffset: 0, token: 'bad' },
+      { projectOffset: 1, shellOffset: 0 },
+      { projectOffset: 0, shellOffset: 0, token: 'a'.repeat(32) },
+      { projectOffset: 0, shellOffset: 0, extra: true },
+    ]) {
+      expect(request(args)).toBeNull();
+    }
+  });
+
+  it('requires exact page shape, totals, and bounded progress', () => {
+    const page = {
+      projects: [{ id: 1, name: 'safe' }],
+      shells: [],
+      projectOffset: 0,
+      shellOffset: 0,
+      projectTotal: 1,
+      shellTotal: 0,
+      token: 'a'.repeat(32),
+    };
+    expect(validateStatusPage(page)).toEqual(page);
+    for (const invalid of [
+      { ...page, projectOffset: -1 },
+      { ...page, projectOffset: 1 },
+      { ...page, projectTotal: 257 },
+      { ...page, projectTotal: 2 },
+      { ...page, shellTotal: 1 },
+      { ...page, token: 'x' },
+      { ...page, privatePath: '/secret' },
+      { ...page, projects: [{ id: 1, name: 'x'.repeat(161) }] },
+      {
+        ...page,
+        projectTotal: 13,
+        projects: Array.from({ length: 13 }, (_, i) => ({ id: i + 1, name: 'ok' })),
+      },
+    ])
+      expect(validateStatusPage(invalid)).toBeNull();
   });
 
   it('rejects paths, unexpected metadata, oversized output and malformed agent state', () => {

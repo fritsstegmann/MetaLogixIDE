@@ -1397,7 +1397,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
 function fleetName(name: string): string {
   const clean = name.includes('\0') ? name.replaceAll('\0', '') : name;
   if (Buffer.byteLength(clean, 'utf8') <= 160) return clean || 'Unnamed project';
-  return Buffer.from(clean, 'utf8').subarray(0, 156).toString('utf8');
+  const encoded = Buffer.from(clean, 'utf8');
+  let end = 156;
+  while ((encoded[end]! & 0xc0) === 0x80) end--;
+  return encoded.toString('utf8', 0, end);
 }
 
 /** Restricts peer operations to existing local shell handlers and an explicit status allow-list. */
@@ -1427,12 +1430,11 @@ export function createFleetOperations(services: Services): FleetOperations {
     },
     snapshot: async (projectId, shellIndex) => {
       const result = await handlers['shells:snapshot'](services, { projectId, shellIndex });
-      return {
-        alive: result.alive,
-        output: Buffer.byteLength(result.output, 'utf8') <= 8192
-          ? result.output
-          : Buffer.from(result.output, 'utf8').subarray(-8188).toString('utf8'),
-      };
+      if (Buffer.byteLength(result.output, 'utf8') <= 8192) return result;
+      const encoded = Buffer.from(result.output, 'utf8');
+      let start = encoded.length - 8188;
+      while ((encoded[start]! & 0xc0) === 0x80) start++;
+      return { alive: result.alive, output: encoded.toString('utf8', start) };
     },
   };
 }

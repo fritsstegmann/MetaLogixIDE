@@ -24,6 +24,24 @@ describe('fleet public discovery', () => {
     expect(discovery.list()).toEqual([]);
     expect(states).toEqual([1, 0]);
   });
+  it('expires at the boundary, refreshes on repeat beacon and emits changes only on identity updates', () => {
+    const states: number[] = [];
+    const discovery = new FleetDiscovery(local, 'Local', (peers) => {
+      states.push(peers.length);
+    });
+    discovery.observe(beacon, '192.168.1.20');
+    const seen = discovery.list()[0]?.seen;
+    if (seen === undefined) throw new Error('Missing discovery observation');
+    discovery.expire(seen + 14_999);
+    expect(discovery.list()).toHaveLength(1);
+    discovery.observe(beacon, '192.168.1.20');
+    expect(states).toEqual([1]);
+    const refreshed = discovery.list()[0]?.seen;
+    if (refreshed === undefined) throw new Error('Missing refreshed observation');
+    discovery.expire(refreshed + 15_000);
+    expect(discovery.list()).toEqual([]);
+    expect(states).toEqual([1, 0]);
+  });
 
   it('rejects malformed and secret-bearing discovery packets', () => {
     const discovery = new FleetDiscovery(local, 'Local', () => {});

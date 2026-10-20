@@ -449,8 +449,8 @@ function stopOnQuit(services: Services, donePoll: NodeJS.Timeout, agentStatus: R
 /**
  * App startup once Electron is ready, in a fixed order: login-shell PATH, cold-launch argv scan
  * (after ready so `existsSync` sees the app-relative CWD), Windows app id, services, receivers,
- * agent status, boot rescan, window settings, IPC, Claude notifications, main window, done
- * notifier, ports fan-out, quit teardown.
+ * agent status, boot rescan, window settings, Fleet registration, IPC, Fleet startup,
+ * Claude notifications, main window, done notifier, ports fan-out, quit teardown.
  */
 async function startApp(): Promise<void> {
   await adoptLoginShellPath();

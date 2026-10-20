@@ -338,6 +338,7 @@ export function FleetPanel() {
   > | null>(null);
   const [input, setInput] = useState('');
   const request = useRef(0);
+  const pendingStatus = useRef<{ readonly peerId: string; readonly sequence: number } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const currentState = useRef<FleetState | null>(null);
   const selectedPeer = state?.enabled
@@ -355,6 +356,7 @@ export function FleetPanel() {
         next.peers.find((peer) => peer.status === 'linked'))
       : undefined;
     if (previousSelected?.id !== nextSelected?.id) {
+      pendingStatus.current = null;
       request.current++;
       setStatus(null);
       setSnapshot(null);
@@ -389,17 +391,21 @@ export function FleetPanel() {
     return () => {
       active = false;
       invalidateRequest(request);
+      pendingStatus.current = null;
       off();
     };
   }, [applyState]);
 
   const refreshStatus = useCallback(async (peerId: string, polling = false) => {
-    if (
-      !currentState.current?.enabled ||
-      currentState.current.peers.find((peer) => peer.id === peerId)?.status !== 'linked'
-    )
-      return;
+    const current = currentState.current;
+    const selected = current?.enabled
+      ? (current.peers.find(
+          (peer) => peer.id === selectedIdRef.current && peer.status === 'linked',
+        ) ?? current.peers.find((peer) => peer.status === 'linked'))
+      : undefined;
+    if (selected?.id !== peerId || (polling && pendingStatus.current?.peerId === peerId)) return;
     const sequence = ++request.current;
+    pendingStatus.current = { peerId, sequence };
     if (!polling) {
       setStatus({ kind: 'loading', peerId });
       setSnapshot(null);
@@ -414,6 +420,8 @@ export function FleetPanel() {
         setStatus({ kind: 'ready', peerId, data });
     } catch {
       if (sequence === request.current) setStatus({ kind: 'error', peerId });
+    } finally {
+      if (pendingStatus.current?.sequence === sequence) pendingStatus.current = null;
     }
   }, []);
 
@@ -426,6 +434,7 @@ export function FleetPanel() {
     }, 3000);
     return () => {
       invalidateRequest(request);
+      pendingStatus.current = null;
       window.clearInterval(timer);
     };
   }, [peerId, refreshStatus]);
@@ -453,12 +462,15 @@ export function FleetPanel() {
       return;
     const target = { peerId, projectId, shellIndex, key: shellKey };
     let active = true;
+    let pending = false;
     async function readSnapshot() {
+      if (pending || !active) return;
       if (
         !currentState.current?.enabled ||
         currentState.current.peers.find((peer) => peer.id === target.peerId)?.status !== 'linked'
       )
         return;
+      pending = true;
       try {
         const next = await api.invoke('fleet:snapshot', {
           peerId: target.peerId,
@@ -472,7 +484,14 @@ export function FleetPanel() {
         )
           setSnapshot({ kind: 'ready', key: target.key, ...next });
       } catch {
-        if (active) setSnapshot({ kind: 'error', key: target.key });
+        if (
+          active &&
+          currentState.current?.enabled &&
+          currentState.current.peers.find((peer) => peer.id === target.peerId)?.status === 'linked'
+        )
+          setSnapshot({ kind: 'error', key: target.key });
+      } finally {
+        pending = false;
       }
     }
     setSnapshot({ kind: 'loading', key: shellKey });
@@ -667,6 +686,8 @@ export function FleetPanel() {
                   onApprove={() => void runPeer(peer, 'approve')}
                   onRevoke={() => void runPeer(peer, 'revoke')}
                   onSelect={() => {
+                    invalidateRequest(request);
+                    pendingStatus.current = null;
                     selectedIdRef.current = peer.id;
                     setSelectedId(peer.id);
                     setStatus(null);

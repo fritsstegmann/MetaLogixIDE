@@ -1,10 +1,15 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { Server as TlsServer } from 'node:tls';
+import { Server as TlsServer, TLSSocket } from 'node:tls';
 import { join } from 'node:path';
+import { connect as connectTcp, type Socket } from 'node:net';
+import type { FleetStatus } from '@shared/fleet-contract';
 import { FleetService, type FleetOperations } from '@main/fleet/service';
 import { FleetDiscovery } from '@main/fleet/discovery';
+import { FleetIdentityStore } from '@main/fleet/identity';
+import { FleetChannel } from '@main/fleet/channel';
+import { validateStatusPage } from '@main/fleet/protocol';
 
 const roots: string[] = [];
 const secrets = new Map<string, string>();
@@ -53,11 +58,16 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     write: async () => {},
     snapshot: async () => ({ output: '', alive: false }),
   };
+  let remoteStatus: FleetStatus = {
+    projects: [{ id: 1, name: 'Remote project' }],
+    shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
+  };
+  let observedStatus = 0;
   const remoteOps: FleetOperations = {
-    status: () => ({
-      projects: [{ id: 1, name: 'Remote project' }],
-      shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
-    }),
+    status: () => {
+      observedStatus++;
+      return remoteStatus;
+    },
     launch: async (id) => {
       expect(id).toBe(1);
       return { shellIndex: 0 };
@@ -109,25 +119,238 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   expect(codeA).toBeTruthy();
   expect(codeA).toBe(codeB);
   if (!codeA || !codeB) throw new Error('Comparison codes missing');
+  const incorrectCode = codeA === '0000-0000-0000' ? '9999-9999-9999' : '0000-0000-0000';
+  await expect(a.approve(idB, incorrectCode)).rejects.toThrow('Verification code mismatch');
+  await expect(a.status(idB)).rejects.toThrow();
   await a.approve(idB, codeA);
-  await b.approve(idA, codeB);
+  await expect(a.status(idB)).rejects.toThrow();
+  expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('pending');
+  const store: unknown = Reflect.get(b, 'store');
+  if (!(store instanceof FleetIdentityStore)) throw new Error('Peer trust store unavailable');
+  const originalSave = store.save.bind(store);
+  let releaseSave!: () => void;
+  const waitForSave = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  const saveSpy = vi.spyOn(store, 'save').mockImplementationOnce(async (trust) => {
+    await waitForSave;
+    await originalSave(trust);
+  });
+  const approval = b.approve(idA, codeB);
+  void approval.catch(() => {});
+  let pendingStatus: Promise<FleetStatus> | undefined;
+  try {
+    await vi.waitFor(
+      () => expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked'),
+      { timeout: 10_000, interval: 100 },
+    );
+    expect(b.state().peers.find((peer) => peer.id === idA)?.status).toBe('pending');
+    const remoteSessions: unknown = Reflect.get(b, 'sessions');
+    if (!(remoteSessions instanceof Map)) throw new Error('Peer sessions unavailable');
+    const remoteSession: unknown = remoteSessions.get(idA);
+    if (
+      !remoteSession ||
+      typeof remoteSession !== 'object' ||
+      !('channel' in remoteSession) ||
+      !(remoteSession.channel instanceof FleetChannel)
+    )
+      throw new Error('Peer channel unavailable');
+    const inboundSocket = remoteSession.channel.socket;
+    if (!(inboundSocket instanceof TLSSocket)) throw new Error('Peer TLS socket unavailable');
+    const bytesBeforeRequest = inboundSocket.bytesRead;
+    pendingStatus = a.status(idB);
+    void pendingStatus.catch(() => {});
+    await vi.waitFor(() => expect(inboundSocket.bytesRead).toBeGreaterThan(bytesBeforeRequest), {
+      timeout: 10_000,
+      interval: 20,
+    });
+    expect(observedStatus).toBe(0);
+  } finally {
+    releaseSave();
+    saveSpy.mockRestore();
+  }
+  await approval;
   await vi.waitFor(
-    () => {
-      expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked');
-      expect(b.state().peers.find((peer) => peer.id === idA)?.status).toBe('linked');
-    },
-    { timeout: 10_000, interval: 100 },
+    () => expect(b.state().peers.find((peer) => peer.id === idA)?.status).toBe('linked'),
+    { timeout: 10_000, interval: 20 },
   );
-  expect(await a.status(idB)).toEqual({
+  if (!pendingStatus) throw new Error('Status was not requested during trust save');
+  expect(await pendingStatus).toEqual({
     projects: [{ id: 1, name: 'Remote project' }],
     shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
   });
+  remoteStatus = {
+    projects: Array.from({ length: 91 }, (_, index) => ({
+      id: index + 1,
+      name: 'P'.repeat(160),
+    })),
+    shells: [],
+  };
+  expect(await a.status(idB)).toEqual(remoteStatus);
+  remoteStatus = {
+    projects: Array.from({ length: 256 }, (_, index) => ({
+      id: index + 1,
+      name: String.fromCharCode(1).repeat(160),
+    })),
+    shells: Array.from({ length: 256 }, (_, index): FleetStatus['shells'][number] => ({
+      projectId: index + 1,
+      shellIndex: index,
+      agent: 'omp',
+      state: 'busy',
+    })),
+  };
+  expect(await a.status(idB)).toEqual(remoteStatus);
+  expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked');
+  const sessions: unknown = Reflect.get(a, 'sessions');
+  if (!(sessions instanceof Map)) throw new Error('Live sessions unavailable');
+  const session: unknown = sessions.get(idB);
+  if (
+    session === null ||
+    typeof session !== 'object' ||
+    !('channel' in session) ||
+    !(session.channel instanceof FleetChannel)
+  )
+    throw new Error('Authenticated channel unavailable');
+  const linkedChannel = session.channel;
+  const fullStatus = remoteStatus;
+  remoteStatus = {
+    projects: Array.from({ length: 13 }, (_, index) => ({ id: index + 1, name: 'Snapshot' })),
+    shells: [],
+  };
+  try {
+    const pages = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        linkedChannel.request('status', { projectOffset: 0, shellOffset: 0 }),
+      ),
+    );
+    const tokens = pages.map((page) => validateStatusPage(page)?.token);
+    expect(tokens.every((token) => typeof token === 'string')).toBe(true);
+    await expect(
+      session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+    ).rejects.toThrow('Peer refused fleet operation');
+    for (const token of tokens) {
+      if (!token) throw new Error('Snapshot token missing');
+      const lastPage = validateStatusPage(
+        await session.channel.request('status', {
+          projectOffset: 12,
+          shellOffset: 0,
+          token,
+        }),
+      );
+      expect(lastPage?.projects.map(({ id }) => id)).toEqual([13]);
+    }
+  } finally {
+    remoteStatus = fullStatus;
+  }
+  const firstPage: unknown = await session.channel.request('status', {
+    projectOffset: 0,
+    shellOffset: 0,
+  });
+  if (
+    firstPage === null ||
+    typeof firstPage !== 'object' ||
+    !('token' in firstPage) ||
+    typeof firstPage.token !== 'string'
+  )
+    throw new Error('Status page missing token');
+  const capturedStatus = remoteStatus;
+  remoteStatus = { projects: [], shells: [] };
+  try {
+    const next = validateStatusPage(
+      await session.channel.request('status', {
+        projectOffset: 12,
+        shellOffset: 12,
+        token: firstPage.token,
+      }),
+    );
+    expect(next?.projects[0]?.id).toBe(13);
+    expect(next?.shells[0]?.shellIndex).toBe(12);
+    expect(next?.projectTotal).toBe(256);
+  } finally {
+    remoteStatus = capturedStatus;
+  }
+  await expect(
+    session.channel.request('status', {
+      projectOffset: 256,
+      shellOffset: 0,
+      token: firstPage.token,
+    }),
+  ).rejects.toThrow('Peer refused fleet operation');
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11_000);
+  try {
+    await expect(
+      session.channel.request('status', {
+        projectOffset: 24,
+        shellOffset: 24,
+        token: firstPage.token,
+      }),
+    ).rejects.toThrow('Peer refused fleet operation');
+  } finally {
+    clock.mockRestore();
+  }
+  expect(await a.status(idB)).toEqual(remoteStatus);
   expect(await a.launch(idB, 1)).toEqual({ shellIndex: 0 });
   expect(await a.snapshot(idB, 1, 0)).toEqual({ output: '<terminal text>', alive: true });
   await a.write(idB, 1, 0, 'echo smoke\r');
   await a.stopShell(idB, 1, 0);
   expect(writes).toEqual(['echo smoke\r']);
   expect(stopped).toEqual(['1:0']);
+  for (let i = 0; i < 4; i++) {
+    const page = validateStatusPage(
+      await session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+    );
+    expect(page?.projects).toHaveLength(12);
+  }
+  await expect(
+    session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+  ).rejects.toThrow('Peer refused fleet operation');
+  expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked');
+  const server: unknown = Reflect.get(b, 'server');
+  const discovery: unknown = Reflect.get(a, 'discovery');
+  if (!(server instanceof TlsServer) || !(discovery instanceof FleetDiscovery))
+    throw new Error('Live TLS transport unavailable');
+  const presence = discovery.list().find((peer) => peer.id === idB);
+  const dial: unknown = Reflect.get(a, 'dial');
+  if (!presence || typeof dial !== 'function') throw new Error('Trusted peer unavailable');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Listener unavailable');
+  const slow: Socket[] = [];
+  try {
+    for (let i = 0; i < 16; i++) {
+      const socket = connectTcp(address.port, '127.0.0.1');
+      slow.push(socket);
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', resolve);
+        socket.once('error', reject);
+      });
+    }
+    await vi.waitFor(
+      () => {
+        expect(slow.filter((socket) => !socket.destroyed)).toHaveLength(2);
+      },
+      { timeout: 5_000 },
+    );
+    session.channel.close();
+    await dial.call(a, presence);
+    await vi.waitFor(
+      () => {
+        expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked');
+        expect(b.state().peers.find((peer) => peer.id === idA)?.status).toBe('linked');
+      },
+      { timeout: 10_000 },
+    );
+    expect(await a.status(idB)).toEqual(remoteStatus);
+    const stalled = connectTcp(address.port, '127.0.0.1');
+    slow.push(stalled);
+    await new Promise<void>((resolve, reject) => {
+      stalled.once('connect', resolve);
+      stalled.once('error', reject);
+    });
+    stalled.resume();
+    await vi.waitFor(() => expect(stalled.destroyed).toBe(true), { timeout: 5_000 });
+  } finally {
+    for (const socket of slow) socket.destroy();
+  }
   await a.revoke(idB);
   await expect(a.status(idB)).rejects.toThrow();
   await vi.waitFor(
@@ -136,4 +359,4 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     },
     { timeout: 10_000, interval: 100 },
   );
-}, 30_000);
+}, 45_000);

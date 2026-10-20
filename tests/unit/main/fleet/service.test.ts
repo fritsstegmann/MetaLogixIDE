@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Duplex } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Socket as DatagramSocket } from 'node:dgram';
 import { Server as TlsServer } from 'node:tls';
 import { join } from 'node:path';
 import { FleetService, type FleetOperations } from '@main/fleet/service';
+import { FleetChannel } from '@main/fleet/channel';
 import { FleetDiscovery } from '@main/fleet/discovery';
 import type { FleetKeychain } from '@main/fleet/identity';
+import { STATUS_PAGE_SIZE } from '@main/fleet/protocol';
 
 const roots: string[] = [];
 const vault = new Map<string, string>();
@@ -33,7 +36,70 @@ afterEach(() => {
   vault.clear();
 });
 
+function linkedChannel(fleet: FleetService, peerId: string): FleetChannel {
+  Reflect.set(fleet, 'trust', {
+    enabled: true,
+    trusted: [{ id: peerId, name: 'Peer' }],
+    revoked: [],
+  });
+  const sessions: unknown = Reflect.get(fleet, 'sessions');
+  if (!(sessions instanceof Map)) throw new Error('Session map unavailable');
+  const channel = new FleetChannel(
+    new Duplex({
+      read() {},
+      write(_chunk, _encoding, done) {
+        done();
+      },
+    }),
+  );
+  sessions.set(peerId, { id: peerId, channel, remoteNonce: 'f'.repeat(64) });
+  return channel;
+}
+
 describe('fleet authorization', () => {
+  it('rejects invalid machine identity and remote actions before fleet startup', async () => {
+    expect(() => service('   ')).toThrow('Invalid fleet machine name');
+    expect(() => service('x'.repeat(81))).toThrow('Invalid fleet machine name');
+    const fleet = service('Local');
+    await expect(fleet.setEnabled(true)).rejects.toThrow('Fleet service not started');
+    expect(fleet.state().enabled).toBe(false);
+  });
+
+  it('closes an established channel before persisting peer revocation', async () => {
+    const fleet = service('Local');
+    const peerId = 'e'.repeat(64);
+    await fleet.start();
+    const channel = linkedChannel(fleet, peerId);
+    const request = vi.spyOn(channel, 'request');
+    await expect(fleet.write(peerId, 1, 0, '')).rejects.toThrow('Invalid shell input');
+    await expect(fleet.write(peerId, 1, 0, 'x'.repeat(8193))).rejects.toThrow(
+      'Invalid shell input',
+    );
+    expect(request).not.toHaveBeenCalled();
+    await fleet.revoke(peerId);
+    expect(channel.socket.destroyed).toBe(true);
+    await expect(fleet.status(peerId)).rejects.toThrow('Peer is not linked and online');
+    await expect(fleet.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+    await fleet.stop();
+  });
+
+  it('rejects malformed remote results and invalid shell identifiers at the trusted boundary', async () => {
+    const fleet = service('Local');
+    const peerId = 'f'.repeat(64);
+    const channel = linkedChannel(fleet, peerId);
+    const request = vi.spyOn(channel, 'request');
+    await expect(fleet.launch(peerId, 0)).rejects.toThrow('Invalid project ID');
+    await expect(fleet.stopShell(peerId, 1, -1)).rejects.toThrow('Invalid shell identity');
+    await expect(fleet.snapshot(peerId, 0, 0)).rejects.toThrow('Invalid shell identity');
+    expect(request).not.toHaveBeenCalled();
+    request.mockResolvedValueOnce({ shellIndex: -1 });
+    await expect(fleet.launch(peerId, 1)).rejects.toThrow('Invalid peer shell');
+    request.mockResolvedValueOnce({ output: 'x'.repeat(8193), alive: true });
+    await expect(fleet.snapshot(peerId, 1, 0)).rejects.toThrow('Invalid peer output');
+    expect(request).toHaveBeenCalledTimes(2);
+    channel.close();
+  });
+
   it('defaults disabled and forbids unknown, revoked and offline status and shell operations', async () => {
     const fleet = service('Local');
     await fleet.start();
@@ -50,6 +116,8 @@ describe('fleet authorization', () => {
     const fleet = service('Local');
     await fleet.start();
     await expect(fleet.approve('a'.repeat(64), '0000-0000-0000')).rejects.toThrow();
+    await fleet.setEnabled(true);
+    await expect(fleet.pair('a'.repeat(64))).rejects.toThrow('Peer not discovered');
     expect(fleet.state().peers).toEqual([]);
     await fleet.stop();
   });
@@ -165,5 +233,46 @@ describe('fleet authorization', () => {
       expect(fleet.state().peers).toEqual([]);
     });
     await fleet.stop();
+  });
+  it('rejects malformed and inconsistent status pages instead of returning partial lists', async () => {
+    const fleet = service('Local');
+    const peerId = 'd'.repeat(64);
+    const channel = linkedChannel(fleet, peerId);
+    const request = vi.spyOn(channel, 'request');
+    const first = {
+      projects: Array.from({ length: STATUS_PAGE_SIZE }, (_, index) => ({
+        id: index + 1,
+        name: `Project ${index + 1}`,
+      })),
+      shells: [],
+      projectOffset: 0,
+      shellOffset: 0,
+      projectTotal: STATUS_PAGE_SIZE + 1,
+      shellTotal: 0,
+      token: 'f'.repeat(32),
+    };
+    request.mockResolvedValueOnce({ ...first, projects: [] });
+    await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
+    request.mockResolvedValueOnce(first).mockResolvedValueOnce({ ...first });
+    await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
+    request.mockResolvedValueOnce(first).mockResolvedValueOnce({
+      ...first,
+      projectOffset: STATUS_PAGE_SIZE,
+      projectTotal: STATUS_PAGE_SIZE + 2,
+      projects: [
+        { id: 13, name: 'Thirteen' },
+        { id: 14, name: 'Fourteen' },
+      ],
+    });
+    await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
+    request.mockResolvedValueOnce(first).mockResolvedValueOnce({
+      ...first,
+      projectOffset: STATUS_PAGE_SIZE,
+      projects: [{ id: 13, name: 'Thirteen' }],
+      token: 'e'.repeat(32),
+    });
+    await expect(fleet.status(peerId)).rejects.toThrow('Invalid peer status page');
+    expect(request).toHaveBeenCalledTimes(7);
+    channel.close();
   });
 });

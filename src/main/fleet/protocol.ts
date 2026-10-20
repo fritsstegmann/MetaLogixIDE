@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { FleetStatus } from '../../shared/fleet-contract';
 
 export const MAX_FRAME = 16_384;
+export const STATUS_PAGE_SIZE = 12;
 export interface Beacon {
   readonly v: 1;
   readonly id: string;
@@ -93,7 +94,20 @@ export function certificateIdentity(certificate: Buffer): string {
 
 function validArgs(op: Operation, args: unknown): args is Record<string, unknown> {
   if (!record(args)) return false;
-  if (op === 'status') return Object.keys(args).length === 0;
+  if (op === 'status') {
+    if (
+      !keys(args, ['projectOffset', 'shellOffset', 'token']) ||
+      !index(args.projectOffset) ||
+      args.projectOffset > 256 ||
+      !index(args.shellOffset) ||
+      args.shellOffset > 256
+    )
+      return false;
+    const initial = args.projectOffset === 0 && args.shellOffset === 0;
+    return initial
+      ? Object.keys(args).length === 2
+      : Object.keys(args).length === 3 && hex(args.token, 32);
+  }
   if (!index(args.projectId) || args.projectId < 1) return false;
   if (op === 'launch') return keys(args, ['projectId']) && Object.keys(args).length === 1;
   if (!index(args.shellIndex)) return false;
@@ -197,6 +211,58 @@ export function validateStatus(value: unknown): FleetStatus | null {
   return { projects, shells };
 }
 
+export interface StatusPage {
+  readonly projects: FleetStatus['projects'];
+  readonly shells: FleetStatus['shells'];
+  readonly projectOffset: number;
+  readonly shellOffset: number;
+  readonly projectTotal: number;
+  readonly shellTotal: number;
+  readonly token: string;
+}
+
+/** Validates one exact status slice and its offsets before aggregating peer data. */
+export function validateStatusPage(value: unknown): StatusPage | null {
+  if (
+    !record(value) ||
+    !keys(value, [
+      'projects',
+      'shells',
+      'projectOffset',
+      'shellOffset',
+      'projectTotal',
+      'shellTotal',
+      'token',
+    ]) ||
+    Object.keys(value).length !== 7 ||
+    !index(value.projectOffset) ||
+    !index(value.shellOffset) ||
+    !index(value.projectTotal) ||
+    !index(value.shellTotal) ||
+    value.projectTotal > 256 ||
+    value.shellTotal > 256 ||
+    value.projectOffset > value.projectTotal ||
+    value.shellOffset > value.shellTotal ||
+    !hex(value.token, 32)
+  )
+    return null;
+  const status = validateStatus({ projects: value.projects, shells: value.shells });
+  if (
+    !status ||
+    status.projects.length !==
+      Math.min(STATUS_PAGE_SIZE, value.projectTotal - value.projectOffset) ||
+    status.shells.length !== Math.min(STATUS_PAGE_SIZE, value.shellTotal - value.shellOffset)
+  )
+    return null;
+  return {
+    ...status,
+    projectOffset: value.projectOffset,
+    shellOffset: value.shellOffset,
+    projectTotal: value.projectTotal,
+    shellTotal: value.shellTotal,
+    token: value.token,
+  };
+}
 /** Bounds terminal snapshots before data leaves the peer or reaches the renderer. */
 export function validateSnapshot(value: unknown): { output: string; alive: boolean } | null {
   if (

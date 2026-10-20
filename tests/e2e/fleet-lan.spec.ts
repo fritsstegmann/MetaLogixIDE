@@ -49,6 +49,8 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     await expect(
       panel.getByText('Fleet is off. Enable it to discover IDEs on your local network.'),
     ).toBeVisible();
+    await win.getByTestId('ab-projects').click();
+    await expect(panel).toBeHidden();
   } finally {
     await closeApp(app);
     cleanup();
