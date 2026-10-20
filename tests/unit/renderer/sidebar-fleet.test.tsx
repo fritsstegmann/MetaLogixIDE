@@ -113,13 +113,34 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Projects sidebar Fleet grouping', () => {
-  it('places linked and offline machine headings after local roots, not in recents or Fleet activity', () => {
+  it('renders each linked and offline machine as its own Projects-style section after local folders', () => {
     const html = markup();
-    expect(html.indexOf('/work')).toBeLessThan(html.indexOf('Build Mac'));
-    expect(html).toContain('Build Mac, linked');
-    expect(html).toContain('Other Mac, offline');
+    expect(html).toContain('data-testid="fleet-machine-machine-b-toggle"');
+    expect(html).toContain('data-testid="section-all-toggle"');
+    expect(html.indexOf('/work')).toBeLessThan(html.indexOf('data-testid="fleet-machine-machine-b"'));
+    expect(html).toContain('data-testid="fleet-machine-machine-c-toggle"');
     expect(html).toContain('Projects on Build Mac');
     expect(html).not.toContain('Projects on Other Mac');
+  });
+
+  it('keeps machine headings and folders visible when local Projects is collapsed', () => {
+    vi.stubGlobal('localStorage', { getItem: () => '["All projects"]', setItem: () => undefined });
+    const html = markup();
+    expect(html).not.toContain('data-testid="root-toggle"');
+    expect(html).toContain('data-testid="fleet-machine-machine-b-toggle"');
+    expect(html).toContain('data-testid="remote-project-row"');
+  });
+
+  it('loads folders for an expanded linked machine without selecting a remote project', async () => {
+    scenario.statuses = {};
+    scenario.cursor = 0;
+    scenario.refCursor = 0;
+    renderToStaticMarkup(<Sidebar {...props} selectedRemote={null} />);
+    scenario.effects[0]?.();
+    await Promise.resolve();
+    scenario.effects[3]?.();
+    expect(invoke).toHaveBeenCalledWith('fleet:status', { peerId: 'machine-b' });
+    expect(invoke).not.toHaveBeenCalledWith('fleet:status', { peerId: 'machine-c' });
   });
 
   it('distinguishes remote numeric ID 12 from local project ID 12, and sends peer identity on click', () => {

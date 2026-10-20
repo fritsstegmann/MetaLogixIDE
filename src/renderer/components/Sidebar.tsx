@@ -228,11 +228,14 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
               onProjectSettings={onProjectSettings}
             />
           ))}
-          {fleet?.enabled && fleet.peers.filter((peer) => peer.status === 'linked' || peer.status === 'offline').map((peer) => (
-            <FleetMachine key={peer.id} peer={peer} status={remoteStatuses[peer.id]} filter={filter} selected={selectedRemote} onSelect={onSelectRemote} onRetry={() => void loadRemote(peer.id)} />
-          ))}
-          {fleetError && <div className="px-2"><p role="alert" className="text-base text-[--danger]">Could not load Fleet machines.</p><button type="button" onClick={() => void retryFleet()} className="min-h-11 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry Fleet</button></div>}
         </Section>
+        {fleet?.enabled && fleet.peers.filter((peer) => peer.status === 'linked' || peer.status === 'offline').map((peer) => (
+          <Section key={peer.id} title={peer.name} persistKey={`fleet:${peer.id}`} testId={`fleet-machine-${peer.id}`}
+            statusLabel={peer.status === 'linked' ? 'Linked' : 'Offline'}>
+            <FleetMachine peer={peer} status={remoteStatuses[peer.id]} filter={filter} selected={selectedRemote} onSelect={onSelectRemote} onLoad={loadRemote} />
+          </Section>
+        ))}
+        {fleetError && <div className="px-2"><p role="alert" className="text-base text-[--danger]">Could not load Fleet machines.</p><button type="button" onClick={() => void retryFleet()} className="min-h-11 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry Fleet</button></div>}
       </div>
       <RenameProjectDialog
         project={renameTarget}
@@ -249,61 +252,42 @@ interface FleetMachineProps {
   readonly filter: string;
   readonly selected: RemoteProjectSelection | null;
   readonly onSelect: (project: RemoteProjectSelection) => void;
-  readonly onRetry: () => void;
+  readonly onLoad: (peerId: string) => Promise<void>;
 }
 
-function FleetMachine({ peer, status, filter, selected, onSelect, onRetry }: FleetMachineProps) {
-  const [open, setOpen] = useState(selected?.peerId === peer.id);
+function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: FleetMachineProps) {
   const online = peer.status === 'linked';
+  useEffect(() => { if (online && !status) void onLoad(peer.id); }, [online, status, onLoad, peer.id]);
   const projects = online ? status?.data?.projects.filter((project) => project.name.toLowerCase().includes(filter.toLowerCase())) ?? [] : [];
   return (
-    <div data-testid="fleet-machine" className="min-w-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-label={`${peer.name}, ${online ? 'linked' : 'offline'}`}
-        onClick={() => {
-          if (!open && online) onRetry();
-          setOpen((value) => !value);
-        }}
-        className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-lg px-2.5 text-left text-base text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent]"
-      >
-        <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${online ? 'bg-[--accent]' : 'bg-[--text-muted]'}`} />
-        <span className="min-w-0 flex-1 truncate">{peer.name}</span>
-        <span className="text-sm text-[--text-muted]">{online ? 'Linked' : 'Offline'}</span>
-        <ChevronIcon collapsed={!open} />
-      </button>
-      {open && (
-        <div className="pl-4">
-          {online && !status && <button type="button" onClick={onRetry} className="min-h-11 px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Load projects</button>}
-          {status?.kind === 'loading' && !status.data && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">Loading projects…</p>}
-          {status?.kind === 'error' && online && (
-            <div className="space-y-1 px-2">
-              <p role="alert" className="text-base text-[--danger]">Could not load projects on {peer.name}.</p>
-              <button type="button" onClick={onRetry} className="min-h-11 rounded-lg px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry</button>
-            </div>
-          )}
-          {!online && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">{peer.name} is offline. Reconnect to open projects.</p>}
-          {online && status?.kind === 'ready' && status.data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
-          <ul aria-label={`Projects on ${peer.name}`} className="min-w-0">
-            {projects.map((project) => (
-              <li key={project.id}>
-                <button
-                  type="button"
-                  data-testid="remote-project-row"
-                  aria-label={`${project.name} on ${peer.name}`}
-                  aria-current={selected?.peerId === peer.id && selected.projectId === project.id ? 'true' : undefined}
-                  disabled={!online || status?.kind === 'error'}
-                  onClick={() => onSelect({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name })}
-                  className={`flex min-h-11 w-full min-w-0 items-center rounded-lg px-2.5 text-left text-base focus-visible:ring-2 focus-visible:ring-[--accent] disabled:opacity-50 ${selected?.peerId === peer.id && selected.projectId === project.id ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}
-                >
-                  <span className="truncate">{project.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+    <div className="min-w-0 pl-4">
+      {online && !status && <button type="button" onClick={() => void onLoad(peer.id)} className="min-h-11 px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Load projects</button>}
+      {status?.kind === 'loading' && !status.data && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">Loading projects…</p>}
+      {status?.kind === 'error' && online && (
+        <div className="space-y-1 px-2">
+          <p role="alert" className="text-base text-[--danger]">Could not load projects on {peer.name}.</p>
+          <button type="button" onClick={() => void onLoad(peer.id)} className="min-h-11 rounded-lg px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry</button>
         </div>
       )}
+      {!online && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">{peer.name} is offline. Reconnect to open projects.</p>}
+      {online && status?.kind === 'ready' && status.data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
+      {online && <ul aria-label={`Projects on ${peer.name}`} className="min-w-0">
+        {projects.map((project) => (
+          <li key={project.id}>
+            <button
+              type="button"
+              data-testid="remote-project-row"
+              aria-label={`${project.name} on ${peer.name}`}
+              aria-current={selected?.peerId === peer.id && selected.projectId === project.id ? 'true' : undefined}
+              disabled={status?.kind === 'error'}
+              onClick={() => onSelect({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name })}
+              className={`flex min-h-11 w-full min-w-0 items-center rounded-lg px-2.5 text-left text-base focus-visible:ring-2 focus-visible:ring-[--accent] disabled:opacity-50 ${selected?.peerId === peer.id && selected.projectId === project.id ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}
+            >
+              <span className="truncate">{project.name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>}
     </div>
   );
 }
@@ -322,7 +306,7 @@ function writeCollapsedSections(set: Set<string>): void {
 }
 
 function Section({
-  title, persistKey = title, testId, accent = false, dotState, children,
+  title, persistKey = title, testId, accent = false, dotState, statusLabel, children,
 }: {
   title: string;
   /** Collapse-state key; defaults to `title`, so a renamed section can keep its stored state. */
@@ -331,6 +315,7 @@ function Section({
   accent?: boolean;
   /** Worst severity among the section's shells, independent of agent identity. */
   dotState?: AgentState;
+  statusLabel?: string;
   children: React.ReactNode;
 }) {
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(readCollapsedSections);
@@ -348,12 +333,14 @@ function Section({
     <div data-testid={testId}>
       <button
         onClick={toggle}
+        aria-label={statusLabel ? `${title}, ${statusLabel.toLowerCase()}` : undefined}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
         className="w-full h-[26px] mb-1 px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]"
       >
         {accent && <StatusDot state={dotState ?? 'idle'} />}
         <span className={`flex-1 ${accent ? '' : 'text-[--text-muted]'}`}>{title}</span>
+        {statusLabel && <span className="text-[10px] normal-case tracking-normal text-[--text-muted]">{statusLabel}</span>}
         <ChevronIcon collapsed={collapsed} />
       </button>
       {!collapsed && children}

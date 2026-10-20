@@ -23,7 +23,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it('restores Fleet and Projects views without leaking remote content into local layout', async () => {
+it('keeps project workspace mounted while Fleet opens as a dismissible side sheet', async () => {
   const saved = new Map<string, string>([['metaide.activeView', JSON.stringify('fleet')]]);
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => saved.get(key) ?? null,
@@ -71,8 +71,10 @@ it('restores Fleet and Projects views without leaking remote content into local 
   const markup = renderToStaticMarkup(createElement(App));
   expect(markup).toContain('data-view="fleet"');
   expect(markup).toContain('data-testid="fleet-panel"');
-  expect(markup).not.toContain('data-testid="main-tab-bar"');
   expect(markup).toContain('aria-label="Fleet"');
+  const main = /<main\b[^>]*>[\s\S]*?<\/main>/.exec(markup)?.[0] ?? '';
+  expect(main).toContain('data-testid="main-tab-bar"');
+  expect(main).not.toContain('data-testid="fleet-panel"');
   saved.set('metaide.activeView', JSON.stringify('projects'));
   const projectsMarkup = renderToStaticMarkup(createElement(App));
   expect(projectsMarkup).not.toContain('data-view="fleet"');

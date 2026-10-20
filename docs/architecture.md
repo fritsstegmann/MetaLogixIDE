@@ -98,16 +98,19 @@ No peer can request project paths, environment values, arbitrary launch
 arguments or unrelated IPC operations. Shell input can execute arbitrary
 commands on the peer: **only link devices you trust**.
 
-The Projects sidebar lists linked and offline machines below local folders;
-each expanded online machine contains its project folders. Selecting a remote
-folder switches the main workspace to an interactive xterm attached to its
-Claude shell. A plain shell is a separate action. Local project selection
-returns to the local workspace; local and remote numeric project IDs remain
-separate. Expanded machines fetch projects on demand; the selected remote
-machine refreshes its status while visible. The Fleet activity view handles
-discovery, pairing and revocation, without another project tree. Fleet opt-in
-remains in Settings → Fleet (`src/renderer/components/Sidebar.tsx`,
-`RemoteTerminal.tsx`, `FleetPanel.tsx`).
+The Projects sidebar lists linked and offline machines below local folders.
+Each machine has its own collapsible heading with the same styling as the
+Projects heading. Each expanded online machine fetches its project folders.
+Selecting a remote folder opens an interactive xterm attached to its Claude
+shell. A plain shell is a separate action. Selecting a local folder restores
+the local workspace; local and remote numeric project IDs remain separate.
+The selected remote machine refreshes its status while visible. The Fleet
+activity opens a side sheet beside the workspace, not over its terminal.
+Opening and closing the sheet does not detach the terminal or close the peer
+connection. The Fleet sheet offers discovery on/off, pairing and revocation.
+Discovery on/off also remains in Settings → Fleet
+(`src/renderer/App.tsx`, `src/renderer/components/Sidebar.tsx`,
+`src/renderer/components/FleetPanel.tsx`, `RemoteTerminal.tsx`).
 
 Terminal attachment sends an ordered serialized screen snapshot, then a ready
 marker, live PTY output and exit events. The stream is authenticated against

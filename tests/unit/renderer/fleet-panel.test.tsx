@@ -86,14 +86,22 @@ function mount(initial: FleetState, fail = false) {
     async loaded() { await flush(); draw(); },
     visible() { return text(draw()); },
     control(label: string) {
-      const node = nodes(draw()).find((item) => item.type === 'button' && text((item.props as { children?: ReactNode }).children) === label);
+      const node = nodes(draw()).find((item) => {
+        const props = item.props as { children?: ReactNode; 'aria-label'?: string };
+        return item.type === 'button' && (props['aria-label'] === label || text(props.children) === label);
+      });
       if (!node) throw new Error(`Missing button ${label}`);
       return node.props as { disabled?: boolean; onClick: () => void };
     },
     field() {
-      const node = nodes(draw()).find((item) => item.type === 'input');
+      const node = nodes(draw()).find((item) => item.type === 'input' && item.props.type === 'text');
       if (!node) throw new Error('Missing pairing input');
       return node.props as { onChange: (event: { target: { value: string } }) => void };
+    },
+    switch() {
+      const node = nodes(draw()).find((item) => item.type === 'input' && item.props.role === 'switch');
+      if (!node) return undefined;
+      return node.props as { checked: boolean; onChange: (event: { target: { checked: boolean } }) => void };
     },
     emit(next: FleetState) { for (const listener of listeners) listener(next); },
   };
@@ -102,12 +110,40 @@ beforeEach(() => { runtime.reset(); listeners.clear(); invoke.mockReset(); });
 afterEach(() => { runtime.unmount(); });
 
 describe('FleetPanel discovery and trust', () => {
-  it('leaves discovery off until Settings opens', async () => {
+  it('does not enable discovery when the Fleet settings modal opens', async () => {
     const app = mount({ enabled: false, peers: [] });
     await app.loaded();
     app.control('Open Fleet settings').onClick();
     expect(app.onOpenSettings).toHaveBeenCalledOnce();
     expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
+  });
+
+  it('enables and disables discovery from Fleet while keeping the switch in sync', async () => {
+    const app = mount({ enabled: false, peers: [] });
+    await app.loaded();
+    expect(app.switch()?.checked).toBe(false);
+    invoke.mockImplementation((channel: string, args?: { enabled: boolean }) =>
+      channel === 'fleet:set-enabled' ? Promise.resolve({ enabled: args?.enabled, peers: [] }) : Promise.resolve({ enabled: false, peers: [] }));
+    app.switch()?.onChange({ target: { checked: true } });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:set-enabled', { enabled: true });
+    expect(app.switch()?.checked).toBe(true);
+    app.switch()?.onChange({ target: { checked: false } });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:set-enabled', { enabled: false });
+    expect(app.switch()?.checked).toBe(false);
+  });
+
+  it('keeps discovery off after a failed toggle and exposes only a safe retryable error', async () => {
+    const app = mount({ enabled: false, peers: [] });
+    await app.loaded();
+    invoke.mockImplementation((channel: string) => channel === 'fleet:set-enabled'
+      ? Promise.reject(new Error('private keychain path')) : Promise.resolve({ enabled: false, peers: [] }));
+    app.switch()?.onChange({ target: { checked: true } });
+    await flush();
+    expect(app.switch()?.checked).toBe(false);
+    expect(app.visible()).not.toContain('private keychain path');
+    expect(nodes(app.draw()).some((node) => node.props.role === 'alert')).toBe(true);
   });
 
   it('keeps discovered peers out of project and terminal APIs', async () => {

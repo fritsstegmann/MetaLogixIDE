@@ -22,19 +22,25 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     });
     await win.getByRole('button', { name: 'Fleet', exact: true }).click();
     const panel = win.getByTestId('fleet-panel');
-    await expect(win.locator('main').getByTestId('fleet-panel')).toBeVisible();
+    await expect(panel).toBeVisible();
+    await expect(win.locator('main').getByTestId('fleet-panel')).toHaveCount(0);
+    const before = await win.evaluate(() => window.api.invoke('fleet:get-state', undefined));
+    expect(before.enabled).toBe(false);
+    const sheetDiscovery = panel.getByRole('switch', { name: 'Enable Fleet discovery' });
+    await expect(sheetDiscovery).not.toBeChecked();
+    await sheetDiscovery.click();
+    await expect(sheetDiscovery).toBeChecked();
+    await expect.poll(async () => (await win.evaluate(() => window.api.invoke('fleet:get-state', undefined))).enabled).toBe(true);
     await panel.getByRole('button', { name: 'Open Fleet settings' }).click();
     const settings = win.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
     await expect(settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Fleet' })).toHaveAttribute('aria-current', 'page');
     const discovery = settings.getByRole('switch', { name: 'Enable Fleet discovery' });
-    await expect(discovery).not.toBeChecked();
-    const before = await win.evaluate(() => window.api.invoke('fleet:get-state', undefined));
-    expect(before.enabled).toBe(false);
-    await discovery.click();
     await expect(discovery).toBeChecked();
     await win.getByTestId('settings-done').click();
+    await win.getByTestId('ab-projects').click();
     await expect.poll(async () => (await win.evaluate(() => window.api.invoke('fleet:get-state', undefined))).enabled).toBe(true);
+    await win.getByTestId('ab-fleet').click();
     const outcome = await win.evaluate(async () => {
       try {
         await window.api.invoke('fleet:write', {
@@ -53,6 +59,7 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     await expect(discovery).toBeChecked();
     await discovery.click();
     await expect(discovery).not.toBeChecked();
+    await expect(panel.getByRole('switch', { name: 'Enable Fleet discovery' })).not.toBeChecked();
     await win.getByTestId('settings-done').click();
     await win.getByTestId('ab-projects').click();
     await expect(panel).toBeHidden();
@@ -78,6 +85,14 @@ test('Fleet management returns to local project terminal on a narrow window', as
     await project.click();
     await expect(sidebar).toBeHidden();
     await expect(win.locator('main .xterm')).toBeVisible();
+    const terminal = win.locator('main .xterm');
+    await win.getByTestId('ab-fleet').click();
+    await expect(win.getByTestId('fleet-panel')).toBeVisible();
+    await expect(sidebar).toBeHidden();
+    await expect(terminal).toBeAttached();
+    await win.getByTestId('ab-fleet').click();
+    await expect(win.getByTestId('fleet-panel')).toBeHidden();
+    await expect(terminal).toBeVisible();
     await expect.poll(() => win.title()).toBe('Local Fleet Project — MetaLogix IDE');
     expect(await win.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       await win.evaluate(() => window.innerWidth),

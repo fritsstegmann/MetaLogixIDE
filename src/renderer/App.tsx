@@ -861,8 +861,8 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            setActiveView(sidebarOpen && activeView === v && v !== 'projects' && v !== 'fleet' ? 'projects' : v);
-            if (!sidebarOpen && v !== 'fleet') toggleSidebar(true, true);
+            setActiveView(sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v);
+            if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
           sidebarOpen={sidebarOpen}
@@ -871,8 +871,8 @@ function MainApp() {
           taskCount={taskCount || undefined}
         />
         <AnimatePresence initial={false} custom={sidebarFold.custom}>
-          {sidebarOpen && activeView !== 'fleet' && (
-            <FoldPane key="sidebar" size="intrinsic" anchor="end" className="fleet-projects-pane" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
+          {sidebarOpen && (
+            <FoldPane key="sidebar" size="intrinsic" anchor="end" className={`fleet-projects-pane ${activeView === 'fleet' ? 'fleet-sheet-open' : ''}`} custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
                 selectedRemote={remoteProject}
@@ -968,16 +968,29 @@ function MainApp() {
                   />
                 </>
               )}
+              {activeView === 'fleet' && (
+                <>
+                  <div className="section-panel h-full flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
+                    <FleetPanel onOpenSettings={() => { setSettingsSection('fleet'); setSettingsOpen(true); }} />
+                  </div>
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={300}
+                    max={640}
+                    side="left"
+                  />
+                </>
+              )}
             </FoldPane>
           )}
         </AnimatePresence>
         <main
           className="flex flex-1 flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
-          data-sheet-content={activeView === 'fleet' ? 'other' : mainSheetContent}
+          data-sheet-content={mainSheetContent}
         >
-          {activeView === 'fleet' ? (
-            <FleetPanel onOpenSettings={() => { setSettingsSection('fleet'); setSettingsOpen(true); }} />
-          ) : remoteProject ? (
+          {remoteProject ? (
             <RemoteTerminal
               key={`${remoteProject.peerId}:${remoteProject.projectId}`}
               project={remoteProject}
