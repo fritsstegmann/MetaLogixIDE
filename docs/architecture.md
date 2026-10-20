@@ -47,7 +47,7 @@ keep-alive cap or block the first terminal after restart.
 
 ### LAN fleet
 
-Fleet is off until the user enables it in the Fleet activity view.
+Fleet is off until the user enables discovery in Settings → Fleet.
 The main process starts `FleetService` before the first window and stops it
 on quit (`src/main/index.ts:441-470`).
 An enabled instance announces only its certificate fingerprint, device name,
@@ -67,11 +67,13 @@ The user requests a link on one device. Both devices then display a
 The user must compare and approve the code on **both** devices.
 A dial has a 10-second TLS connection deadline. An established connection
 does not expire because it is idle. An unfinished pairing expires after
-90 seconds (`src/main/fleet/service.ts:403-432,503-537`).
+90 seconds (`src/main/fleet/service.ts:403-432,510-541`).
 If both devices request a link at once, they keep the same TLS connection
-according to their certificate identities (`src/main/fleet/service.ts:458-503`).
-The Fleet view remains pending while local trust is saved. Incoming shell
-commands wait for that save to finish, and a failed save closes the connection.
+according to their certificate identities. A newly preferred connection
+cannot replace an existing channel while its trust save is pending; the
+original comparison code and request gate remain active until persistence
+succeeds, or the channel closes on failure
+(`src/main/fleet/service.ts:494-527,625-656`).
 No peer can run an operation before both approvals are saved.
 Revocation closes the active channel and blocks future pairing with that
 fingerprint while the trust file is intact (`src/main/fleet/service.ts:800-824`).
@@ -96,8 +98,16 @@ local IPC operations. Shell input can execute arbitrary commands on the peer.
 Approve only devices that you trust.
 The main-process adapter reuses local shell handlers for control operations
 (`src/main/ipc/register.ts:1397-1437`).
+The Fleet activity view replaces the local project workspace with machine
+headers and nested remote project folders for the selected linked machine.
+Only that machine's status and selected shell output are polled. Launching a
+remote shell opens its output and input in the main workspace; launch errors
+appear beside the launch control. Pairing and revocation remain on machine
+rows; Fleet opt-in lives in Settings (`src/renderer/App.tsx:847-940`,
+`src/renderer/components/FleetPanel.tsx:41-159,163-324,655-766`,
+`src/renderer/components/settings/FleetSettingsPanel.tsx:8-94`).
 The Fleet panel clears remote content when the link closes and shows network
-failure separately from an empty LAN (`src/renderer/components/FleetPanel.tsx:349-376,654-677`).
+failure separately from an empty LAN.
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts:86-103,261-271`).

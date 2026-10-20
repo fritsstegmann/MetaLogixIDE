@@ -1,13 +1,13 @@
-/** Opt-in LAN fleet panel keeps remote shell controls behind an approved, currently linked peer. */
+/** Fleet shows a selected machine's project tree and remote shell workspace with linked-only controls. */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from '@renderer/api';
 import { AGENT_STATE_LABEL, AGGREGATE_STATE_LABEL } from '@shared/agent-state';
 import type { FleetPeer, FleetState, FleetStatus, FleetShell } from '@shared/fleet-contract';
 
 const BUTTON =
-  'min-h-11 rounded-lg border border-[--border] px-3 text-base text-[--text] hover:bg-[--surface-hover] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent] disabled:opacity-50';
+  'min-h-11 min-w-0 max-w-full break-words rounded-lg border border-[--border] px-3 text-base text-[--text] hover:bg-[--surface-hover] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2 disabled:opacity-50';
 const FIELD =
-  'min-h-11 w-full min-w-0 rounded-lg border border-[--border] bg-[--surface-field] px-3 text-base text-[--text] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--accent]';
+  'min-h-11 w-full min-w-0 rounded-lg border border-[--border] bg-[--surface-field] px-3 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] focus-visible:ring-offset-2';
 
 type RemoteStatus =
   | { readonly kind: 'loading'; readonly peerId: string }
@@ -27,30 +27,36 @@ interface PeerRowProps {
   readonly peer: FleetPeer;
   readonly selected: boolean;
   readonly busy: boolean;
+  readonly projects: FleetStatus['projects'] | null;
+  readonly projectId: number | null;
   readonly code: string;
   readonly onCode: (code: string) => void;
   readonly onPair: () => void;
   readonly onApprove: () => void;
   readonly onRevoke: () => void;
   readonly onSelect: () => void;
+  readonly onSelectProject: (projectId: number) => void;
 }
 
 function PeerRow({
   peer,
   selected,
   busy,
+  projects,
+  projectId,
   code,
   onCode,
   onPair,
   onApprove,
   onRevoke,
   onSelect,
+  onSelectProject,
 }: PeerRowProps) {
   const pairing = peer.status === 'pending' && peer.verificationCode;
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-[--border] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0 break-words text-base font-medium">{peer.name}</div>
+        <h3 className="min-w-0 break-words text-base font-semibold">{peer.name}</h3>
         <span aria-live="polite" className="text-base text-[--text-muted]">
           {
             {
@@ -121,6 +127,24 @@ function PeerRow({
           </button>
         </div>
       )}
+      {peer.status === 'linked' && selected && projects && (
+        <ul aria-label={`Projects on ${peer.name}`} className="space-y-1 border-l border-[--border] pl-3">
+          {projects.map((project) => (
+            <li key={project.id}>
+              <h4>
+                <button
+                  type="button"
+                  aria-current={projectId === project.id ? 'true' : undefined}
+                  className={`${BUTTON} w-full min-w-0 break-words text-left ${projectId === project.id ? 'bg-[--surface-active]' : ''}`}
+                  onClick={() => onSelectProject(project.id)}
+                >
+                  {project.name}
+                </button>
+              </h4>
+            </li>
+          ))}
+        </ul>
+      )}
       {peer.status === 'offline' && (
         <div className="space-y-2">
           <p className="text-base text-[--text-muted]">
@@ -140,9 +164,11 @@ interface RemoteViewProps {
   readonly peer: FleetPeer;
   readonly status: RemoteStatus | null;
   readonly snapshot: RemoteSnapshot | null;
+  readonly projectId: number | null;
   readonly selectedShell: Pick<FleetShell, 'projectId' | 'shellIndex'> | null;
   readonly input: string;
   readonly busy: boolean;
+  readonly launchError: string;
   readonly onRefresh: () => void;
   readonly onLaunch: (projectId: number) => void;
   readonly onSelectShell: (shell: FleetShell) => void;
@@ -155,9 +181,11 @@ function RemoteView({
   peer,
   status,
   snapshot,
+  projectId,
   selectedShell,
   input,
   busy,
+  launchError,
   onRefresh,
   onLaunch,
   onSelectShell,
@@ -166,23 +194,17 @@ function RemoteView({
   onSend,
 }: RemoteViewProps) {
   const loaded = status?.kind === 'ready' && status.peerId === peer.id ? status.data : null;
-  const currentShell =
-    selectedShell &&
-    loaded?.shells.some(
-      (shell) =>
-        shell.projectId === selectedShell.projectId &&
-        shell.shellIndex === selectedShell.shellIndex,
-    )
-      ? selectedShell
-      : null;
-  const shellKey = currentShell
-    ? `${peer.id}:${currentShell.projectId}:${currentShell.shellIndex}`
-    : null;
+  const project = loaded?.projects.find((item) => item.id === projectId) ?? loaded?.projects[0];
+  const shells = loaded?.shells.filter((shell) => shell.projectId === project?.id) ?? [];
+  const currentShell = selectedShell && shells.some(
+    (shell) => shell.shellIndex === selectedShell.shellIndex && shell.projectId === selectedShell.projectId,
+  ) ? selectedShell : null;
+  const shellKey = currentShell ? `${peer.id}:${currentShell.projectId}:${currentShell.shellIndex}` : null;
   const currentSnapshot = snapshot && snapshot.key === shellKey ? snapshot : null;
   return (
     <section
-      aria-label={`Remote machine: ${peer.name}`}
-      className="min-w-0 space-y-3 border-t border-[--border] pt-4"
+      aria-label={`Remote shell workspace for ${peer.name}`}
+      className="min-w-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="min-w-0 break-words text-base font-semibold">Remote machine: {peer.name}</h3>
@@ -201,68 +223,52 @@ function RemoteView({
           256-shell Fleet limit, then refresh.
         </p>
       )}
-      {loaded && (
+      {loaded && !project && (
+        <p className="text-base text-[--text-muted]">No projects on this machine.</p>
+      )}
+      {project && (
         <>
-          {loaded.projects.length === 0 && (
-            <p className="text-base text-[--text-muted]">No projects on this machine.</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="min-w-0 break-words text-lg font-semibold">{project.name}</h4>
+            <button
+              type="button"
+              className={BUTTON}
+              disabled={busy}
+              onClick={() => onLaunch(project.id)}
+            >
+              Launch shell on {peer.name} in {project.name}
+            </button>
+          </div>
+          {launchError && (
+            <p role="alert" className="text-base text-[--danger]">
+              {launchError}
+            </p>
           )}
-          <ul className="space-y-3">
-            {loaded.projects.map((project) => (
-              <li
-                key={project.id}
-                className="min-w-0 space-y-2 rounded-lg border border-[--border] p-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="min-w-0 break-words text-base font-medium">{project.name}</h4>
-                  <button
-                    type="button"
-                    className={BUTTON}
-                    disabled={busy}
-                    onClick={() => onLaunch(project.id)}
-                  >
-                    Launch shell on {peer.name} in {project.name}
-                  </button>
-                </div>
-                <ul className="space-y-2">
-                  {loaded.shells
-                    .filter((shell) => shell.projectId === project.id)
-                    .map((shell) => (
-                      <li
-                        key={shell.shellIndex}
-                        className="flex flex-wrap items-center gap-2 text-base"
-                      >
-                        <span>
-                          Shell {shell.shellIndex + 1} —{' '}
-                          {shell.agent
-                            ? AGENT_STATE_LABEL[shell.agent][shell.state]
-                            : AGGREGATE_STATE_LABEL[shell.state]}
-                        </span>
-                        <button
-                          type="button"
-                          className={BUTTON}
-                          onClick={() => onSelectShell(shell)}
-                        >
-                          View shell {shell.shellIndex + 1}
-                        </button>
-                        <button
-                          type="button"
-                          className={BUTTON}
-                          disabled={busy}
-                          onClick={() => onStop(shell)}
-                        >
-                          Stop shell {shell.shellIndex + 1} on {peer.name}
-                        </button>
-                      </li>
-                    ))}
-                </ul>
+          {shells.length === 0 && (
+            <p className="text-base text-[--text-muted]">No remote shells in {project.name}. Launch one to start working.</p>
+          )}
+          <ul aria-label={`Shells in ${project.name}`} className="space-y-2">
+            {shells.map((shell) => (
+              <li key={shell.shellIndex} className="flex flex-wrap items-center gap-2 text-base">
+                <span>
+                  Shell {shell.shellIndex + 1} — {shell.agent
+                    ? AGENT_STATE_LABEL[shell.agent][shell.state]
+                    : AGGREGATE_STATE_LABEL[shell.state]}
+                </span>
+                <button type="button" className={BUTTON} onClick={() => onSelectShell(shell)}>
+                  View shell {shell.shellIndex + 1}
+                </button>
+                <button type="button" className={BUTTON} disabled={busy} onClick={() => onStop(shell)}>
+                  Stop shell {shell.shellIndex + 1} on {peer.name}
+                </button>
               </li>
             ))}
           </ul>
           {currentShell && shellKey && (
             <div className="min-w-0 space-y-2">
-              <h4 className="text-base font-medium">
+              <h5 className="text-base font-medium">
                 Remote shell {currentShell.shellIndex + 1} on {peer.name}
-              </h4>
+              </h5>
               {currentSnapshot?.kind === 'error' && (
                 <p role="alert" className="text-base text-[--danger]">
                   Could not read remote output. Check the connection, then refresh remote status.
@@ -322,12 +328,18 @@ function invalidateRequest(request: { current: number }): void {
   request.current++;
 }
 
-/** Displays discovered devices and requires code comparison before enabling remote controls for each linked machine. */
-export function FleetPanel() {
+interface FleetPanelProps {
+  readonly onOpenSettings: () => void;
+}
+
+/** Displays discovered peers, nested projects and the selected remote shell in a full-width Fleet view. */
+export function FleetPanel({ onOpenSettings }: FleetPanelProps) {
   const [state, setState] = useState<FleetState | null>(null);
   const [error, setError] = useState('');
+  const [launchError, setLaunchError] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [code, setCode] = useState<{ readonly peerId: string; readonly value: string } | null>(
     null,
   );
@@ -341,6 +353,7 @@ export function FleetPanel() {
   const request = useRef(0);
   const pendingStatus = useRef<{ readonly peerId: string; readonly sequence: number } | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const selectedProjectIdRef = useRef<number | null>(null);
   const currentState = useRef<FleetState | null>(null);
   const selectedPeer = state?.enabled
     ? (state.peers.find((peer) => peer.id === selectedId && peer.status === 'linked') ??
@@ -360,11 +373,15 @@ export function FleetPanel() {
       pendingStatus.current = null;
       request.current++;
       setStatus(null);
+      selectedProjectIdRef.current = null;
+      setSelectedProjectId(null);
+      setLaunchError('');
       setSnapshot(null);
       setSelectedShell(null);
       setInput('');
     }
     currentState.current = next;
+    setError('');
     setState(next);
     setCode((previous) =>
       previous &&
@@ -387,7 +404,7 @@ export function FleetPanel() {
         if (active && !currentState.current) applyState(next);
       })
       .catch(() => {
-        if (active) setError('Could not load fleet. Check the app connection and retry.');
+        if (active && !currentState.current) setError('Could not load fleet. Check the app connection and retry.');
       });
     return () => {
       active = false;
@@ -518,11 +535,6 @@ export function FleetPanel() {
     }
   }
 
-  async function changeEnabled(enabled: boolean) {
-    await action('Could not change fleet setting', async () => {
-      applyState(await api.invoke('fleet:set-enabled', { enabled }));
-    });
-  }
 
   async function runPeer(peer: FleetPeer, kind: 'pair' | 'approve' | 'revoke') {
     if (!currentState.current?.enabled) return;
@@ -551,24 +563,36 @@ export function FleetPanel() {
   }
 
   function isLinked(peer: FleetPeer | undefined): peer is FleetPeer {
-    return Boolean(
-      peer &&
-      currentState.current?.enabled &&
-      currentState.current.peers.find((item) => item.id === peer.id)?.status === 'linked',
-    );
+    const current = currentState.current;
+    const selected = current?.peers.find(
+      (item) => item.id === selectedIdRef.current && item.status === 'linked',
+    ) ?? current?.peers.find((item) => item.status === 'linked');
+    return Boolean(peer && current?.enabled && selected?.id === peer.id);
   }
 
   async function launchShell(projectId: number) {
     const peer = selectedPeer;
-    if (!isLinked(peer)) return;
-    await action('Could not launch remote shell', async () => {
+    if (!isLinked(peer) || status?.kind !== 'ready' || status.peerId !== peer.id) return;
+    const projects = status.data.projects;
+    const isCurrentProject = () =>
+      (projects.find((project) => project.id === selectedProjectIdRef.current)?.id
+        ?? projects[0]?.id) === projectId;
+    if (!isCurrentProject()) return;
+    setBusy(true);
+    setLaunchError('');
+    try {
       const { shellIndex } = await api.invoke('fleet:launch', { peerId: peer.id, projectId });
-      if (isLinked(peer)) {
+      if (isLinked(peer) && isCurrentProject()) {
         setSelectedShell({ projectId, shellIndex });
         setInput('');
         await refreshStatus(peer.id);
       }
-    });
+    } catch {
+      if (isLinked(peer) && isCurrentProject())
+        setLaunchError('Could not launch remote shell. Check the connection or remote machine, then retry.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function stopShell(shell: FleetShell) {
@@ -622,21 +646,17 @@ export function FleetPanel() {
     }
   }
 
+  const selectedProjects = status?.kind === 'ready' && status.peerId === selectedPeer?.id
+    ? status.data.projects
+    : null;
+  const activeProjectId = selectedProjects?.find((project) => project.id === selectedProjectId)?.id
+    ?? selectedProjects?.[0]?.id
+    ?? null;
   return (
-    <div className="h-full min-w-0 overflow-y-auto p-4 text-[--text]" data-testid="fleet-panel">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-semibold">Fleet</h2>
-        {state && (
-          <button
-            type="button"
-            className={BUTTON}
-            disabled={busy}
-            onClick={() => void changeEnabled(!state.enabled)}
-          >
-            {state.enabled ? 'Disable fleet' : 'Enable fleet'}
-          </button>
-        )}
-      </div>
+    <div className="flex h-full min-h-0 min-w-0 flex-col text-[--text]" data-testid="fleet-panel" data-view="fleet" aria-label="Fleet">
+      <header className="shrink-0 border-b border-[--border] px-4 py-3">
+        <h2 className="text-lg font-semibold">Fleet</h2>
+      </header>
       {error && (
         <p role="alert" className="mt-3 text-base text-[--danger]">
           {error}
@@ -658,56 +678,73 @@ export function FleetPanel() {
         </p>
       )}
       {state && !state.enabled && (
-        <p className="mt-4 text-base text-[--text-muted]">
-          Fleet is off. Enable it to discover IDEs on your local network.
-        </p>
+        <div className="space-y-3 p-4">
+          <p className="text-base text-[--text-muted]">Fleet is off. Turn it on in Settings to discover IDEs on your local network.</p>
+          <button type="button" className={BUTTON} onClick={onOpenSettings}>Open Fleet settings</button>
+        </div>
       )}
       {state?.enabled && (
-        <div className="mt-4 space-y-4">
-          <p className="text-base text-[--text-muted]">
-            Only linked devices can see projects or control shells. Compare pairing codes on both
-            devices before approval.
-          </p>
-          {state.peers.length === 0 ? (
-            <p role="status" className="text-base text-[--text-muted]">
-              Looking for IDEs on this LAN. If none appear, check both devices are on the same
-              network and multicast is allowed.
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+          <aside aria-label="Fleet machines and projects" className="max-h-[40%] min-h-0 w-full shrink-0 overflow-y-auto border-b border-[--border] p-4 md:max-h-none md:w-72 md:border-b-0 md:border-r lg:w-80">
+            <p className="mb-4 text-base text-[--text-muted]">
+              Compare pairing codes on both devices. Only linked machines can show projects or control shells.
             </p>
-          ) : (
-            <ul className="space-y-3">
-              {state.peers.map((peer) => (
-                <PeerRow
-                  key={peer.id}
-                  peer={peer}
-                  selected={selectedPeer?.id === peer.id}
-                  busy={busy}
-                  code={code?.peerId === peer.id ? code.value : ''}
-                  onCode={(value) => setCode({ peerId: peer.id, value })}
-                  onPair={() => void runPeer(peer, 'pair')}
-                  onApprove={() => void runPeer(peer, 'approve')}
-                  onRevoke={() => void runPeer(peer, 'revoke')}
-                  onSelect={() => {
-                    invalidateRequest(request);
-                    pendingStatus.current = null;
-                    selectedIdRef.current = peer.id;
-                    setSelectedId(peer.id);
-                    setStatus(null);
-                    setSnapshot(null);
-                    setSelectedShell(null);
-                    setInput('');
-                  }}
-                />
-              ))}
-            </ul>
-          )}
-          {selectedPeer && (
+            {state.peers.length === 0 ? (
+              <p role="status" className="text-base text-[--text-muted]">
+                Looking for IDEs on this LAN. If none appear, check both devices are on the same
+                network and multicast is allowed.
+              </p>
+            ) : (
+              <ul className="space-y-3">
+                {state.peers.map((peer) => (
+                  <PeerRow
+                    key={peer.id}
+                    peer={peer}
+                    selected={selectedPeer?.id === peer.id}
+                    projects={selectedPeer?.id === peer.id ? selectedProjects : null}
+                    projectId={activeProjectId}
+                    busy={busy}
+                    code={code?.peerId === peer.id ? code.value : ''}
+                    onCode={(value) => setCode({ peerId: peer.id, value })}
+                    onPair={() => void runPeer(peer, 'pair')}
+                    onApprove={() => void runPeer(peer, 'approve')}
+                    onRevoke={() => void runPeer(peer, 'revoke')}
+                    onSelect={() => {
+                      invalidateRequest(request);
+                      pendingStatus.current = null;
+                      selectedIdRef.current = peer.id;
+                      setSelectedId(peer.id);
+                      selectedProjectIdRef.current = null;
+                      setSelectedProjectId(null);
+                      setLaunchError('');
+                      setStatus(null);
+                      setSnapshot(null);
+                      setSelectedShell(null);
+                      setInput('');
+                    }}
+                    onSelectProject={(projectId) => {
+                      selectedProjectIdRef.current = projectId;
+                      setSelectedProjectId(projectId);
+                      setSelectedShell(null);
+                      setSnapshot(null);
+                      setLaunchError('');
+                      setInput('');
+                    }}
+                  />
+                ))}
+              </ul>
+            )}
+          </aside>
+          {selectedPeer ? (
             <RemoteView
               peer={selectedPeer}
               status={status}
               snapshot={snapshot}
+              projectId={activeProjectId}
               selectedShell={selectedShell}
               input={input}
               busy={busy}
+              launchError={launchError}
               onRefresh={() => void refreshStatus(selectedPeer.id)}
               onLaunch={(projectId) => void launchShell(projectId)}
               onSelectShell={(shell) => {
@@ -717,10 +754,12 @@ export function FleetPanel() {
               }}
               onStop={(shell) => void stopShell(shell)}
               onInput={setInput}
-              onSend={(event) => {
-                void sendInput(event);
-              }}
+              onSend={(event) => { void sendInput(event); }}
             />
+          ) : (
+            <section aria-label="Remote shell workspace" className="min-w-0 flex-1 p-4 text-base text-[--text-muted]">
+              Link a machine to open its remote shell workspace.
+            </section>
           )}
         </div>
       )}

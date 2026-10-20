@@ -494,7 +494,12 @@ export class FleetService {
     const outbound = expected !== undefined;
     const existing = this.sessions.get(id);
     const preferredOutbound = this.identity.id < id;
-    if (existing && (existing.outbound === preferredOutbound || outbound !== preferredOutbound)) {
+    if (
+      existing &&
+      (existing.pairSaving ||
+        existing.outbound === preferredOutbound ||
+        outbound !== preferredOutbound)
+    ) {
       socket.destroy();
       return true;
     }

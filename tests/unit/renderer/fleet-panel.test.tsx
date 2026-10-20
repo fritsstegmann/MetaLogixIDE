@@ -115,6 +115,21 @@ function nodes(node: ReactNode): ReactElement[] {
   const children = (node.props as { children?: ReactNode }).children;
   return [node, ...(Array.isArray(children) ? children.flatMap(nodes) : nodes(children))];
 }
+function descendants(item: ReactElement | undefined): ReactElement[] {
+  if (!item) return [];
+  const props: unknown = item.props;
+  if (!props || typeof props !== 'object' || !('children' in props)) return [];
+  const children: unknown = props.children;
+  if (Array.isArray(children))
+    return children.flatMap((child: unknown) => (isValidElement(child) ? nodes(child) : []));
+  return isValidElement(children) ? nodes(children) : [];
+}
+function attribute(item: ReactElement, name: string): string | undefined {
+  const props: unknown = item.props;
+  if (!props || typeof props !== 'object' || !(name in props)) return undefined;
+  const value: unknown = (props as Record<string, unknown>)[name];
+  return typeof value === 'string' ? value : undefined;
+}
 function text(node: ReactNode): string {
   if (typeof node === 'string' || typeof node === 'number') return String(node);
   if (Array.isArray(node)) return node.map(text).join('');
@@ -122,6 +137,7 @@ function text(node: ReactNode): string {
   return text((node.props as { children?: ReactNode }).children);
 }
 function mount(state: FleetState = { enabled: false, peers: [] }, loadError = false) {
+  const onOpenSettings = vi.fn();
   let shown = remote;
   invoke.mockImplementation((channel: string) => {
     if (channel === 'fleet:get-state' && loadError)
@@ -140,7 +156,7 @@ function mount(state: FleetState = { enabled: false, peers: [] }, loadError = fa
     }
     return Promise.resolve({ ok: true });
   });
-  const draw = () => runtime.render(() => FleetPanel());
+  const draw = () => runtime.render(() => FleetPanel({ onOpenSettings }));
   const load = async () => {
     await flush();
     draw();
@@ -148,6 +164,7 @@ function mount(state: FleetState = { enabled: false, peers: [] }, loadError = fa
   };
   draw();
   return {
+    onOpenSettings,
     draw,
     load,
     markup: () => renderToStaticMarkup(draw()),
@@ -200,13 +217,13 @@ afterEach(() => {
 });
 
 describe('FleetPanel', () => {
-  it('starts off and enables discovery only on explicit user action', async () => {
+  it('starts off without enabling discovery and opens Fleet settings on request', async () => {
     const app = mount();
     await app.load();
     expect(app.markup()).toContain('Fleet is off');
     expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
-    await app.control('Enable fleet').onClick();
-    expect(invoke).toHaveBeenCalledWith('fleet:set-enabled', { enabled: true });
+    app.control('Open Fleet settings').onClick();
+    expect(app.onOpenSettings).toHaveBeenCalledOnce();
   });
 
   it('shows a failed network listener separately from an empty LAN', async () => {
@@ -217,7 +234,7 @@ describe('FleetPanel', () => {
     });
     await app.load();
     expect(app.markup()).toContain('Fleet network unavailable');
-    expect(app.markup()).toContain('Disable fleet');
+    expect(app.markup()).not.toContain('Disable fleet');
   });
 
   it('shows discovery without shell controls; can initiate pairing', async () => {
@@ -612,5 +629,140 @@ describe('FleetPanel', () => {
     await app.load();
     expect(app.markup()).toContain('Build Mac');
     expect(app.markup()).toContain('Service');
+  });
+
+  it('groups a linked machine heading with its projects in the same machine entry', async () => {
+    const app = mount(peer('linked'));
+    await app.load();
+    const machine = nodes(app.draw()).find((item) => {
+      if (item.type !== 'li') return false;
+      const children = descendants(item);
+      return children.some(
+        (child) =>
+          typeof child.type === 'string' &&
+          /^h[1-6]$/.test(child.type) &&
+          text(child) === 'Build Mac',
+      );
+    });
+    expect(machine).toBeDefined();
+    const projects = descendants(machine).filter((item) => item.type === 'li');
+    expect(
+      projects.some((project) =>
+        descendants(project).some(
+          (child) =>
+            typeof child.type === 'string' &&
+            /^h[1-6]$/.test(child.type) &&
+            text(child) === 'Service',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('selects a nested project context without fetching every linked machine', async () => {
+    const both: FleetState = {
+      enabled: true,
+      peers: [...peer('linked').peers, { id: 'machine-c', name: 'Other Mac', status: 'linked' }],
+    };
+    const app = mount(both);
+    invoke.mockImplementation((channel: string) =>
+      Promise.resolve(channel === 'fleet:status'
+        ? { ...remote, projects: [...remote.projects, { id: 34, name: 'Second folder' }] }
+        : channel === 'fleet:launch' ? { shellIndex: 0 } : both));
+    await app.load();
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:status')).toHaveLength(1);
+    expect(invoke).toHaveBeenCalledWith('fleet:status', { peerId: 'machine-b' });
+    const staleLaunch = app.control('Launch shell on Build Mac in Service').onClick;
+    app.control('Second folder').onClick();
+    expect(app.markup()).toContain('Launch shell on Build Mac in Second folder');
+    expect(app.markup()).not.toContain('Launch shell on Build Mac in Service');
+    staleLaunch();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:launch', expect.anything());
+    app.control('Launch shell on Build Mac in Second folder').onClick();
+    expect(invoke).toHaveBeenCalledWith('fleet:launch', { peerId: 'machine-b', projectId: 34 });
+  });
+
+  it('shows a launched shell and its output in a dedicated remote workspace', async () => {
+    const app = mount(peer('linked'));
+    await app.load();
+    await app.control('Launch shell on Build Mac in Service').onClick();
+    await flush();
+    app.draw();
+    await flush();
+    const workspace = nodes(app.draw()).find(
+      (item) =>
+        item.type === 'section' &&
+        /remote shell workspace/i.test(attribute(item, 'aria-label') ?? ''),
+    );
+    expect(workspace).toBeDefined();
+    const content = descendants(workspace);
+    expect(
+      content.some(
+        (item) =>
+          typeof item.type === 'string' &&
+          /^h[1-6]$/.test(item.type) &&
+          text(item) === 'Remote shell 4 on Build Mac',
+      ),
+    ).toBe(true);
+    expect(
+      content.some(
+        (item) =>
+          item.type === 'pre' &&
+          attribute(item, 'role') === 'log' &&
+          text(item).includes('ready'),
+      ),
+    ).toBe(true);
+    expect(content.some((item) => item.type === 'button' && text(item).includes('Launch shell'))).toBe(true);
+  });
+
+  it('reports failed launches beside the remote workspace rather than above the machine list', async () => {
+    const app = mount(peer('linked'));
+    await app.load();
+    invoke.mockImplementation((channel: string) =>
+      channel === 'fleet:launch'
+        ? Promise.reject(new Error('private remote failure'))
+        : Promise.resolve(channel === 'fleet:status' ? remote : peer('linked')),
+    );
+    await app.control('Launch shell on Build Mac in Service').onClick();
+    const workspace = nodes(app.draw()).find(
+      (item) =>
+        item.type === 'section' &&
+        /remote shell workspace/i.test(attribute(item, 'aria-label') ?? ''),
+    );
+    expect(workspace).toBeDefined();
+    expect(
+      descendants(workspace).some(
+        (item) =>
+          attribute(item, 'role') === 'alert' &&
+          text(item).includes('Could not launch remote shell'),
+      ),
+    ).toBe(true);
+    expect(
+      descendants(workspace).some(
+        (item) => item.type === 'button' && text(item).includes('Launch shell'),
+      ),
+    ).toBe(true);
+    expect(app.markup()).not.toContain('private remote failure');
+  });
+
+  it('directs disabled Fleet to Settings without offering a duplicate enablement control', async () => {
+    const app = mount();
+    await app.load();
+    const buttons = nodes(app.draw())
+      .filter((item) => item.type === 'button')
+      .map((item) => text(item));
+    expect(buttons).not.toContain('Enable fleet');
+    expect(buttons).not.toContain('Disable fleet');
+    expect(buttons.some((label) => /open fleet settings/i.test(label))).toBe(true);
+  });
+
+  it('keeps pairing actions but not the Settings enablement switch in enabled Fleet', async () => {
+    const app = mount(peer('discovered'));
+    await app.load();
+    const buttons = nodes(app.draw())
+      .filter((item) => item.type === 'button')
+      .map((item) => text(item));
+    expect(buttons).toContain('Request link');
+    expect(buttons).not.toContain('Enable fleet');
+    expect(buttons).not.toContain('Disable fleet');
   });
 });

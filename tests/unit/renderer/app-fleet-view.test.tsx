@@ -72,13 +72,14 @@ it('restores Fleet and Projects views without leaking remote content into local 
   expect(markup).toContain('data-view="fleet"');
   expect(markup).toContain('data-testid="fleet-panel"');
   expect(markup).toContain('Loading fleet');
-  expect(markup).toMatch(/<main[^>]+hidden md:flex/);
-  expect(markup).toContain('class="hidden md:contents"');
+  expect(markup).not.toContain('data-testid="main-tab-bar"');
   expect(markup).toContain('aria-label="Fleet"');
+  const fleetMain = /<main\b[^>]*>[\s\S]*?<\/main>/.exec(markup)?.[0] ?? '';
+  expect(fleetMain).toContain('data-testid="fleet-panel"');
+  expect(fleetMain).toContain('Loading fleet');
   saved.set('metaide.activeView', JSON.stringify('projects'));
   const projectsMarkup = renderToStaticMarkup(createElement(App));
   expect(projectsMarkup).not.toContain('data-view="fleet"');
   expect(projectsMarkup).not.toContain('data-testid="fleet-panel"');
-  expect(projectsMarkup).toContain('class="contents"');
-  expect(projectsMarkup).toMatch(/<main[^>]+mr-2 flex"/);
+  expect(projectsMarkup).toContain('data-testid="main-tab-bar"');
 });
