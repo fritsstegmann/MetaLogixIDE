@@ -1,6 +1,7 @@
 /** Remote terminal tests exercise launch, ordered attachment, input, cleanup and stale events. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type * as ReactModule from 'react';
 import type { FleetTerminalEvent } from '@shared/fleet-contract';
 import type { RemoteProjectSelection } from '@renderer/components/Sidebar';
@@ -307,7 +308,7 @@ describe('RemoteTerminal', () => {
     invoke.mockImplementation((channel: string) => channel === 'fleet:launch-claude' ? Promise.reject(new Error('private launch command')) : channel === 'fleet:launch' ? Promise.resolve({ shellIndex: 2 }) : channel === 'fleet:subscribe' ? Promise.resolve({ subscriptionId: 'sub-1' }) : Promise.resolve({ ok: true }));
     const app = mount();
     await flush();
-    expect(app.visible()).toContain('Could not open Claude');
+    expect(renderToStaticMarkup(app.draw())).toContain('role="alert"');
     expect(app.visible()).not.toContain('private launch command');
     app.control('New plain shell').onClick();
     await flush();

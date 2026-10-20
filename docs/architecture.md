@@ -49,7 +49,7 @@ keep-alive cap or block the first terminal after restart.
 
 Fleet is off until the user enables discovery in Settings → Fleet.
 The main process starts `FleetService` before the first window and stops it
-on quit (`src/main/index.ts:441-470`).
+on quit (`src/main/index.ts`).
 An enabled instance announces only its certificate fingerprint, device name,
 and TLS port by IPv4 multicast on `239.255.43.71:43871`.
 The multicast TTL is one hop. A peer expires after 15 seconds without a
@@ -67,22 +67,22 @@ The user requests a link on one device. Both devices then display a
 The user must compare and approve the code on **both** devices.
 A dial has a 10-second TLS connection deadline. An established connection
 does not expire because it is idle. An unfinished pairing expires after
-90 seconds (`src/main/fleet/service.ts:403-432,510-541`).
+90 seconds (`src/main/fleet/service.ts`).
 If both devices request a link at once, they keep the same TLS connection
 according to their certificate identities. A newly preferred connection
 cannot replace an existing channel while its trust save is pending; the
 original comparison code and request gate remain active until persistence
 succeeds, or the channel closes on failure
-(`src/main/fleet/service.ts:494-527,625-656`).
+(`src/main/fleet/service.ts`).
 No peer can run an operation before both approvals are saved.
 Revocation closes the active channel and blocks future pairing with that
-fingerprint while the trust file is intact (`src/main/fleet/service.ts:800-824`).
+fingerprint while the trust file is intact (`src/main/fleet/service.ts`).
 If saving revocation fails, Fleet closes all connections and attempts to
 persist disabled trust without any approved peers. If even that fails, it
 removes the old trust file so a restart cannot restore trusted connections;
 previous revocation history is then lost. If storage cannot be written **or**
 removed, Fleet reports an error and cannot guarantee durable revocation until
-the storage fault is repaired (`src/main/fleet/service.ts:220-241`).
+the storage fault is repaired (`src/main/fleet/service.ts`).
 
 A linked peer can read project names and live shell status; launch or reattach
 the remote machine's configured primary Claude command; launch a secondary
@@ -114,14 +114,15 @@ marker, live PTY output and exit events. The stream is authenticated against
 the linked peer and a per-attachment identifier; input and resize are bounded,
 and unsubscribe, link loss or revocation release the PTY listeners. Frames are
 limited to 16 KiB, paced at 50 per second per peer, with at most four active
-attachments per connection. An initial screen over 4 MiB or live output that
-exceeds its buffer terminates the attachment rather than returning a partial
-terminal state (`src/main/fleet/channel.ts`, `protocol.ts`, `service.ts`).
+attachments in each direction per connection. An initial screen over 4 MiB
+ends that attachment; live output exceeding its buffer closes the peer
+connection rather than returning a partial terminal state
+(`src/main/fleet/channel.ts`, `protocol.ts`, `service.ts`).
 Only whitelisted launch failures leave the remote machine; its paths and
 credentials are never included in Fleet status or errors.
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
-the network or credential store (`src/main/fleet/service.ts:86-103,261-271`).
+the network or credential store (`src/main/fleet/service.ts`).
 
 ### Main-process responsiveness
 

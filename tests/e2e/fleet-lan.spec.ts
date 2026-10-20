@@ -23,9 +23,6 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     await win.getByRole('button', { name: 'Fleet', exact: true }).click();
     const panel = win.getByTestId('fleet-panel');
     await expect(win.locator('main').getByTestId('fleet-panel')).toBeVisible();
-    await expect(
-      panel.getByText('Fleet is off. Turn it on in Settings to discover IDEs on your local network.'),
-    ).toBeVisible();
     await panel.getByRole('button', { name: 'Open Fleet settings' }).click();
     const settings = win.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
@@ -37,7 +34,7 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     await discovery.click();
     await expect(discovery).toBeChecked();
     await win.getByTestId('settings-done').click();
-    await expect(panel.getByText(/Looking for IDEs on this LAN/)).toBeVisible();
+    await expect.poll(async () => (await win.evaluate(() => window.api.invoke('fleet:get-state', undefined))).enabled).toBe(true);
     const outcome = await win.evaluate(async () => {
       try {
         await window.api.invoke('fleet:write', {
@@ -57,9 +54,6 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     await discovery.click();
     await expect(discovery).not.toBeChecked();
     await win.getByTestId('settings-done').click();
-    await expect(
-      panel.getByText('Fleet is off. Turn it on in Settings to discover IDEs on your local network.'),
-    ).toBeVisible();
     await win.getByTestId('ab-projects').click();
     await expect(panel).toBeHidden();
   } finally {

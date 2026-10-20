@@ -8,18 +8,44 @@ import type { FleetState, FleetStatus } from '@shared/fleet-contract';
 import type { Project, Root } from '@shared/types';
 import type { RemoteProjectSelection } from '@renderer/components/Sidebar';
 
-const scenario = vi.hoisted(() => ({ fleet: null as FleetState | null, statuses: {} as Record<string, { kind: 'ready' | 'error'; data?: FleetStatus }>, cursor: 0 }));
+interface Scenario {
+  fleet: unknown;
+  statuses: unknown;
+  readonly refs: Array<{ current: unknown }>;
+  readonly effects: Array<() => unknown>;
+  emit: ((next: FleetState) => void) | null;
+  error: boolean;
+  cursor: number;
+  refCursor: number;
+}
+const scenario = vi.hoisted((): Scenario => {
+  const fleet: unknown = null;
+  const statuses: unknown = {};
+  const refs: Array<{ current: unknown }> = [];
+  const effects: Array<() => unknown> = [];
+  const emit: ((next: FleetState) => void) | null = null;
+  return { fleet, statuses, refs, effects, emit, error: false, cursor: 0, refCursor: 0 };
+});
 vi.mock('react', async (original) => ({
   ...(await original<typeof ReactModule>()),
   useState: (initial: unknown) => {
     const index = scenario.cursor++;
-    const value = index === 1 ? scenario.fleet : index === 3 ? scenario.statuses : typeof initial === 'function' ? Reflect.apply(initial, undefined, []) : initial;
-    return [value, () => undefined];
+    const value = index === 1 ? scenario.fleet : index === 2 ? scenario.error :
+      index === 3 ? scenario.statuses : typeof initial === 'function' ? Reflect.apply(initial, undefined, []) : initial;
+    return [value, (next: unknown) => {
+      const resolved = typeof next === 'function' ? Reflect.apply(next, undefined, [index === 1 ? scenario.fleet : index === 3 ? scenario.statuses : value]) : next;
+      if (index === 1) scenario.fleet = resolved;
+      if (index === 2) scenario.error = resolved === true;
+      if (index === 3) scenario.statuses = resolved;
+    }];
   },
-  useRef: (value: unknown) => ({ current: value }),
+  useRef: (value: unknown) => {
+    const index = scenario.refCursor++;
+    return scenario.refs[index] ??= { current: value };
+  },
   useMemo: (fn: () => unknown) => fn(),
   useCallback: (fn: unknown) => fn,
-  useEffect: () => undefined,
+  useEffect: (callback: () => unknown) => { scenario.effects.push(callback); },
 }));
 const local: Project = {
   id: 12, rootId: 1, name: 'Service', path: '/work/Service', config: {},
@@ -33,7 +59,9 @@ vi.mock('@renderer/hooks/useRecents', () => ({ useRecents: () => ({ recents: [] 
 vi.mock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: new Set<number>() }) }));
 vi.mock('@renderer/hooks/useAgentStates', () => ({ useOverallAgentState: () => 'idle', useProjectAgentState: () => 'idle' }));
 vi.mock('@renderer/components/SidebarHeader', () => ({ SidebarHeader: () => null }));
-vi.mock('@renderer/api', () => ({ api: { invoke: vi.fn() } }));
+const invoke = vi.hoisted(() => vi.fn());
+const on = vi.hoisted(() => vi.fn());
+vi.mock('@renderer/api', () => ({ api: { invoke, on } }));
 const { Sidebar } = await import('@renderer/components/Sidebar');
 const chosen: RemoteProjectSelection = { peerId: 'machine-b', peerName: 'Build Mac', projectId: 12, projectName: 'Service' };
 const onSelect = vi.fn();
@@ -61,9 +89,22 @@ function row(node: ReactElement, testId: string): boolean {
   return node.type === 'button' && props !== null && typeof props === 'object' &&
     'data-testid' in props && props['data-testid'] === testId;
 }
-function markup() { scenario.cursor = 0; return renderToStaticMarkup(<Sidebar {...props} />); }
+function markup() { scenario.cursor = 0; scenario.refCursor = 0; return renderToStaticMarkup(<Sidebar {...props} />); }
 beforeEach(() => {
   onSelect.mockClear();
+  scenario.cursor = 0;
+  scenario.refCursor = 0;
+  scenario.refs.length = 0;
+  scenario.effects.length = 0;
+  scenario.emit = null;
+  scenario.error = false;
+  invoke.mockReset();
+  on.mockReset();
+  invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'fleet:get-state' ? scenario.fleet : status));
+  on.mockImplementation((_channel: string, listener: (next: FleetState) => void) => {
+    scenario.emit = listener;
+    return () => { if (scenario.emit === listener) scenario.emit = null; };
+  });
   onSelectRemote.mockClear();
   scenario.fleet = { enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'linked' }, { id: 'machine-c', name: 'Other Mac', status: 'offline' }] };
   scenario.statuses = { 'machine-b': { kind: 'ready', data: status }, 'machine-c': { kind: 'ready', data: status } };
@@ -111,8 +152,41 @@ describe('Projects sidebar Fleet grouping', () => {
   it('shows an actionable failure rather than treating failed status as empty projects', () => {
     scenario.statuses = { 'machine-b': { kind: 'error' } };
     const html = markup();
-    expect(html).toContain('Could not load projects on Build Mac');
-    expect(html).toContain('Retry');
-    expect(html).not.toContain('Service on Build Mac');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('>Retry</button>');
+    expect(html).not.toContain('data-testid="remote-project-row"');
+  });
+
+  it('ignores an in-flight status after link loss, then loads current projects on reconnection', async () => {
+    scenario.statuses = {};
+    const replies: Array<(data: FleetStatus) => void> = [];
+    invoke.mockImplementation((channel: string) => channel === 'fleet:get-state'
+      ? Promise.resolve(scenario.fleet)
+      : new Promise<FleetStatus>((resolve) => { replies.push(resolve); }));
+    vi.stubGlobal('window', { setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
+    scenario.cursor = 0;
+    scenario.refCursor = 0;
+    Sidebar(props);
+    const disconnect = scenario.effects[0]?.();
+    await Promise.resolve();
+    const stopRefresh = scenario.effects[1]?.();
+    expect(invoke).toHaveBeenCalledWith('fleet:status', { peerId: 'machine-b' });
+    const oldReply = replies[0];
+    expect(oldReply).toBeDefined();
+    scenario.emit?.({ enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'offline' }] });
+    oldReply?.(status);
+    await Promise.resolve();
+    await Promise.resolve();
+    scenario.emit?.({ enabled: true, peers: [{ id: 'machine-b', name: 'Build Mac', status: 'linked' }] });
+    expect(markup()).not.toContain('data-testid=\"remote-project-row\"');
+    scenario.effects[1]?.();
+    const freshReply = replies[1];
+    expect(freshReply).toBeDefined();
+    freshReply?.(status);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(markup()).toContain('data-testid=\"remote-project-row\"');
+    if (typeof stopRefresh === 'function') stopRefresh();
+    if (typeof disconnect === 'function') disconnect();
   });
 });

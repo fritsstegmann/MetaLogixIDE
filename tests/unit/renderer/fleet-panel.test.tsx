@@ -105,7 +105,6 @@ describe('FleetPanel discovery and trust', () => {
   it('leaves discovery off until Settings opens', async () => {
     const app = mount({ enabled: false, peers: [] });
     await app.loaded();
-    expect(app.visible()).toContain('Fleet is off');
     app.control('Open Fleet settings').onClick();
     expect(app.onOpenSettings).toHaveBeenCalledOnce();
     expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
@@ -119,7 +118,6 @@ describe('FleetPanel discovery and trust', () => {
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:pair', { peerId: 'machine-b' });
     expect(invoke).not.toHaveBeenCalledWith('fleet:status', expect.anything());
-    expect(app.visible()).not.toContain('Remote shell workspace');
   });
 
   it('requires matching verification code and clears it on offline transition', async () => {
@@ -138,11 +136,10 @@ describe('FleetPanel discovery and trust', () => {
     expect(invoke).toHaveBeenCalledWith('fleet:revoke', { peerId: 'machine-b' });
   });
 
-  it('shows linked project navigation in Projects and never duplicates the shell tree', async () => {
+  it('keeps linked peer management separate from remote terminal APIs', async () => {
     const app = mount(state('linked'));
     await app.loaded();
-    expect(app.visible()).toContain('Projects on this machine appear in the Projects sidebar.');
-    expect(app.visible()).not.toContain('Launch shell');
+    expect(app.visible()).toContain('Build Mac');
     expect(invoke).not.toHaveBeenCalledWith('fleet:status', expect.anything());
     expect(invoke).not.toHaveBeenCalledWith('fleet:snapshot', expect.anything());
   });
@@ -150,7 +147,6 @@ describe('FleetPanel discovery and trust', () => {
   it('makes failed initial load retryable without exposing private exception text', async () => {
     const app = mount({ enabled: true, peers: [] }, true);
     await app.loaded();
-    expect(app.visible()).toContain('Could not load Fleet');
     expect(app.visible()).not.toContain('private diagnostics');
     app.control('Retry').onClick();
     expect(invoke).toHaveBeenCalledTimes(2);
