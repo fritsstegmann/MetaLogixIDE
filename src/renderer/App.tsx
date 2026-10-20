@@ -91,11 +91,11 @@ interface ProjectUiState {
 }
 
 /**
- * The sidebar fold's flags and terminal hold. `animate` is sampled when `open` flips: mouse
+ * A side pane's fold flags and terminal hold (the sidebar, and the activity sheet inside it). `animate` is sampled when `open` flips: mouse
  * toggles fold (holding terminal geometry until the fold completes), keyboard toggles are instant
  * and take no hold. Returns the `custom` for the fold and its completion handler.
  */
-function useSidebarFold(open: boolean, animate: boolean) {
+function usePaneFold(open: boolean, animate: boolean) {
   const reduced = usePrefersReducedMotion();
   const [prevOpen, setPrevOpen] = useState(open);
   const [folding, setFolding] = useState(false);
@@ -282,7 +282,10 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
-  const sidebarFold = useSidebarFold(sidebarOpen, sidebarAnimate);
+  const sidebarFold = usePaneFold(sidebarOpen, sidebarAnimate);
+  // Only an activity-bar click folds the sheet; keyboard and palette paths switch it instantly.
+  const [sheetAnimate, setSheetAnimate] = useState(false);
+  const sheetFold = usePaneFold(activeView !== 'projects', sheetAnimate);
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
@@ -861,7 +864,9 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            setActiveView(sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v);
+            const next = sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v;
+            setSheetAnimate((next !== 'projects') !== (activeView !== 'projects'));
+            setActiveView(next);
             if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
@@ -903,86 +908,92 @@ function MainApp() {
                 max={SIDEBAR_WIDTH.max}
                 side="left"
               />
-              {activeView === 'chat' && (
-                <>
-                  <div
-                    data-view="chat"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <ChatTab
-                      projectId={selected?.id ?? 0}
-                      metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                      compact
-                      onDismiss={() => setActiveView('projects')}
-                    />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={300}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
-              {activeView === 'git' && (
-                <>
-                  <div
-                    data-view="git"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <GitPanel projectId={selected?.id ?? null} />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={280}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
-              {activeView === 'tasks' && (
-                <>
-                  <div
-                    data-view="tasks"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <TasksPanel
-                      projectId={selected?.id ?? null}
-                      onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                    />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={280}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
-              {activeView === 'fleet' && (
-                <>
-                  <div className="section-panel h-full flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
-                    <FleetPanel />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={300}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
+              <AnimatePresence initial={false} custom={sheetFold.custom}>
+                {activeView !== 'projects' && (
+                  <FoldPane key="sheet" size="intrinsic" anchor="end" className="sheet-fold" custom={sheetFold.custom} onFoldComplete={() => { sheetFold.onFoldComplete(); setSheetAnimate(false); }}>
+                    {activeView === 'chat' && (
+                      <>
+                        <div
+                          data-view="chat"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <ChatTab
+                            projectId={selected?.id ?? 0}
+                            metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                            compact
+                            onDismiss={() => setActiveView('projects')}
+                          />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={300}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'git' && (
+                      <>
+                        <div
+                          data-view="git"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <GitPanel projectId={selected?.id ?? null} />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={280}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'tasks' && (
+                      <>
+                        <div
+                          data-view="tasks"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <TasksPanel
+                            projectId={selected?.id ?? null}
+                            onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
+                          />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={280}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'fleet' && (
+                      <>
+                        <div className="section-panel h-full flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
+                          <FleetPanel />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={300}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                  </FoldPane>
+                )}
+              </AnimatePresence>
             </FoldPane>
           )}
         </AnimatePresence>

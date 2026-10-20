@@ -1059,6 +1059,11 @@ kbd {
     width: 100% !important;
     min-width: 0;
   }
+  /* Activity sheets fill the pane on a narrow window, so the fold wrapper must too. */
+  .fleet-projects-pane .sheet-fold,
+  .fleet-projects-pane .sheet-fold > div {
+    width: 100% !important;
+  }
   .fleet-projects-pane [data-testid="resize-handle"] { display: none; }
   .fleet-projects-pane.fleet-sheet-open {
     background: rgb(from var(--surface-chrome) r g b / 1);
