@@ -242,12 +242,26 @@ function ProjectRow({
       toast('Copy failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
     }
   }
+  // Launch the project with a brand-new Claude session, bypassing --continue.
+  // Selects the project first so the shell tab is visible, then kills any
+  // existing shell before relaunching clean.
+  async function startFresh() {
+    try {
+      onSelect(project);
+      try { await api.invoke('shells:kill', { projectId: project.id, shellIndex: 0 }); } catch { /* no shell to kill */ }
+      await api.invoke('shells:launch', { projectId: project.id, forceFirst: true });
+      toast('Started fresh Claude session', { kind: 'success', timeoutMs: 1500 });
+    } catch (e) {
+      toast('Fresh start failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
+    }
+  }
   function onContextMenu(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY });
   }
   const menuItems: ContextMenuItem[] = [
+    { label: 'Start fresh Claude session', onClick: () => void startFresh(), separatorAfter: true },
     { label: 'Rename folder…',  onClick: () => onRename(project) },
     { label: ENV_COPY.contextMenuItem, onClick: () => onEditEnv(project) },
     { label: 'Reveal in Finder', onClick: () => void revealInFinder(), separatorAfter: true },
