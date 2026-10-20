@@ -40,6 +40,7 @@ export interface FleetTrust {
 }
 const SERVICE = 'metaIDE.fleet.identity';
 const FINGERPRINT = /^[0-9a-f]{64}$/;
+const MAX_TRUST_BYTES = 1024 * 1024;
 
 async function systemKeychain(): Promise<FleetKeychain> {
   // Load the native module only after opt-in: missing keytar must not prevent the rest of the app from starting.
@@ -79,7 +80,7 @@ function parseTrust(value: unknown): FleetTrust {
     !Array.isArray(entry.trusted) ||
     !Array.isArray(entry.revoked) ||
     entry.trusted.length > 256 ||
-    entry.revoked.length > 256
+    entry.revoked.length > Math.floor(MAX_TRUST_BYTES / 64)
   )
     throw new Error('Invalid fleet trust store');
   const trusted: { id: string; name: string }[] = [];
@@ -104,10 +105,11 @@ function parseTrust(value: unknown): FleetTrust {
       throw new Error('Invalid fleet trust store');
     revoked.push(item);
   }
+  const revokedIds = new Set(revoked);
   if (
     new Set(trusted.map((peer) => peer.id)).size !== trusted.length ||
-    new Set(revoked).size !== revoked.length ||
-    trusted.some((peer) => revoked.includes(peer.id))
+    revokedIds.size !== revoked.length ||
+    trusted.some((peer) => revokedIds.has(peer.id))
   )
     throw new Error('Conflicting fleet trust store');
   return { enabled: entry.enabled, trusted, revoked };
@@ -218,7 +220,7 @@ export class FleetIdentityStore {
       const info = fstatSync(handle);
       if (
         !info.isFile() ||
-        info.size > 65536 ||
+        info.size > MAX_TRUST_BYTES ||
         (process.platform !== 'win32' &&
           (info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0))
       )
@@ -233,12 +235,15 @@ export class FleetIdentityStore {
   async save(trust: FleetTrust): Promise<void> {
     this.ensureDirectory();
     const valid = parseTrust(trust);
+    const serialized = JSON.stringify(valid);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_TRUST_BYTES)
+      throw new Error('Fleet trust store exceeds size limit');
     const path = join(this.directory, 'trust.json');
     if (existsSync(path)) ensureSafe(path, false);
     const temp = join(this.directory, `.${randomBytes(16).toString('hex')}.tmp`);
     const handle = openSync(temp, 'wx', 0o600);
     try {
-      writeFileSync(handle, JSON.stringify(valid), 'utf8');
+      writeFileSync(handle, serialized, 'utf8');
       if (process.platform !== 'win32') chmodSync(temp, 0o600);
       closeSync(handle);
       renameSync(temp, path);
@@ -251,5 +256,14 @@ export class FleetIdentityStore {
       rmSync(temp, { force: true });
       throw error;
     }
+  }
+
+  /** Removes stale trusted peers if a failed write cannot persist a safe disabled trust file. */
+  invalidate(): void {
+    this.ensureDirectory();
+    const path = join(this.directory, 'trust.json');
+    if (!existsSync(path)) return;
+    ensureSafe(path, false);
+    rmSync(path);
   }
 }

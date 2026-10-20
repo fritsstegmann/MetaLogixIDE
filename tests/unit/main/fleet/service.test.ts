@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Duplex } from 'node:stream';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Socket as DatagramSocket } from 'node:dgram';
 import { Server as TlsServer } from 'node:tls';
@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { FleetService, type FleetOperations } from '@main/fleet/service';
 import { FleetChannel } from '@main/fleet/channel';
 import { FleetDiscovery } from '@main/fleet/discovery';
-import type { FleetKeychain } from '@main/fleet/identity';
+import { FleetIdentityStore, type FleetKeychain } from '@main/fleet/identity';
 import { STATUS_PAGE_SIZE } from '@main/fleet/protocol';
 
 const roots: string[] = [];
@@ -154,6 +154,285 @@ describe('fleet authorization', () => {
     await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
     await expect(restarted.status(peerId)).rejects.toThrow();
     await restarted.stop();
+  });
+
+  it('keeps a disabled listener closed when credential loading completes after disable', async () => {
+    const fleet = service('Local');
+    await fleet.start();
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    const load = store.loadIdentity.bind(store);
+    let release!: () => void;
+    let loading!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      loading = resolve;
+    });
+    const deferred = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(store, 'loadIdentity').mockImplementationOnce(async (requireExisting) => {
+      loading();
+      await deferred;
+      return load(requireExisting);
+    });
+    try {
+      const enabling = fleet.setEnabled(true);
+      await entered;
+      const disabling = fleet.setEnabled(false);
+      let disabled = false;
+      void disabling.then(() => {
+        disabled = true;
+      });
+      await Promise.resolve();
+      expect(disabled).toBe(false);
+      release();
+      await enabling;
+      expect((await disabling).enabled).toBe(false);
+      expect(Reflect.get(fleet, 'server')).toBeNull();
+      expect(Reflect.get(fleet, 'discovery')).toBeNull();
+      expect(fleet.state().enabled).toBe(false);
+      expect((await store.load()).enabled).toBe(false);
+    } finally {
+      release();
+      spy.mockRestore();
+      await fleet.stop();
+    }
+  });
+
+  it('does not reopen after stop while a saved opt-in loads credentials', async () => {
+    const fleet = service('Local');
+    await fleet.start();
+    await fleet.setEnabled(true);
+    await fleet.stop();
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    const load = store.loadIdentity.bind(store);
+    let release!: () => void;
+    let loading!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      loading = resolve;
+    });
+    const deferred = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(store, 'loadIdentity').mockImplementationOnce(async (requireExisting) => {
+      loading();
+      await deferred;
+      return load(requireExisting);
+    });
+    try {
+      const starting = fleet.start();
+      await entered;
+      const stopping = fleet.stop();
+      release();
+      await starting;
+      await stopping;
+      expect(Reflect.get(fleet, 'server')).toBeNull();
+      expect(Reflect.get(fleet, 'discovery')).toBeNull();
+      expect(fleet.state().enabled).toBe(false);
+    } finally {
+      release();
+      spy.mockRestore();
+      await fleet.stop();
+    }
+  });
+
+  it('keeps opt-out durable when a pending enable fails credential loading', async () => {
+    const fleet = service('Local');
+    await fleet.start();
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    let release!: () => void;
+    let loading!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      loading = resolve;
+    });
+    const deferred = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(store, 'loadIdentity').mockImplementationOnce(async () => {
+      loading();
+      await deferred;
+      throw new Error('credential denied');
+    });
+    try {
+      const enabling = fleet.setEnabled(true);
+      void enabling.catch(() => {});
+      await entered;
+      const disabling = fleet.setEnabled(false);
+      release();
+      await expect(enabling).rejects.toThrow('credential denied');
+      expect((await disabling).enabled).toBe(false);
+      expect((await store.load()).enabled).toBe(false);
+      expect(Reflect.get(fleet, 'server')).toBeNull();
+      expect(Reflect.get(fleet, 'discovery')).toBeNull();
+    } finally {
+      release();
+      spy.mockRestore();
+      await fleet.stop();
+    }
+  });
+
+  it('preserves previously linked peers when enabling fails before networking', async () => {
+    const fleet = service('Local');
+    await fleet.start();
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    await store.loadIdentity();
+    const trusted = [{ id: 'b'.repeat(64), name: 'Existing peer' }];
+    await store.save({ enabled: false, trusted, revoked: [] });
+    await fleet.stop();
+    await fleet.start();
+    const spy = vi
+      .spyOn(store, 'loadIdentity')
+      .mockRejectedValueOnce(new Error('credential denied'));
+    try {
+      await expect(fleet.setEnabled(true)).rejects.toThrow('credential denied');
+      expect(await store.load()).toEqual({ enabled: false, trusted, revoked: [] });
+      expect(fleet.state().peers).toEqual([
+        { id: trusted[0]!.id, name: 'Existing peer', status: 'offline' },
+      ]);
+      expect(Reflect.get(fleet, 'server')).toBeNull();
+    } finally {
+      spy.mockRestore();
+      await fleet.stop();
+    }
+  });
+
+  it('revokes a linked 257th fingerprint without losing earlier revocations on restart', async () => {
+    const fleet = service('Local');
+    const storageDir = roots[roots.length - 1];
+    if (!storageDir) throw new Error('Missing fixture directory');
+    await fleet.start();
+    const earlier = Array.from({ length: 256 }, (_, index) => index.toString(16).padStart(64, '0'));
+    const peerId = 'f'.repeat(64);
+    const store = new FleetIdentityStore(storageDir, keychain);
+    await store.loadIdentity();
+    await store.save({
+      enabled: true,
+      trusted: [{ id: peerId, name: 'Peer' }],
+      revoked: earlier,
+    });
+    const channel = linkedChannel(fleet, peerId);
+    Reflect.set(fleet, 'trust', {
+      enabled: true,
+      trusted: [{ id: peerId, name: 'Peer' }],
+      revoked: earlier,
+    });
+    await fleet.revoke(peerId);
+    expect(channel.socket.destroyed).toBe(true);
+    expect((await store.load()).revoked).toEqual([...earlier, peerId]);
+    expect((await store.load()).trusted).toEqual([]);
+    await expect(fleet.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+    await fleet.stop();
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+    });
+    await restarted.start();
+    expect(restarted.state().error).toBeUndefined();
+    await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+    expect((await store.load()).revoked).toEqual([...earlier, peerId]);
+    await restarted.stop();
+  });
+
+  it('keeps a revoked peer denied and clears saved trust when persistence fails', async () => {
+    const fleet = service('Local');
+    const storageDir = roots[roots.length - 1];
+    if (!storageDir) throw new Error('Missing fixture directory');
+    await fleet.start();
+    const peerId = 'e'.repeat(64);
+    const otherId = 'c'.repeat(64);
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    const trusted = [
+      { id: peerId, name: 'Peer' },
+      { id: otherId, name: 'Other' },
+    ];
+    await store.save({ enabled: true, trusted, revoked: [] });
+    const channel = linkedChannel(fleet, peerId);
+    const otherChannel = linkedChannel(fleet, otherId);
+    Reflect.set(fleet, 'trust', { enabled: true, trusted, revoked: [] });
+    const spy = vi.spyOn(store, 'save').mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+    try {
+      await expect(fleet.revoke(peerId)).rejects.toThrow('disk full');
+      expect(channel.socket.destroyed).toBe(true);
+      expect(otherChannel.socket.destroyed).toBe(true);
+      await expect(fleet.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+      expect((await store.load()).trusted).toEqual([]);
+      expect((await store.load()).revoked).toEqual([peerId]);
+      const persisted = readFileSync(join(storageDir, 'trust.json'), 'utf8');
+      expect(persisted).not.toContain('"trusted":[{"id"');
+    } finally {
+      spy.mockRestore();
+      await fleet.stop();
+    }
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+    });
+    await restarted.start();
+    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    expect((await store.load()).revoked).toEqual([peerId]);
+    await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+    await restarted.stop();
+  });
+
+  it('invalidates stale trusted storage when both revocation writes fail', async () => {
+    const fleet = service('Local');
+    const storageDir = roots[roots.length - 1];
+    if (!storageDir) throw new Error('Missing fixture directory');
+    await fleet.start();
+    const peerId = 'd'.repeat(64);
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    await store.save({ enabled: true, trusted: [{ id: peerId, name: 'Peer' }], revoked: [] });
+    const channel = linkedChannel(fleet, peerId);
+    const spy = vi.spyOn(store, 'save').mockRejectedValue(new Error('disk full'));
+    try {
+      await expect(fleet.revoke(peerId)).rejects.toThrow('disk full');
+      expect(channel.socket.destroyed).toBe(true);
+      await expect(fleet.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+      expect(await store.load()).toEqual({ enabled: false, trusted: [], revoked: [] });
+    } finally {
+      spy.mockRestore();
+      await fleet.stop();
+    }
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+    });
+    await restarted.start();
+    expect(restarted.state()).toEqual({ enabled: false, peers: [] });
+    await expect(restarted.pair(peerId)).rejects.toThrow('Peer not available for pairing');
+    await restarted.stop();
+  });
+
+  it('fails closed when disabling cannot save the opt-out', async () => {
+    const fleet = service('Local');
+    await fleet.start();
+    await fleet.setEnabled(true);
+    const store: unknown = Reflect.get(fleet, 'store');
+    if (!(store instanceof FleetIdentityStore)) throw new Error('Fleet trust store unavailable');
+    const spy = vi.spyOn(store, 'save').mockRejectedValue(new Error('disk full'));
+    try {
+      await expect(fleet.setEnabled(false)).rejects.toThrow('disk full');
+      expect(fleet.state().enabled).toBe(false);
+      expect(Reflect.get(fleet, 'server')).toBeNull();
+      expect(Reflect.get(fleet, 'discovery')).toBeNull();
+      expect(await store.load()).toEqual({ enabled: false, trusted: [], revoked: [] });
+    } finally {
+      spy.mockRestore();
+      await fleet.stop();
+    }
   });
 
   it('does not stay enabled when the credential store fails', async () => {

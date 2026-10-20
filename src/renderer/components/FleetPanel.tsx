@@ -197,7 +197,8 @@ function RemoteView({
       )}
       {status?.kind === 'error' && status.peerId === peer.id && (
         <p role="alert" className="text-base text-[--danger]">
-          Could not load remote status. Check the other machine and connection, then refresh.
+          Could not load remote status. Check the connection and the peer’s 256-project and
+          256-shell Fleet limit, then refresh.
         </p>
       )}
       {loaded && (

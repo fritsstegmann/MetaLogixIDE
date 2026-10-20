@@ -49,6 +49,26 @@ describe('fleet trust persistence', () => {
     }
   });
 
+  it('keeps more than 256 revoked identities within a bounded owner-only file', async () => {
+    const { dir, keychain } = fixture();
+    const store = new FleetIdentityStore(dir, keychain);
+    const revoked = Array.from({ length: 257 }, (_, index) => index.toString(16).padStart(64, '0'));
+    await store.save({ enabled: false, trusted: [], revoked });
+    expect((await store.load()).revoked).toEqual(revoked);
+    if (process.platform !== 'win32')
+      expect(lstatSync(join(dir, 'trust.json')).mode & 0o777).toBe(0o600);
+    await expect(
+      store.save({
+        enabled: true,
+        trusted: [],
+        revoked: Array.from({ length: 16_000 }, (_, index) => index.toString(16).padStart(64, '0')),
+      }),
+    ).rejects.toThrow('Fleet trust store exceeds size limit');
+    expect((await store.load()).revoked).toEqual(revoked);
+    writeFileSync(join(dir, 'trust.json'), 'x'.repeat(1024 * 1024 + 1));
+    await expect(store.load()).rejects.toThrow('Unsafe fleet trust store');
+  });
+
   it('creates distinct certificates for two runtimes with separate trust directories', async () => {
     const { dir, keychain } = fixture();
     const other = mkdtempSync(join(tmpdir(), 'fleet-trust-'));

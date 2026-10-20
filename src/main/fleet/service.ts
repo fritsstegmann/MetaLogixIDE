@@ -74,6 +74,7 @@ export class FleetService {
   private started = false;
   private starting: Promise<void> | null = null;
   private networkError: string | null = null;
+  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: FleetOptions) {
     if (!options.name.trim() || Buffer.byteLength(options.name, 'utf8') > 80)
@@ -82,44 +83,40 @@ export class FleetService {
   }
 
   /** Loads persisted opt-in and starts network listeners only if enabled. */
-  async start(): Promise<void> {
-    if (this.started) return;
-    try {
-      this.trust = await this.store.load();
-      this.started = true;
-      if (this.trust.enabled) await this.open();
-      this.networkError = null;
-    } catch {
-      this.started = true;
-      this.networkError =
-        'Fleet network unavailable. Check the local network and credential store, then disable and re-enable fleet.';
-      await this.closeNetwork();
-    }
-    this.notify();
+  start(): Promise<void> {
+    return this.runLifecycle(async () => {
+      if (this.started) return;
+      try {
+        this.trust = await this.store.load();
+        this.started = true;
+        if (this.trust.enabled) await this.open();
+        this.networkError = null;
+      } catch {
+        this.started = true;
+        this.networkError =
+          'Fleet network unavailable. Check the local network and credential store, then disable and re-enable fleet.';
+        await this.closeNetwork();
+      }
+      this.notify();
+    });
   }
 
   /** Tears down transport, pending approvals and timers without changing saved opt-in. */
-  async stop(): Promise<void> {
-    this.started = false;
-    clearInterval(this.reconnectTimer);
-    this.reconnectTimer = undefined;
-    this.discovery?.stop();
-    this.discovery = null;
-    for (const session of this.sessions.values()) {
-      clearTimeout(session.deadline);
-      session.channel.close();
-    }
-    this.sessions.clear();
-    const server = this.server;
-    this.server = null;
-    if (server)
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
-    this.presence = [];
-    this.notify();
+  stop(): Promise<void> {
+    return this.runLifecycle(async () => {
+      this.started = false;
+      await this.closeNetwork();
+      this.notify();
+    });
+  }
+
+  private runLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycle.then(operation);
+    this.lifecycle = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   }
 
   /** Returns only public peer identity before approval and never includes terminal content. */
@@ -181,34 +178,65 @@ export class FleetService {
     for (const listener of this.listeners) listener(state);
   }
 
-  /** Persists opt-in before opening transport; disabling revokes live access immediately. */
-  async setEnabled(enabled: boolean): Promise<FleetState> {
-    if (!this.started) throw new Error('Fleet service not started');
-    if (this.trust.enabled === enabled) return this.state();
-    const prior = this.trust;
-    this.trust = { ...prior, enabled };
-    try {
-      await this.store.save(this.trust);
-    } catch (error) {
-      this.trust = prior;
-      throw error;
-    }
-    if (enabled) {
+  /** Persists opt-in before opening transport; disabling waits for earlier startup to finish. */
+  setEnabled(enabled: boolean): Promise<FleetState> {
+    return this.runLifecycle(async () => {
+      if (!this.started) throw new Error('Fleet service not started');
+      if (this.trust.enabled === enabled) return this.state();
+      const prior = this.trust;
+      const next = { ...prior, enabled };
+      this.trust = next;
       try {
-        await this.open();
+        await this.store.save(next);
       } catch (error) {
+        if (!enabled) return this.failClosed(error, next);
         this.trust = prior;
-        this.networkError =
-          'Fleet network unavailable. Check the local network and credential store, then retry.';
-        await this.store.save(prior);
-        await this.closeNetwork();
-        this.notify();
         throw error;
       }
-    } else await this.closeNetwork();
-    this.networkError = null;
+      if (enabled) {
+        try {
+          await this.open();
+        } catch (error) {
+          this.trust = prior;
+          this.networkError =
+            'Fleet network unavailable. Check the local network and credential store, then retry.';
+          await this.closeNetwork();
+          try {
+            await this.store.save(prior);
+          } catch (saveError) {
+            return this.failClosed(saveError, prior);
+          }
+          this.notify();
+          throw error;
+        }
+      } else await this.closeNetwork();
+      this.networkError = null;
+      this.notify();
+      return this.state();
+    });
+  }
+
+  private async failClosed(error: unknown, trust: FleetTrust): Promise<never> {
+    const safe: FleetTrust = { ...trust, enabled: false, trusted: [] };
+    this.trust = safe;
+    this.networkError =
+      'Fleet trust unavailable. The network is closed; check fleet storage before enabling it again.';
+    await this.closeNetwork();
+    try {
+      await this.store.save(safe);
+    } catch (saveError) {
+      try {
+        this.store.invalidate();
+      } catch (invalidateError) {
+        this.notify();
+        throw new AggregateError(
+          [error, saveError, invalidateError],
+          'Fleet trust cannot be secured on disk',
+        );
+      }
+    }
     this.notify();
-    return this.state();
+    throw error;
   }
 
   private async closeNetwork(): Promise<void> {
@@ -230,10 +258,15 @@ export class FleetService {
   }
 
   private networkFailed(): void {
-    if (!this.trust.enabled) return;
+    const server = this.server;
+    if (!server || !this.started || !this.trust.enabled) return;
     this.networkError =
       'Fleet network unavailable. Check the local network and firewall, then disable and re-enable fleet.';
-    void this.closeNetwork().then(() => this.notify());
+    void this.runLifecycle(async () => {
+      if (this.server !== server || !this.started || !this.trust.enabled) return;
+      await this.closeNetwork();
+      this.notify();
+    });
   }
 
   private async open(): Promise<void> {
@@ -263,7 +296,9 @@ export class FleetService {
     this.guardPreAuth(server);
     server.maxConnections = 25;
     this.server = server;
-    server.on('error', () => this.networkFailed());
+    server.on('error', () => {
+      if (this.server === server) this.networkFailed();
+    });
     try {
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
@@ -317,24 +352,28 @@ export class FleetService {
   private async startDiscovery(server: Server, identity: FleetIdentity): Promise<void> {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Fleet listener unavailable');
-    this.discovery = new FleetDiscovery(
+    const discovery = new FleetDiscovery(
       identity.id,
       this.options.name,
       (peers) => {
+        if (this.discovery !== discovery) return;
         this.presence = peers;
         this.notify();
         this.reconnect();
       },
-      () => this.networkFailed(),
+      () => {
+        if (this.discovery === discovery) this.networkFailed();
+      },
     );
-    await this.discovery.start(address.port);
+    this.discovery = discovery;
+    await discovery.start(address.port);
     this.reconnectTimer = setInterval(() => {
       this.reconnect();
     }, 5000);
   }
 
   private reconnect(): void {
-    if (!this.identity || !this.trust.enabled) return;
+    if (!this.started || !this.identity || !this.trust.enabled) return;
     for (const peer of this.presence) {
       if (
         !this.trust.trusted.some((item) => item.id === peer.id) ||
@@ -349,14 +388,15 @@ export class FleetService {
   }
 
   private async dial(peer: Presence): Promise<void> {
-    if (!this.identity || this.sessions.has(peer.id)) return;
+    if (!this.started || !this.trust.enabled || !this.identity || this.sessions.has(peer.id))
+      return;
     if (this.starting) {
       try {
         await this.starting;
       } catch {
         /* another peer's failure must not cancel this dial */
       }
-      if (this.sessions.has(peer.id)) return;
+      if (!this.started || !this.trust.enabled || this.sessions.has(peer.id)) return;
     }
     const identity = this.identity;
     const connection = new Promise<void>((resolve, reject) => {
@@ -412,7 +452,7 @@ export class FleetService {
   }
 
   private accept(socket: TLSSocket, expected?: string): boolean {
-    if (!this.trust.enabled || !this.identity) {
+    if (!this.started || !this.trust.enabled || !this.identity) {
       socket.destroy();
       return false;
     }
@@ -714,6 +754,7 @@ export class FleetService {
   /** Opens a time-bound TLS pairing session to a discovered certificate identity. */
   async pair(peerId: string): Promise<void> {
     if (
+      !this.started ||
       !this.trust.enabled ||
       !ID.test(peerId) ||
       this.trust.revoked.includes(peerId) ||
@@ -742,29 +783,30 @@ export class FleetService {
     await this.finishPair(session);
   }
 
-  /** Cancels an unfinished pairing or disconnects and persistently revokes an established link. */
-  async revoke(peerId: string): Promise<void> {
-    if (!ID.test(peerId)) throw new Error('Invalid peer identity');
-    if (this.sessions.has(peerId) && !this.trust.trusted.some((peer) => peer.id === peerId)) {
+  /** Cancels unfinished pairing or persistently denies an established certificate. */
+  revoke(peerId: string): Promise<void> {
+    return this.runLifecycle(async () => {
+      if (!ID.test(peerId)) throw new Error('Invalid peer identity');
+      if (this.sessions.has(peerId) && !this.trust.trusted.some((peer) => peer.id === peerId)) {
+        this.sessions.get(peerId)?.channel.close();
+        this.notify();
+        return;
+      }
+      const old = this.trust;
+      const next: FleetTrust = {
+        ...old,
+        trusted: old.trusted.filter((peer) => peer.id !== peerId),
+        revoked: old.revoked.includes(peerId) ? old.revoked : [...old.revoked, peerId],
+      };
+      this.trust = next;
       this.sessions.get(peerId)?.channel.close();
+      try {
+        await this.store.save(next);
+      } catch (error) {
+        return this.failClosed(error, next);
+      }
       this.notify();
-      return;
-    }
-    const old = this.trust;
-    const next: FleetTrust = {
-      ...old,
-      trusted: old.trusted.filter((peer) => peer.id !== peerId),
-      revoked: old.revoked.includes(peerId) ? old.revoked : [...old.revoked, peerId],
-    };
-    this.trust = next;
-    this.sessions.get(peerId)?.channel.close();
-    try {
-      await this.store.save(next);
-    } catch (error) {
-      this.trust = old;
-      throw error;
-    }
-    this.notify();
+    });
   }
 
   private linked(peerId: string): FleetChannel {

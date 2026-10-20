@@ -58,9 +58,10 @@ Both devices must allow multicast discovery and TCP connections on the
 listener's assigned port. Fleet does not discover peers across routed networks.
 
 Each device keeps its TLS private key in the OS credential store
-(`src/main/fleet/identity.ts:129-203`).
+(`src/main/fleet/identity.ts:131-205`).
 The owner-only trust file records the opt-in setting, trusted certificate
-fingerprints, and revoked fingerprints (`src/main/fleet/identity.ts:205-253`).
+fingerprints, and revoked fingerprints in at most 1 MiB
+(`src/main/fleet/identity.ts:73-115,207-268`).
 The user requests a link on one device. Both devices then display a
 12-digit comparison code from their TLS identities and fresh session nonces.
 The user must compare and approve the code on **both** devices.
@@ -68,13 +69,23 @@ The Fleet view remains pending while local trust is saved. Incoming shell
 commands wait for that save to finish, and a failed save closes the connection.
 No peer can run an operation before both approvals are saved.
 Revocation closes the active channel and blocks future pairing with that
-fingerprint (`src/main/fleet/service.ts:542-598,714-767`).
+fingerprint while the trust file is intact (`src/main/fleet/service.ts:787-810`).
+If saving revocation fails, Fleet closes all connections and attempts to
+persist disabled trust without any approved peers. If even that fails, it
+removes the old trust file so a restart cannot restore trusted connections;
+previous revocation history is then lost. If storage cannot be written **or**
+removed, Fleet reports an error and cannot guarantee durable revocation until
+the storage fault is repaired (`src/main/fleet/service.ts:209-240`).
 
 A linked peer can read project names and live shell status, launch a plain
 shell, stop a shell, send input, and read bounded recent output.
 Status travels in bounded pages from one captured peer snapshot.
 The caller receives one complete project and shell list
-(`src/main/fleet/service.ts:647-712,783-813`).
+(`src/main/fleet/service.ts:687-752,826-855`).
+This POC publishes status for at most 256 projects and 256 live shells per
+machine. A larger inventory is rejected rather than shown as a partial list;
+the Fleet panel names that limit in its status error
+(`src/main/ipc/register.ts:1409-1412`).
 It cannot request project paths, project environment values, or unrelated
 local IPC operations. Shell input can execute arbitrary commands on the peer.
 Approve only devices that you trust.
@@ -84,7 +95,7 @@ The Fleet panel clears remote content when the link closes and shows network
 failure separately from an empty LAN (`src/renderer/components/FleetPanel.tsx:349-376,654-677`).
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
-the network or credential store (`src/main/fleet/service.ts:83-98,232-237`).
+the network or credential store (`src/main/fleet/service.ts:85-101,250-260`).
 
 ### Main-process responsiveness
 
