@@ -403,6 +403,23 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // forceFirst bypasses --continue and starts a brand-new Claude session —
     // used when the saved session is corrupted (e.g. invalid thinking signature).
     const project = forceFirst ? { ...projectRow, firstLaunchedAt: null } : projectRow;
+    // Claude Code auto-resumes the active project session (writes to the same
+    // .jsonl) regardless of --continue, so forceFirst alone can't rescue a
+    // bad session. Move the existing session files aside first — they stay
+    // on disk as .pre-fresh-<ts> backups so nothing is lost.
+    if (forceFirst) {
+      const encoded = project.path.replace(/[/ ]/g, '-');
+      const sessionDir = join(s.homeDir, '.claude', 'projects', encoded);
+      if (existsSync(sessionDir)) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        for (const n of readdirSync(sessionDir)) {
+          if (n.endsWith('.jsonl')) {
+            try { renameSync(join(sessionDir, n), join(sessionDir, `${n}.pre-fresh-${ts}`)); }
+            catch { /* best-effort */ }
+          }
+        }
+      }
+    }
     // Idempotent: clicking an already-open project (or a tab the sidebar
     // thinks might not be alive) used to re-enter here and throw "already
     // spawned". Just return the index — the renderer re-attaches the stream.
