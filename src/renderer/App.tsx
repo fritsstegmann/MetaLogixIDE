@@ -29,6 +29,7 @@ import { ProjectSearch } from './components/ProjectSearch';
 import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
+import { FleetPanel } from './components/FleetPanel';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
@@ -186,7 +187,7 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'fleet',
   );
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
@@ -834,8 +835,7 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            // Toggle if the same view is clicked twice — quality-of-life.
-            setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
+            setActiveView(sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v);
             if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
@@ -847,10 +847,7 @@ function MainApp() {
         <AnimatePresence initial={false} custom={sidebarFold.custom}>
           {sidebarOpen && (
             <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
-              {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-                  sits alongside it in its own resizable column instead of
-                  replacing it, so the user never has to swap views just to pick
-                  a different project. */}
+              <div className={activeView === 'fleet' ? 'hidden md:contents' : 'contents'}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
                 onSelect={pick}
@@ -867,6 +864,7 @@ function MainApp() {
                 max={SIDEBAR_WIDTH.max}
                 side="left"
               />
+              </div>
               {activeView === 'chat' && (
                 <>
                   <div
@@ -932,11 +930,28 @@ function MainApp() {
                   />
                 </>
               )}
+              {activeView === 'fleet' && (
+                <>
+                  <div data-view="fleet" className="section-panel h-full min-w-0 max-w-[calc(100vw-3.5rem)] flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
+                    <FleetPanel />
+                  </div>
+                  <div className="hidden md:contents">
+                  <ResizeHandle
+                    value={chatPanelWidth}
+                    onChange={setChatPanelWidth}
+                    onReset={() => setChatPanelWidth(400)}
+                    min={280}
+                    max={640}
+                    side="left"
+                  />
+                  </div>
+                </>
+              )}
             </FoldPane>
           )}
         </AnimatePresence>
         <main
-          className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
+          className={`flex-1 flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2 ${activeView === 'fleet' ? 'hidden md:flex' : 'flex'}`}
           data-sheet-content={mainSheetContent}
         >
           <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>

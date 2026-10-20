@@ -7,6 +7,7 @@ import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
+import type { FleetState, FleetStatus } from './fleet-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -381,6 +382,18 @@ export interface IpcContract {
     };
   };
 
+  /** Fleet transport and trust live only in main; the renderer sees approved peer state. */
+  'fleet:get-state':   { request: undefined; response: FleetState };
+  'fleet:set-enabled': { request: { enabled: boolean }; response: FleetState };
+  'fleet:pair':        { request: { peerId: string }; response: { ok: true } };
+  'fleet:approve':     { request: { peerId: string; verificationCode: string }; response: { ok: true } };
+  'fleet:revoke':      { request: { peerId: string }; response: { ok: true } };
+  'fleet:status':      { request: { peerId: string }; response: FleetStatus };
+  'fleet:launch':      { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  'fleet:stop':        { request: { peerId: string; projectId: number; shellIndex: number }; response: { ok: true } };
+  'fleet:write':       { request: { peerId: string; projectId: number; shellIndex: number; data: string }; response: { ok: true } };
+  'fleet:snapshot':    { request: { peerId: string; projectId: number; shellIndex: number }; response: { output: string; alive: boolean } };
+
   // health / dev
   'app:ping':    { request: undefined; response: 'pong' };
 }
@@ -416,5 +429,6 @@ export interface IpcEvents {
    * add the file's parent as a new root if nothing matches.
    */
   'app:open-file-request':  { path: string };
+  'fleet:changed':         FleetState;
 }
 export type IpcEventName = keyof IpcEvents;

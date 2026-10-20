@@ -2,6 +2,7 @@ import type { IpcMain } from 'electron';
 import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import type { Services } from '@main/services';
+import type { FleetOperations } from '@main/fleet/service';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { pruneMissingProjects } from '@main/domain/prune-missing';
@@ -195,6 +196,11 @@ function peekFile({ abs, root, projectId }: PeekCandidate, maxLines: number): Ip
   }
 }
 
+function needFleet(services: Services): NonNullable<Services['fleet']> {
+  if (!services.fleet) throw new Error('Fleet is not available');
+  return services.fleet;
+}
+
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'dialogs:pick-directory': async (_s, _req, event) => {
     if (process.env.METAIDE_TEST_MODE === '1') {
@@ -213,6 +219,27 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
 
   'app:ping': async () => 'pong',
+  'fleet:get-state': async (s) => needFleet(s).state(),
+  'fleet:set-enabled': async (s, { enabled }) => needFleet(s).setEnabled(enabled),
+  'fleet:pair': async (s, { peerId }) => { await needFleet(s).pair(peerId); return { ok: true }; },
+  'fleet:approve': async (s, { peerId, verificationCode }) => {
+    await needFleet(s).approve(peerId, verificationCode);
+    return { ok: true };
+  },
+  'fleet:revoke': async (s, { peerId }) => { await needFleet(s).revoke(peerId); return { ok: true }; },
+  'fleet:status': async (s, { peerId }) => needFleet(s).status(peerId),
+  'fleet:launch': async (s, { peerId, projectId }) => needFleet(s).launch(peerId, projectId),
+  'fleet:stop': async (s, { peerId, projectId, shellIndex }) => {
+    await needFleet(s).stopShell(peerId, projectId, shellIndex);
+    return { ok: true };
+  },
+  'fleet:write': async (s, { peerId, projectId, shellIndex, data }) => {
+    await needFleet(s).write(peerId, projectId, shellIndex, data);
+    return { ok: true };
+  },
+  'fleet:snapshot': async (s, { peerId, projectId, shellIndex }) =>
+    needFleet(s).snapshot(peerId, projectId, shellIndex),
+
 
   'roots:list':   async (s) => ({ roots: s.roots.list() }),
   'roots:add':    async (s, { path }) => {
@@ -1366,6 +1393,49 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
 
   ...dropHandlers,
 };
+
+function fleetName(name: string): string {
+  const clean = name.includes('\0') ? name.replaceAll('\0', '') : name;
+  if (Buffer.byteLength(clean, 'utf8') <= 160) return clean || 'Unnamed project';
+  return Buffer.from(clean, 'utf8').subarray(0, 156).toString('utf8');
+}
+
+/** Restricts peer operations to existing local shell handlers and an explicit status allow-list. */
+export function createFleetOperations(services: Services): FleetOperations {
+  return {
+    status: () => {
+      const projectRows = services.projects.list();
+      const live = services.ptyManager.liveShells();
+      if (projectRows.length > 256 || live.length > 256) throw new Error('Fleet status exceeds the 256-project/shell limit');
+      const projects = projectRows.map(({ id, name }) => ({ id, name: fleetName(name) }));
+      const agents = new Map(
+        (services.agentStatus?.list() ?? []).map((entry) =>
+          [`${entry.projectId}:${entry.shellIndex}`, entry]),
+      );
+      const shells = live.map(({ projectId, shellIndex }) => {
+        const agent = agents.get(`${projectId}:${shellIndex}`);
+        return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const };
+      });
+      return { projects, shells };
+    },
+    launch: (projectId) => handlers['shells:launch-plain'](services, { projectId }),
+    stop: async (projectId, shellIndex) => {
+      await handlers['shells:kill'](services, { projectId, shellIndex });
+    },
+    write: async (projectId, shellIndex, data) => {
+      await handlers['shells:write'](services, { projectId, shellIndex, data });
+    },
+    snapshot: async (projectId, shellIndex) => {
+      const result = await handlers['shells:snapshot'](services, { projectId, shellIndex });
+      return {
+        alive: result.alive,
+        output: Buffer.byteLength(result.output, 'utf8') <= 8192
+          ? result.output
+          : Buffer.from(result.output, 'utf8').subarray(-8188).toString('utf8'),
+      };
+    },
+  };
+}
 
 /** Events broadcast after a channel's handler resolves; exported for the CHANNEL_EMITS guard test. */
 export const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {

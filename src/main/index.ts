@@ -2,11 +2,11 @@ import { app, BrowserWindow, crashReporter, ipcMain, Menu, Notification, screen,
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import log from 'electron-log/main';
 import { buildServices, type Services } from './services';
 import { DROP_MAX_AGE_MS, testModeDropDir } from './drops/staging';
-import { registerIpc } from './ipc/register';
+import { createFleetOperations, registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
 import { installAgentStatus } from './agent-status/install';
@@ -18,6 +18,7 @@ import { installCrashObservability } from './startup/crash-observability';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
 import { computeTileLayout } from './window-tiling';
+import { FleetService } from './fleet/service';
 import {
   FROSTED_GLASS_FALLBACK,
   applyVibrancy,
@@ -369,6 +370,12 @@ function bindWindowSettings(services: Services): void {
 
 /** Registers the renderer IPC surface, with window operations bound to this module's windows. */
 function registerMainIpc(services: Services): void {
+  services.fleet = new FleetService({
+    name: hostname(),
+    storageDir: join(services.homeDir, '.metaide', 'fleet'),
+    operations: createFleetOperations(services),
+  });
+  services.fleet.onChanged((state) => broadcast('fleet:changed', state));
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
@@ -435,7 +442,7 @@ function stopOnQuit(services: Services, donePoll: NodeJS.Timeout, agentStatus: R
     clearInterval(donePoll);
     agentStatus.stop();
     services.ompReceiver.stop();
-    void services.hookRuntime.stop();
+    void services.fleet?.stop();
   });
 }
 
@@ -455,6 +462,7 @@ async function startApp(): Promise<void> {
   await rescanRootsAtBoot(services);
   bindWindowSettings(services);
   registerMainIpc(services);
+  await services.fleet?.start();
   installNotifications(services);
   await openMainWindow(services);
   const donePoll = startCommandDoneNotifier(services);

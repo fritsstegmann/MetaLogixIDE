@@ -3,7 +3,7 @@ import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
 import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import { ICON_SIZE } from './icon-size';
 
-export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks';
+export type ActivityView = 'projects' | 'chat' | 'git' | 'tasks' | 'fleet';
 
 interface Props {
   active: ActivityView;
@@ -18,12 +18,12 @@ interface Props {
   taskCount?: number;
 }
 
-/** The far-left icon rail: sidebar toggle (tooltip names its platform shortcut), then the four views with their count badges. */
+/** The far-left icon rail: sidebar toggle, project tools, and opt-in fleet access. */
 export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, chatUnread, gitDirty, taskCount }: Props) {
   const platform = useShortcutPlatform();
   return (
     <nav
-      className="w-14 shrink-0 h-full flex flex-col items-center pt-1 pb-3 gap-1.5"
+      className="w-14 shrink-0 h-full flex flex-col items-center pt-1 pb-3 gap-2"
       data-testid="activity-bar"
     >
       <ABButton
@@ -71,6 +71,14 @@ export function ActivityBar({ active, onSelect, onToggleSidebar, sidebarOpen, ch
       >
         <TasksIcon />
       </ABButton>
+      <ABButton
+        label="Fleet"
+        active={active === 'fleet'}
+        onClick={() => onSelect('fleet')}
+        data-testid="ab-fleet"
+      >
+        <FleetIcon />
+      </ABButton>
     </nav>
   );
 }
@@ -91,8 +99,9 @@ function ABButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      aria-current={active ? 'page' : undefined}
       {...rest}
-      className={`relative w-9 h-9 flex items-center justify-center rounded-[10px] pressable ${
+      className={`relative w-11 h-11 flex items-center justify-center rounded-[10px] pressable ${
         active
           ? 'bg-[--accent-soft] text-[--accent-soft-text]'
           : 'text-[--text-muted] hover:text-[--text] hover:bg-[--surface-hover]'
@@ -156,6 +165,16 @@ function TasksIcon() {
     <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="3" />
       <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function FleetIcon() {
+  return (
+    <svg width={ICON_SIZE.lg} height={ICON_SIZE.lg} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2.5" y="9" width="7" height="7" rx="1.5" />
+      <rect x="14.5" y="9" width="7" height="7" rx="1.5" />
+      <path d="M6 7V4h12v3M10 12.5h4" />
     </svg>
   );
 }

@@ -25,6 +25,7 @@ import { createClipboardImage, type ClipboardImage } from './drops/clipboard-ima
 import { listMiseTasks, type MiseLister } from './domain/mise-cli';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { FleetService } from './fleet/service';
 
 export interface Services {
   db: Database;
@@ -52,6 +53,8 @@ export interface Services {
   /** Lists a project's mise tasks; injected so tests run without a mise binary. */
   listMise: MiseLister;
   homeDir: string;
+  /** Opt-in LAN fleet runtime, constructed before IPC and started before the first window. */
+  fleet: FleetService | null;
   migrationsDir: string;
 }
 
@@ -131,5 +134,6 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
     db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
     hookSessions, hookReceiver, hookRuntime, hookHistory, ompReceiver, agentStatus: null,
     viewedShells: new ViewedShells(), dropStaging, clipboardImage: createClipboardImage(), listMise: listMiseTasks, homeDir: home, migrationsDir,
+    fleet: null,
   };
 }

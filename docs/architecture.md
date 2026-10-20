@@ -45,6 +45,41 @@ runtime, not resumable terminals. Cleanup removes pinned and unpinned records
 but preserves projects and settings. Previous-run records cannot consume the
 keep-alive cap or block the first terminal after restart.
 
+### LAN fleet
+
+Fleet is off until the user enables it in the Fleet activity view.
+The main process starts `FleetService` before the first window and stops it
+on quit (`src/main/index.ts:439-465`).
+An enabled instance announces only its certificate fingerprint, device name,
+and TLS port by IPv4 multicast on `239.255.43.71:43871`.
+The multicast TTL is one hop. A peer expires after 15 seconds without a
+beacon (`src/main/fleet/discovery.ts:6-10,38-50,70-79`).
+Both devices must allow multicast discovery and TCP connections on the
+listener's assigned port. Fleet does not discover peers across routed networks.
+
+Each device keeps its TLS private key in the OS credential store.
+The owner-only trust file records the opt-in setting, trusted certificate
+fingerprints, and revoked fingerprints (`src/main/fleet/identity.ts:51-122`).
+The user requests a link on one device. Both devices then display a
+12-digit comparison code from their TLS identities and fresh session nonces.
+The user must compare and approve the code on **both** devices.
+No peer can run an operation before both approvals are saved.
+Revocation closes the active channel and blocks future pairing with that
+fingerprint (`src/main/fleet/service.ts:229-265,288-325`).
+
+A linked peer can read project names and live shell status, launch a plain
+shell, stop a shell, send input, and read bounded recent output.
+It cannot request project paths, project environment values, or unrelated
+local IPC operations. Shell input can execute arbitrary commands on the peer.
+Approve only devices that you trust.
+The main-process adapter reuses local shell handlers for control operations
+(`src/main/ipc/register.ts:1397-1437`).
+The Fleet panel clears remote content when the link closes and shows network
+failure separately from an empty LAN (`src/renderer/components/FleetPanel.tsx:140-163,283-304`).
+If credentials or multicast fail on restart, the rest of the app opens and
+the Fleet panel shows an error. Disable and re-enable Fleet after fixing
+the network or credential store (`src/main/fleet/service.ts:44-56,137-161`).
+
 ### Main-process responsiveness
 
 The Electron main thread also pumps the window event loop. If it stays busy
