@@ -10,7 +10,7 @@ export interface Beacon {
   readonly name: string;
   readonly port: number;
 }
-export type Operation = 'status' | 'launch' | 'stop' | 'write' | 'snapshot';
+export type Operation = 'status' | 'launch' | 'launch-claude' | 'stop' | 'write' | 'snapshot' | 'subscribe' | 'unsubscribe' | 'resize';
 export type WireMessage =
   | { readonly type: 'hello'; readonly id: string; readonly nonce: string }
   | { readonly type: 'approve'; readonly id: string; readonly nonce: string }
@@ -25,7 +25,9 @@ export type WireMessage =
       readonly id: string;
       readonly ok: boolean;
       readonly value?: unknown;
-    };
+      readonly error?: 'permission-mode' | 'claude-missing' | 'shell-cap' | 'project-unavailable';
+    }
+  | { readonly type: 'terminal'; readonly id: string; readonly projectId: number; readonly shellIndex: number; readonly kind: 'snapshot' | 'ready' | 'data' | 'exit'; readonly data: string };
 
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -108,15 +110,22 @@ function validArgs(op: Operation, args: unknown): args is Record<string, unknown
       ? Object.keys(args).length === 2
       : Object.keys(args).length === 3 && hex(args.token, 32);
   }
+  if (op === 'unsubscribe')
+    return keys(args, ['subscriptionId']) && Object.keys(args).length === 1 && hex(args.subscriptionId, 32);
   if (!index(args.projectId) || args.projectId < 1) return false;
-  if (op === 'launch') return keys(args, ['projectId']) && Object.keys(args).length === 1;
+  if (op === 'launch' || op === 'launch-claude')
+    return keys(args, ['projectId']) && Object.keys(args).length === 1;
   if (!index(args.shellIndex)) return false;
+  if (op === 'subscribe')
+    return keys(args, ['projectId', 'shellIndex', 'subscriptionId']) &&
+      Object.keys(args).length === 3 && hex(args.subscriptionId, 32);
+  if (op === 'resize')
+    return keys(args, ['projectId', 'shellIndex', 'cols', 'rows']) &&
+      Object.keys(args).length === 4 && index(args.cols) && args.cols >= 2 &&
+      args.cols <= 500 && index(args.rows) && args.rows >= 2 && args.rows <= 200;
   if (op === 'write')
-    return (
-      keys(args, ['projectId', 'shellIndex', 'data']) &&
-      Object.keys(args).length === 3 &&
-      text(args.data, 8192)
-    );
+    return keys(args, ['projectId', 'shellIndex', 'data']) &&
+      Object.keys(args).length === 3 && text(args.data, 8192);
   return keys(args, ['projectId', 'shellIndex']) && Object.keys(args).length === 2;
 }
 
@@ -139,26 +148,36 @@ export function decodeMessage(frame: string): WireMessage | null {
       return null;
     return { type: value.type, id: value.id, nonce: value.nonce };
   }
+  if (value.type === 'terminal') {
+    if (!keys(value, ['type', 'id', 'projectId', 'shellIndex', 'kind', 'data']) ||
+      Object.keys(value).length !== 6 || !index(value.projectId) || value.projectId < 1 ||
+      !index(value.shellIndex) || typeof value.data !== 'string' ||
+      Buffer.byteLength(value.data, 'utf8') > 4096 ||
+      (value.kind !== 'snapshot' && value.kind !== 'ready' && value.kind !== 'data' && value.kind !== 'exit') ||
+      ((value.kind === 'ready' || value.kind === 'exit') && value.data !== ''))
+      return null;
+    return { type: 'terminal', id: value.id, projectId: value.projectId, shellIndex: value.shellIndex, kind: value.kind, data: value.data };
+  }
   if (value.type === 'request') {
     if (!keys(value, ['type', 'id', 'op', 'args']) || Object.keys(value).length !== 4) return null;
-    if (
-      value.op !== 'status' &&
-      value.op !== 'launch' &&
-      value.op !== 'stop' &&
-      value.op !== 'write' &&
-      value.op !== 'snapshot'
-    )
+    if (value.op !== 'status' && value.op !== 'launch' && value.op !== 'launch-claude' &&
+      value.op !== 'stop' && value.op !== 'write' && value.op !== 'snapshot' &&
+      value.op !== 'subscribe' && value.op !== 'unsubscribe' && value.op !== 'resize')
       return null;
     if (!validArgs(value.op, value.args)) return null;
     return { type: 'request', id: value.id, op: value.op, args: value.args };
   }
   if (value.type === 'response') {
-    if (!keys(value, ['type', 'id', 'ok', 'value']) || typeof value.ok !== 'boolean') return null;
-    if (value.ok && !Object.hasOwn(value, 'value')) return null;
-    if (!value.ok && Object.hasOwn(value, 'value')) return null;
-    return value.ok
-      ? { type: 'response', id: value.id, ok: true, value: value.value }
-      : { type: 'response', id: value.id, ok: false };
+    if (!keys(value, ['type', 'id', 'ok', 'value', 'error']) || typeof value.ok !== 'boolean') return null;
+    if (value.ok && (Object.hasOwn(value, 'error') || !Object.hasOwn(value, 'value'))) return null;
+    if (!value.ok && (Object.hasOwn(value, 'value') ||
+      (value.error !== undefined && value.error !== 'permission-mode' && value.error !== 'claude-missing' &&
+       value.error !== 'shell-cap' && value.error !== 'project-unavailable'))) return null;
+    if (value.ok) return { type: 'response', id: value.id, ok: true, value: value.value };
+    if (value.error === 'permission-mode' || value.error === 'claude-missing' ||
+        value.error === 'shell-cap' || value.error === 'project-unavailable')
+      return { type: 'response', id: value.id, ok: false, error: value.error };
+    return { type: 'response', id: value.id, ok: false };
   }
   return null;
 }

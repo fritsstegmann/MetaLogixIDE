@@ -84,30 +84,41 @@ previous revocation history is then lost. If storage cannot be written **or**
 removed, Fleet reports an error and cannot guarantee durable revocation until
 the storage fault is repaired (`src/main/fleet/service.ts:220-241`).
 
-A linked peer can read project names and live shell status, launch a plain
-shell, stop a shell, send input, and read bounded recent output.
-Status travels in bounded pages from one captured peer snapshot.
-The caller receives one complete project and shell list
-(`src/main/fleet/service.ts:721-766,839-870`).
-This POC publishes status for at most 256 projects and 256 live shells per
-machine. A larger inventory is rejected rather than shown as a partial list;
-the Fleet panel names that limit in its status error
-(`src/main/ipc/register.ts:1409-1412`).
-It cannot request project paths, project environment values, or unrelated
-local IPC operations. Shell input can execute arbitrary commands on the peer.
-Approve only devices that you trust.
-The main-process adapter reuses local shell handlers for control operations
-(`src/main/ipc/register.ts:1397-1437`).
-The Fleet activity view replaces the local project workspace with machine
-headers and nested remote project folders for the selected linked machine.
-Only that machine's status and selected shell output are polled. Launching a
-remote shell opens its output and input in the main workspace; launch errors
-appear beside the launch control. Pairing and revocation remain on machine
-rows; Fleet opt-in lives in Settings (`src/renderer/App.tsx:847-940`,
-`src/renderer/components/FleetPanel.tsx:41-159,163-324,655-766`,
-`src/renderer/components/settings/FleetSettingsPanel.tsx:8-94`).
-The Fleet panel clears remote content when the link closes and shows network
-failure separately from an empty LAN.
+A linked peer can read project names and live shell status; launch or reattach
+the remote machine's configured primary Claude command; launch a secondary
+plain shell; stop, resize and write to a shell; and subscribe to its terminal
+output. The remote machine enforces its own Claude permission-mode choice,
+launch command, project-path checks and shell limit. Plain shells start at
+index 1 so they cannot occupy the primary shell slot. Status travels in
+bounded pages from one captured snapshot, returning one complete project and
+shell list (`src/main/fleet/service.ts`, `src/main/ipc/register.ts`).
+At most 256 projects and 256 live shells per machine are published. A larger
+inventory is rejected rather than silently truncated.
+No peer can request project paths, environment values, arbitrary launch
+arguments or unrelated IPC operations. Shell input can execute arbitrary
+commands on the peer: **only link devices you trust**.
+
+The Projects sidebar lists linked and offline machines below local folders;
+each expanded online machine contains its project folders. Selecting a remote
+folder switches the main workspace to an interactive xterm attached to its
+Claude shell. A plain shell is a separate action. Local project selection
+returns to the local workspace; local and remote numeric project IDs remain
+separate. Expanded machines fetch projects on demand; the selected remote
+machine refreshes its status while visible. The Fleet activity view handles
+discovery, pairing and revocation, without another project tree. Fleet opt-in
+remains in Settings → Fleet (`src/renderer/components/Sidebar.tsx`,
+`RemoteTerminal.tsx`, `FleetPanel.tsx`).
+
+Terminal attachment sends an ordered serialized screen snapshot, then a ready
+marker, live PTY output and exit events. The stream is authenticated against
+the linked peer and a per-attachment identifier; input and resize are bounded,
+and unsubscribe, link loss or revocation release the PTY listeners. Frames are
+limited to 16 KiB, paced at 50 per second per peer, with at most four active
+attachments per connection. An initial screen over 4 MiB or live output that
+exceeds its buffer terminates the attachment rather than returning a partial
+terminal state (`src/main/fleet/channel.ts`, `protocol.ts`, `service.ts`).
+Only whitelisted launch failures leave the remote machine; its paths and
+credentials are never included in Fleet status or errors.
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts:86-103,261-271`).

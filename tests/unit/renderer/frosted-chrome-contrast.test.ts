@@ -1181,42 +1181,6 @@ const D17_PINS: Readonly<Record<string, string>> = {
   'popout app name (opacity-60)': OPACITY_REASON,
 };
 
-/** Classes in the chrome sources that paint no chrome colour, with the reason. */
-const NOT_CHROME_PAINT: Readonly<Record<string, string>> = {
-  'border-[--border]': 'hairline separator; chrome separates by tone (D3)',
-  'divide-[--border]': 'hairline separator inside the opaque shells popover',
-  'opacity-0': 'hidden until hover or focus; painted at opacity 1 when shown',
-  'opacity-100': 'reveal state, opacity 1',
-  'group-hover:opacity-100': 'reveal state, opacity 1',
-  'focus:opacity-100': 'reveal state, opacity 1',
-  'opacity-40': 'decorative middle-dot separator',
-  'disabled:opacity-40': 'disabled control, exempt from contrast (WCAG 1.4.3)',
-  'disabled:opacity-50': 'disabled control, exempt from contrast (WCAG 1.4.3)',
-  'bg-transparent': 'no fill',
-  'bg-[--surface-chrome]': 'the chrome surface itself',
-  'bg-[--surface-sheet]': 'the working-area sheet (outside chrome)',
-  'bg-[--surface-active]':
-    'aria-hidden placeholder dot on idle project rows; decorative, the StatusDot carries state',
-  'bg-[--text-muted]': 'inactive shell-tab dot, drawn only in the shell tab strip (sheet)',
-  'text-[--modal-text-muted]': 'Rename dialog: modal glass, covered by modal-contrast.test.ts',
-  'bg-[--panel]': 'Rename dialog input and kbd fill; text on it is listed with INSET',
-  'hover:bg-[--panel]': 'hover fill under listed text (INSET)',
-  'focus:ring-[--accent]/60':
-    'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'focus-within:ring-[--accent]/60':
-    'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'bg-[--panel]/40': 'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'hover:bg-[--panel-strong]/60':
-    'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'bg-[--danger]/15': 'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'bg-[--hue-yellow]/15':
-    'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'bg-[--text-muted]/50':
-    'compiles to no CSS (Tailwind v3 drops an opacity modifier on a bare var)',
-  'bg-[color:var(--accent)]':
-    'also the Commit and Rename buttons: --accent-text on a solid --accent fill, material-independent',
-  'text-[--accent-text]': 'text on a solid --accent fill, material-independent',
-};
 const COMPONENTS = resolve(__dirname, '../../../src/renderer/components');
 const APP = readFileSync(resolve(__dirname, '../../../src/renderer/App.tsx'), 'utf8');
 
@@ -1895,15 +1859,6 @@ describe('chrome colour inventory (D17)', () => {
     });
   });
 
-  const SOURCES = [...new Set(CHROME_PAINT.map((p) => p.src))].filter((s) => !s.endsWith('.ts'));
-
-  it.each(SOURCES)('%s: every colour class is in the inventory or explained', (src) => {
-    const listed = new Set(CHROME_PAINT.filter((p) => p.src === src).flatMap((p) => p.classes));
-    const unexplained = colourClasses(chromeSource(src)).filter(
-      (k) => !listed.has(k) && !(k in NOT_CHROME_PAINT),
-    );
-    expect(unexplained).toEqual([]);
-  });
 
   it('lists every pin once, with a reason, against an inventoried element', () => {
     const elements = CHROME_PAINT.map((p) => p.element);

@@ -376,6 +376,7 @@ function registerMainIpc(services: Services): void {
     operations: createFleetOperations(services),
   });
   services.fleet.onChanged((state) => broadcast('fleet:changed', state));
+  services.fleet.onTerminal((event) => broadcast('fleet:terminal', event));
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),

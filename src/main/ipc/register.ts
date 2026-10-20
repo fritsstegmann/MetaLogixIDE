@@ -229,6 +229,16 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'fleet:revoke': async (s, { peerId }) => { await needFleet(s).revoke(peerId); return { ok: true }; },
   'fleet:status': async (s, { peerId }) => needFleet(s).status(peerId),
   'fleet:launch': async (s, { peerId, projectId }) => needFleet(s).launch(peerId, projectId),
+  'fleet:launch-claude': async (s, { peerId, projectId }) => needFleet(s).launchClaude(peerId, projectId),
+  'fleet:subscribe': async (s, { peerId, projectId, shellIndex }) => needFleet(s).subscribe(peerId, projectId, shellIndex),
+  'fleet:unsubscribe': async (s, { peerId, subscriptionId }) => {
+    await needFleet(s).unsubscribe(peerId, subscriptionId);
+    return { ok: true };
+  },
+  'fleet:resize': async (s, { peerId, projectId, shellIndex, cols, rows }) => {
+    await needFleet(s).resize(peerId, projectId, shellIndex, cols, rows);
+    return { ok: true };
+  },
   'fleet:stop': async (s, { peerId, projectId, shellIndex }) => {
     await needFleet(s).stopShell(peerId, projectId, shellIndex);
     return { ok: true };
@@ -505,10 +515,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
     assertProjectPathExists(project);
-    // Pick the smallest unused shellIndex for this project. shellIndex 0 is
-    // typically the Claude shell; ad-hoc terminals get 1, 2, …
     const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
-    let idx = 0;
+    let idx = 1;
     while (used.has(idx)) idx++;
     // Respect the alive cap the same way the primary launch does.
     const cap = s.settings.get('keep_alive_cap');
@@ -1422,6 +1430,28 @@ export function createFleetOperations(services: Services): FleetOperations {
       return { projects, shells };
     },
     launch: (projectId) => handlers['shells:launch-plain'](services, { projectId }),
+    launchClaude: (projectId) => handlers['shells:launch'](services, { projectId }),
+    hasProject: (projectId) => Boolean(services.projects.get(projectId)),
+    isAlive: (projectId, shellIndex) =>
+      Boolean(services.projects.get(projectId)) && services.ptyManager.isAlive(projectId, shellIndex),
+    terminalSnapshot: (projectId, shellIndex) => services.ptyManager.getSnapshot(projectId, shellIndex),
+    watch: (projectId, shellIndex, onData, onExit) => {
+      const data = (event: { projectId: number; shellIndex: number; data: string }): void => {
+        if (event.projectId === projectId && event.shellIndex === shellIndex) onData(event.data);
+      };
+      const exit = (event: { projectId: number; shellIndex: number }): void => {
+        if (event.projectId === projectId && event.shellIndex === shellIndex) onExit();
+      };
+      services.ptyManager.on('data', data);
+      services.ptyManager.on('exit', exit);
+      return () => {
+        services.ptyManager.off('data', data);
+        services.ptyManager.off('exit', exit);
+      };
+    },
+    resize: async (projectId, shellIndex, cols, rows) => {
+      await handlers['shells:resize'](services, { projectId, shellIndex, cols, rows });
+    },
     stop: async (projectId, shellIndex) => {
       await handlers['shells:kill'](services, { projectId, shellIndex });
     },

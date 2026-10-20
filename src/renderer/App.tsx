@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
+import type { RemoteProjectSelection } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TitleGroup } from './components/TitleGroup';
 import { CHROME_TESTIDS } from './chrome-testids';
@@ -30,6 +31,7 @@ import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { FleetPanel } from './components/FleetPanel';
+import { RemoteTerminal } from './components/RemoteTerminal';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
@@ -44,6 +46,7 @@ import { useTaskCount } from './hooks/useTaskCount';
 import { toast } from './hooks/useToasts';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
+import type { FleetState } from '@shared/fleet-contract';
 import { api } from './api';
 import { createPendingFileOpen } from './pending-file-open';
 import { useTheme, type ThemeMode } from './hooks/useTheme';
@@ -164,6 +167,23 @@ function MainApp() {
     return () => { cancelled = true; };
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
+  const [remoteProject, setRemoteProject] = useState<RemoteProjectSelection | null>(null);
+  const [fleetState, setFleetState] = useState<FleetState | null>(null);
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    const off = api.on('fleet:changed', (next) => {
+      changed = true;
+      if (active) setFleetState(next);
+    });
+    void api.invoke('fleet:get-state', undefined).then((next) => {
+      if (active && !changed) setFleetState(next);
+    }).catch(() => { if (active && !changed) setFleetState(null); });
+    return () => { active = false; off(); };
+  }, []);
+  const remoteAvailable = fleetState?.enabled === true && fleetState.peers.some(
+    (peer) => peer.id === remoteProject?.peerId && peer.status === 'linked',
+  );
   // -1 never matches a real project id, so this reads idle when nothing is selected.
   const selectedAgentState = useProjectAgentState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
@@ -450,6 +470,7 @@ function MainApp() {
 
   useEffect(() => {
     const off = api.on('app:open-file-request', async ({ path }) => {
+      const requestId = ++selectionRequestRef.current;
       try {
         const { projects } = await api.invoke('projects:list', undefined as never);
         // Longest-prefix wins — a project nested inside a parent project
@@ -463,9 +484,12 @@ function MainApp() {
         const { project, relPath } = match
           ? { project: match, relPath: path === match.path ? '' : path.slice(match.path.length + 1) }
           : await api.invoke('projects:ensure-for-file', { path });
+        if (selectionRequestRef.current !== requestId) return;
         await api.invoke('projects:open', { id: project.id });
-        lastPickIdRef.current = project.id;
+        if (selectionRequestRef.current !== requestId) return;
         setProjectSettingsTarget(null);
+        setRemoteProject(null);
+        setActiveView('projects');
         setSelected(project);
         try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
         setMainTab('files');
@@ -483,11 +507,14 @@ function MainApp() {
   // switch to that shell tab.
   useEffect(() => {
     const off = api.on('shell:focus-request', async ({ projectId, shellIndex }) => {
+      const requestId = ++selectionRequestRef.current;
+      setRemoteProject(null);
       terminalFocus.requestFocus({ projectId, shellIndex });
       try {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
           const { project } = await api.invoke('projects:open', { id: projectId });
+          if (selectionRequestRef.current !== requestId) return;
           setProjectSettingsTarget(null);
           setSelected(project);
         }
@@ -536,25 +563,23 @@ function MainApp() {
   // window-manager surface. Electron picks up document.title changes and
   // pushes them straight to the BrowserWindow's native title.
   useEffect(() => {
-    document.title = selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
-  }, [selected]);
+    document.title = remoteProject ? `${remoteProject.projectName} on ${remoteProject.peerName} — MetaLogix IDE` : selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
+  }, [selected, remoteProject]);
 
   useExternalDragGuard();
 
-  // Guards against the "clicked another project but nothing happens" bug:
-  // a slow projects:open (or the shells:launch that runs after it) can
-  // resolve after the user has clicked a DIFFERENT project. Without this
-  // ref the stale earlier setSelected would win, reverting the click.
-  const lastPickIdRef = useRef<number | null>(null);
+  const selectionRequestRef = useRef(0);
   /** Selects `p` as the sidebar does and launches its shell; resolves true when it selected `p`, false when the open failed or a newer pick superseded it. */
   async function pick(p: Pick<Project, 'id'>): Promise<boolean> {
     setProjectSettingsTarget(null);
-    lastPickIdRef.current = p.id;
+    setRemoteProject(null);
+    const requestId = ++selectionRequestRef.current;
     terminalFocus.cancelRequest();
+    setActiveView('projects');
     let selectedIt = false;
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
-      if (lastPickIdRef.current !== p.id) return false;    // superseded by a newer click
+      if (selectionRequestRef.current !== requestId) return false;
       if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
       selectedIt = true;
@@ -562,7 +587,7 @@ function MainApp() {
     } catch (e) {
       // Only surface the toast when the failure is for the current pick —
       // otherwise a stale evictee-failure would confuse the user.
-      if (lastPickIdRef.current === p.id) {
+      if (selectionRequestRef.current === requestId) {
         toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, ''), timeoutMs: 8000 });
         // Open Settings → Launch commands so the user can fix the startup command immediately.
         setSettingsSection('launch');
@@ -570,7 +595,7 @@ function MainApp() {
       }
       console.error(e);
     }
-    return selectedIt;
+    return selectedIt && selectionRequestRef.current === requestId;
   }
 
   /**
@@ -597,6 +622,7 @@ function MainApp() {
 
   /** Opens an explicit sidebar target without selecting its project or launching a shell. */
   function openProjectSettings(target: ProjectSettingsTarget): void {
+    setRemoteProject(null);
     setProjectSettingsTarget(target);
     mainTabRef.current = 'settings';
     setMainTab('settings');
@@ -793,8 +819,8 @@ function MainApp() {
       <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
         <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
           <TitleGroup
-            projectName={activeView === 'fleet' ? 'Fleet' : selected?.name ?? null}
-            branch={activeView !== 'fleet' && git.isRepo ? (git.branch ?? 'HEAD') : null}
+            projectName={activeView === 'fleet' ? 'Fleet' : remoteProject ? `${remoteProject.projectName} on ${remoteProject.peerName}` : selected?.name ?? null}
+            branch={!remoteProject && activeView !== 'fleet' && git.isRepo ? (git.branch ?? 'HEAD') : null}
           />
         </div>
         <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
@@ -846,10 +872,24 @@ function MainApp() {
         />
         <AnimatePresence initial={false} custom={sidebarFold.custom}>
           {sidebarOpen && activeView !== 'fleet' && (
-            <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
+            <FoldPane key="sidebar" size="intrinsic" anchor="end" className="fleet-projects-pane" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
-                onSelect={pick}
+                selectedRemote={remoteProject}
+                onSelectRemote={(target) => {
+                  selectionRequestRef.current++;
+                  terminalFocus.cancelRequest();
+                  setProjectSettingsTarget(null);
+                  setSelected(null);
+                  setRemoteProject(target);
+                  setActiveView('projects');
+                  if (window.innerWidth < 640) toggleSidebar(false, false);
+                  setMainTab('shell');
+                }}
+                onSelect={(project) => {
+                  void pick(project);
+                  if (window.innerWidth < 640) toggleSidebar(false, false);
+                }}
                 onNewProject={() => setNewProjectOpen(true)}
                 onEditEnv={editEnv}
                 onProjectSettings={openProjectSettings}
@@ -937,6 +977,17 @@ function MainApp() {
         >
           {activeView === 'fleet' ? (
             <FleetPanel onOpenSettings={() => { setSettingsSection('fleet'); setSettingsOpen(true); }} />
+          ) : remoteProject ? (
+            <RemoteTerminal
+              key={`${remoteProject.peerId}:${remoteProject.projectId}`}
+              project={remoteProject}
+              available={remoteAvailable}
+              onRefreshAvailability={() => {
+                void api.invoke('fleet:get-state', undefined).then(setFleetState).catch(() => {
+                  toast('Could not refresh Fleet connection. Check the network and retry.', { kind: 'error' });
+                });
+              }}
+            />
           ) : (
           <>
           <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
@@ -1070,7 +1121,11 @@ function MainApp() {
         </main>
       </div>
 
-      <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} />
+      {remoteProject ? (
+        <div className="flex h-[34px] shrink-0 items-center px-3 text-base text-[--text-muted]" role="status">
+          Remote · {remoteProject.projectName} on {remoteProject.peerName}
+        </div>
+      ) : <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} />}
       <Settings
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1116,11 +1171,14 @@ function MainApp() {
         open={scrollbackOpen}
         onClose={() => setScrollbackOpen(false)}
         onFocus={async (projectId, shellIndex) => {
+          const requestId = ++selectionRequestRef.current;
+          setRemoteProject(null);
           terminalFocus.cancelRequest();
           try {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
               const { project } = await api.invoke('projects:open', { id: projectId });
+              if (selectionRequestRef.current !== requestId) return;
               setProjectSettingsTarget(null);
               setSelected(project);
             }

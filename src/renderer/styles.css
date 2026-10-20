@@ -1034,3 +1034,22 @@ kbd {
   color: inherit;
   font-size: 12.5px;
 }
+
+@media (max-width: 639px) {
+  :root { --layer-mobile-sidebar: 20; }
+  .fleet-projects-pane {
+    position: fixed;
+    top: 44px;
+    left: 56px;
+    width: calc(100vw - 56px) !important;
+    height: calc(100dvh - 78px);
+    z-index: var(--layer-mobile-sidebar);
+    background: var(--surface-chrome);
+  }
+  .fleet-projects-pane > div,
+  .fleet-projects-pane .section-panel {
+    width: 100% !important;
+    min-width: 0;
+  }
+  .fleet-projects-pane [data-testid="resize-handle"] { display: none; }
+}

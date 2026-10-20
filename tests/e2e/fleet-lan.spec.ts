@@ -67,3 +67,29 @@ test('fleet requires local opt-in and rejects unlinked remote shell control', as
     cleanup();
   }
 });
+
+test('Fleet management returns to local project terminal on a narrow window', async () => {
+  const { app, win, cleanup } = await launch(['Local Fleet Project']);
+  try {
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows()[0]!.setSize(390, 844);
+    });
+    await win.getByRole('button', { name: 'Fleet', exact: true }).click();
+    await expect(win.getByTestId('fleet-panel')).toBeVisible();
+    await win.getByTestId('ab-projects').click();
+    const sidebar = win.locator('aside[data-view="projects"]');
+    await expect(sidebar).toBeVisible();
+    const project = sidebar.getByTestId('project-row').filter({ hasText: 'Local Fleet Project' }).first();
+    await expect(project).toBeVisible();
+    await project.click();
+    await expect(sidebar).toBeHidden();
+    await expect(win.locator('main .xterm')).toBeVisible();
+    await expect.poll(() => win.title()).toBe('Local Fleet Project — MetaLogix IDE');
+    expect(await win.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      await win.evaluate(() => window.innerWidth),
+    );
+  } finally {
+    await closeApp(app);
+    cleanup();
+  }
+});

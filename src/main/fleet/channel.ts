@@ -104,7 +104,15 @@ export class FleetChannel {
         this.pending.delete(message.id);
         clearTimeout(pending.timer);
         if (message.ok) pending.resolve(message.value);
-        else pending.reject(new Error('Peer refused fleet operation'));
+        else {
+          const errors = {
+            'permission-mode': 'Choose a Claude permission mode on the remote machine first',
+            'claude-missing': 'Claude is unavailable on the remote machine',
+            'shell-cap': 'Remote shell limit reached; unpin a shell or raise the cap',
+            'project-unavailable': 'Remote project folder is unavailable',
+          };
+          pending.reject(new Error(message.error ? errors[message.error] : 'Peer refused fleet operation'));
+        }
       } else for (const listener of this.handlers) listener(message);
     }
   }

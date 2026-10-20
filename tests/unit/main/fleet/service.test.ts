@@ -22,9 +22,15 @@ const keychain: FleetKeychain = {
 const operations = (): FleetOperations => ({
   status: () => ({ projects: [{ id: 1, name: 'Project' }], shells: [] }),
   launch: async () => ({ shellIndex: 0 }),
+  launchClaude: async () => ({ shellIndex: 0 }),
   stop: async () => {},
   write: async () => {},
+  resize: async () => {},
+  isAlive: () => true,
+  hasProject: () => true,
+  watch: () => () => {},
   snapshot: async () => ({ output: 'safe', alive: true }),
+  terminalSnapshot: async () => 'safe',
 });
 function service(name: string, callbacks: FleetOperations = operations()) {
   const storageDir = mkdtempSync(join(tmpdir(), 'fleet-service-'));
