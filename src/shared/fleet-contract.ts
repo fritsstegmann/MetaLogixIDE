@@ -1,6 +1,9 @@
 /** Public fleet state contains no private key, credential, project path or terminal content. */
 import type { AgentKind, AgentState } from './agent-state';
 
+/** TCP port the Fleet TLS listener binds until the user picks another in Settings. */
+export const FLEET_DEFAULT_PORT = 43872;
+
 export interface FleetPeer {
   readonly id: string;
   readonly name: string;

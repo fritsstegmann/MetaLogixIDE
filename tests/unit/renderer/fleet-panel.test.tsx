@@ -96,11 +96,6 @@ function mount(initial: FleetState, fail = false) {
       if (!node) throw new Error('Missing pairing input');
       return node.props as { onChange: (event: { target: { value: string } }) => void };
     },
-    portField() {
-      const node = nodes(draw()).find((item) => item.type === 'input' && item.props['aria-label'] === 'Fleet port');
-      if (!node) throw new Error('Missing port input');
-      return node.props as { value: string; onChange: (event: { target: { value: string } }) => void };
-    },
     switch() {
       const node = nodes(draw()).find((item) => item.type === 'input' && item.props.role === 'switch');
       if (!node) return undefined;
@@ -183,7 +178,7 @@ describe('FleetPanel discovery and trust', () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
-  describe('port and identity recovery', () => {
+  describe('identity recovery', () => {
     const idle: FleetState = { enabled: false, peers: [], port: 43872, controls: [] };
     function intercept(handler: (channel: string, request: unknown) => unknown) {
       const base = invoke.getMockImplementation();
@@ -208,55 +203,6 @@ describe('FleetPanel discovery and trust', () => {
       expect(visible).toContain('Fleet port 43872 is already in use');
       expect(visible).not.toContain('Could not change Fleet discovery');
       expect(visible).not.toContain('keychain diagnostics');
-    });
-
-    it('shows the current port with the firewall rules for that port', async () => {
-      const app = mount({ ...idle, port: 45123 });
-      await app.loaded();
-      const visible = app.visible();
-      expect(visible).toContain('sudo ufw allow 43871/udp');
-      expect(visible).toContain('sudo ufw allow 45123/tcp');
-      expect(visible).not.toContain('43872/tcp');
-      expect(app.portField().value).toBe('45123');
-    });
-
-    it('saves the typed port through fleet:set-port and shows the returned port', async () => {
-      const app = mount(idle);
-      await app.loaded();
-      intercept((channel, request) =>
-        channel === 'fleet:set-port' ? Promise.resolve({ ...idle, port: (request as { port: number }).port }) : undefined,
-      );
-      app.portField().onChange({ target: { value: '45000' } });
-      app.control('Save port').onClick();
-      await flush();
-      expect(invoke).toHaveBeenCalledWith('fleet:set-port', { port: 45000 });
-      expect(app.visible()).toContain('sudo ufw allow 45000/tcp');
-    });
-
-    it('shows the main-side rejection message and keeps the old port', async () => {
-      const app = mount(idle);
-      await app.loaded();
-      intercept((channel) =>
-        channel === 'fleet:set-port'
-          ? Promise.reject(new Error("Error invoking remote method 'fleet:set-port': Error: Fleet port 1000 is already in use"))
-          : undefined,
-      );
-      app.portField().onChange({ target: { value: '1000' } });
-      app.control('Save port').onClick();
-      await flush();
-      expect(app.visible()).toContain('Fleet port 1000 is already in use');
-      expect(app.visible()).not.toContain('Error invoking remote method');
-      expect(app.visible()).toContain('sudo ufw allow 43872/tcp');
-    });
-
-    it('disables Save while the port field is empty or unchanged', async () => {
-      const app = mount(idle);
-      await app.loaded();
-      expect(app.control('Save port').disabled).toBe(true);
-      app.portField().onChange({ target: { value: '' } });
-      expect(app.control('Save port').disabled).toBe(true);
-      app.portField().onChange({ target: { value: '43873' } });
-      expect(app.control('Save port').disabled).toBe(false);
     });
 
     it('offers Reset identity only in the recovery state', async () => {

@@ -1,4 +1,4 @@
-/** Fleet settings tests cover explicit opt-in, live events, network errors and no pairing controls. */
+/** Fleet settings tests cover the port form, its default, live events, safe errors and no discovery or pairing controls. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isValidElement, type ReactElement } from 'react';
 import type * as ReactModule from 'react';
@@ -84,7 +84,6 @@ vi.mock('@renderer/components/settings/GeneralPanel', () => ({
 }));
 const { FleetSettingsPanel } = await import('@renderer/components/settings/FleetSettingsPanel');
 const { SettingsSectionPanel } = await import('@renderer/components/settings/SettingsSectionPanel');
-const { Switch } = await import('@renderer/components/settings/primitives');
 const off: FleetState = { enabled: false, peers: [], port: 43872, controls: [] };
 const on: FleetState = { enabled: true, peers: [], port: 43872, controls: [] };
 const flush = async () => {
@@ -92,20 +91,25 @@ const flush = async () => {
   await Promise.resolve();
 };
 
-function findSwitch(node: unknown): ReactElement | undefined {
+function find(node: unknown, match: (element: ReactElement) => boolean): ReactElement | undefined {
   if (Array.isArray(node)) {
     for (const child of node) {
-      const match = findSwitch(child);
-      if (match) return match;
+      const found = find(child, match);
+      if (found) return found;
     }
     return undefined;
   }
   if (!isValidElement(node)) return undefined;
-  if (node.type === Switch) return node;
+  if (match(node)) return node;
   const props: unknown = node.props;
   return props && typeof props === 'object' && 'children' in props
-    ? findSwitch(props.children)
+    ? find(props.children, match)
     : undefined;
+}
+
+function label(element: ReactElement): string {
+  const children = (element.props as { children?: unknown }).children;
+  return typeof children === 'string' ? children : '';
 }
 
 function mount() {
@@ -114,18 +118,15 @@ function mount() {
   return {
     draw,
     markup: () => renderToStaticMarkup(draw()),
-    change(enabled: boolean) {
-      const item = findSwitch(draw());
-      if (!item) throw new Error('Missing Fleet switch');
-      const props: unknown = item.props;
-      if (
-        !props ||
-        typeof props !== 'object' ||
-        !('onChange' in props) ||
-        typeof props.onChange !== 'function'
-      )
-        throw new Error('Fleet switch cannot be changed');
-      props.onChange(enabled);
+    field() {
+      const node = find(draw(), (item) => item.type === 'input' && (item.props as { 'aria-label'?: string })['aria-label'] === 'Fleet port');
+      if (!node) throw new Error('Missing port input');
+      return node.props as { value: string; placeholder: string; onChange: (event: { target: { value: string } }) => void };
+    },
+    button(text: string) {
+      const node = find(draw(), (item) => item.type === 'button' && label(item) === text);
+      if (!node) throw new Error(`Missing button ${text}`);
+      return node.props as { disabled?: boolean; onClick: () => void };
     },
     emit(next: FleetState) {
       for (const listener of listeners) listener(next);
@@ -137,8 +138,8 @@ beforeEach(() => {
   runtime.reset();
   listeners.clear();
   invoke.mockReset();
-  invoke.mockImplementation((channel: string) =>
-    Promise.resolve(channel === 'fleet:set-enabled' ? on : off),
+  invoke.mockImplementation((channel: string, request?: { port: number }) =>
+    Promise.resolve(channel === 'fleet:set-port' ? { ...off, port: request?.port } : off),
   );
 });
 afterEach(() => {
@@ -159,117 +160,110 @@ function renderSection(section: 'fleet' | 'general'): string {
 }
 
 describe('FleetSettingsPanel', () => {
-  it('routes the Fleet section to its discovery switch without exposing it in General', async () => {
+  it('routes the Fleet section to its port field without exposing it in General', async () => {
     renderSection('fleet');
     await flush();
-    expect(renderSection('fleet')).toContain('aria-label="Enable Fleet discovery"');
-    expect(renderSection('general')).not.toContain('aria-label="Enable Fleet discovery"');
+    expect(renderSection('fleet')).toContain('aria-label="Fleet port"');
+    expect(renderSection('general')).not.toContain('aria-label="Fleet port"');
   });
 
-  it('leaves discovery off until the named switch is changed and reflects the saved state', async () => {
+  it('leaves the discovery switch and pairing controls to the Fleet sheet', async () => {
     const app = mount();
     await flush();
-    expect(app.markup()).toContain('role="switch"');
-    expect(app.markup()).toContain('aria-label="Enable Fleet discovery"');
-    expect(app.markup()).not.toContain('checked=""');
-    expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
-    app.change(true);
-    expect(invoke).toHaveBeenCalledWith('fleet:set-enabled', { enabled: true });
-    await flush();
-    expect(app.markup()).toContain('checked=""');
+    expect(app.markup()).not.toContain('role="switch"');
     expect(app.markup()).not.toContain('Approve link');
-  });
-
-  it('reflects a remote discovery event and exposes listener failures', async () => {
-    const app = mount();
-    app.emit({ ...on, error: 'Fleet network unavailable. Check the firewall.' });
-    await flush();
-    expect(app.markup()).toContain('checked=""');
-    expect(app.markup()).toContain('Fleet network unavailable');
     expect(invoke).not.toHaveBeenCalledWith('fleet:set-enabled', expect.anything());
   });
 
-  it('ignores a delayed initial off reply after Fleet announces an enabled state', async () => {
-    let finish: ((value: FleetState) => void) | undefined;
+  it('shows the current port, the default port and firewall rules for the current port', async () => {
+    invoke.mockResolvedValue({ ...off, port: 45123 });
+    const app = mount();
+    await flush();
+    expect(app.field().value).toBe('45123');
+    expect(app.field().placeholder).toBe('43872');
+    expect(app.markup()).toContain('Default: 43872');
+    expect(app.markup()).toContain('sudo ufw allow 45123/tcp');
+    expect(app.markup()).toContain('sudo ufw allow 43871/udp');
+  });
+
+  it('saves the typed port through fleet:set-port and shows the returned port', async () => {
+    const app = mount();
+    await flush();
+    app.field().onChange({ target: { value: '45000' } });
+    app.button('Save port').onClick();
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:set-port', { port: 45000 });
+    expect(app.field().value).toBe('45000');
+    expect(app.markup()).toContain('sudo ufw allow 45000/tcp');
+  });
+
+  it('disables Save while the field is empty or unchanged', async () => {
+    const app = mount();
+    await flush();
+    expect(app.button('Save port').disabled).toBe(true);
+    app.field().onChange({ target: { value: '' } });
+    expect(app.button('Save port').disabled).toBe(true);
+    app.field().onChange({ target: { value: '43873' } });
+    expect(app.button('Save port').disabled).toBe(false);
+  });
+
+  it('offers Use default only when the port differs from the default', async () => {
+    const app = mount();
+    await flush();
+    expect(app.button('Use default').disabled).toBe(true);
+    app.emit({ ...off, port: 45000 });
+    expect(app.button('Use default').disabled).toBe(false);
+    app.button('Use default').onClick();
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:set-port', { port: 43872 });
+    expect(app.field().value).toBe('43872');
+  });
+
+  it('shows the main-side rejection message and keeps the old port', async () => {
     invoke.mockImplementation((channel: string) =>
-      channel === 'fleet:get-state'
-        ? new Promise<FleetState>((resolve) => {
-            finish = resolve;
-          })
+      channel === 'fleet:set-port'
+        ? Promise.reject(new Error("Error invoking remote method 'fleet:set-port': Error: Fleet port 1000 is already in use"))
         : Promise.resolve(off),
     );
     const app = mount();
-    app.emit(on);
+    await flush();
+    app.field().onChange({ target: { value: '1000' } });
+    app.button('Save port').onClick();
+    await flush();
+    expect(app.markup()).toContain('Fleet port 1000 is already in use');
+    expect(app.markup()).not.toContain('Error invoking remote method');
+    expect(app.markup()).toContain('sudo ufw allow 43872/tcp');
+  });
+
+  it('reflects a remote Fleet event and exposes listener failures', async () => {
+    const app = mount();
+    app.emit({ ...on, port: 44000, error: 'Fleet network unavailable. Check the firewall.' });
+    await flush();
+    expect(app.field().value).toBe('44000');
+    expect(app.markup()).toContain('Fleet network unavailable');
+  });
+
+  it('ignores a delayed initial reply after Fleet announces a newer state', async () => {
+    let finish: ((value: FleetState) => void) | undefined;
+    invoke.mockImplementation(
+      () =>
+        new Promise<FleetState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const app = mount();
+    app.emit({ ...on, port: 44000 });
     finish?.(off);
     await flush();
-    expect(app.markup()).toContain('checked=""');
+    expect(app.field().value).toBe('44000');
   });
 
-  it('keeps a newer Fleet event authoritative over a delayed enable reply', async () => {
-    let finish: ((value: FleetState) => void) | undefined;
-    invoke.mockImplementation((channel: string) =>
-      channel === 'fleet:set-enabled'
-        ? new Promise<FleetState>((resolve) => {
-            finish = resolve;
-          })
-        : Promise.resolve(off),
-    );
-    const app = mount();
-    await flush();
-    app.change(true);
-    app.emit(off);
-    finish?.(on);
-    await flush();
-    expect(app.markup()).not.toContain('checked=""');
-  });
-
-  it('keeps previous opt-in value and reports a safe actionable error if enabling fails', async () => {
-    invoke.mockImplementation((channel: string) =>
-      channel === 'fleet:set-enabled'
-        ? Promise.reject(new Error('private interface diagnostics'))
-        : Promise.resolve(off),
-    );
-    const app = mount();
-    await flush();
-    app.change(true);
-    await flush();
-    expect(app.markup()).not.toContain('checked=""');
-    expect(app.markup()).toContain('Could not change Fleet setting');
-    expect(app.markup()).not.toContain('private interface diagnostics');
-    app.change(true);
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:set-enabled')).toHaveLength(
-      2,
-    );
-  });
-
-  it('shows the specific listener error instead of the generic failure when enabling fails', async () => {
-    invoke.mockImplementation((channel: string) =>
-      channel === 'fleet:set-enabled'
-        ? Promise.reject(new Error('internal keychain diagnostics'))
-        : Promise.resolve(off),
-    );
-    const app = mount();
-    await flush();
-    invoke.mockImplementation((channel: string) =>
-      channel === 'fleet:set-enabled'
-        ? Promise.reject(new Error('internal keychain diagnostics'))
-        : Promise.resolve({ ...off, error: 'Fleet port 43872 is already in use' }),
-    );
-    app.change(true);
-    await flush();
-    await flush();
-    const markup = app.markup();
-    expect(markup).toContain('Fleet port 43872 is already in use');
-    expect(markup).not.toContain('Could not change Fleet setting');
-    expect(markup).not.toContain('keychain diagnostics');
-  });
-
-  it('reports a failed initial settings load instead of treating failure as off', async () => {
+  it('reports a failed initial settings load instead of showing an empty form', async () => {
     invoke.mockRejectedValue(new Error('private network diagnostics'));
     const app = mount();
     await flush();
     expect(app.markup()).toContain('Could not load Fleet settings');
-    expect(app.markup()).not.toContain('role="switch"');
+    expect(app.markup()).not.toContain('aria-label="Fleet port"');
     expect(app.markup()).not.toContain('private network diagnostics');
   });
 });
