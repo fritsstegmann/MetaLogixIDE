@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { rootHueVar } from '@renderer/root-hue';
+import { ROOT_HUE_TOKENS, rootHueColour, rootHueToken, rootHueVar } from '@renderer/root-hue';
 import { useRoots } from '@renderer/hooks/useRoots';
 import { useProjects } from '@renderer/hooks/useProjects';
 import { useRecents } from '@renderer/hooks/useRecents';
@@ -304,6 +304,12 @@ interface FleetMachineProps {
 
 const EMPTY_REMOTE_PROJECTS: readonly FleetProject[] = [];
 
+/** A machine's folders step through the palette from a per-machine start, so siblings never share a colour and machines differ. */
+function fleetRootHue(peerId: string, index: number): string {
+  const start = ROOT_HUE_TOKENS.indexOf(rootHueToken(peerId));
+  return rootHueColour(ROOT_HUE_TOKENS[(start + index) % ROOT_HUE_TOKENS.length]!);
+}
+
 function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: FleetMachineProps) {
   const online = peer.status === 'linked';
   useEffect(() => { if (online && !status) void onLoad(peer.id); }, [online, status, onLoad, peer.id]);
@@ -331,8 +337,8 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
       )}
       {online && status?.kind === 'ready' && data?.roots.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote folders.</p>}
       {online && status?.kind === 'ready' && data?.roots.length !== 0 && data?.projects.length === 0 && <p className="px-2 py-2 text-base text-[--text-muted]">No remote projects.</p>}
-      {data?.roots.map((root) => (
-        <FleetRootBlock key={root.id} peer={peer} root={root} projects={grouped.get(root.id) ?? EMPTY_REMOTE_PROJECTS}
+      {data?.roots.map((root, index) => (
+        <FleetRootBlock key={root.id} peer={peer} root={root} hue={fleetRootHue(peer.id, index)} projects={grouped.get(root.id) ?? EMPTY_REMOTE_PROJECTS}
           shellStates={shellStates} selected={selected} onSelect={onSelect} />
       ))}
     </div>
@@ -342,13 +348,14 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
 interface FleetRootBlockProps {
   readonly peer: FleetPeer;
   readonly root: FleetRoot;
+  readonly hue: string;
   readonly projects: readonly FleetProject[];
   readonly shellStates: ReadonlyMap<number, AgentState>;
   readonly selected: RemoteProjectSelection | null;
   readonly onSelect: (project: RemoteProjectSelection) => void;
 }
 
-function FleetRootBlock({ peer, root, projects, shellStates, selected, onSelect }: FleetRootBlockProps) {
+function FleetRootBlock({ peer, root, hue, projects, shellStates, selected, onSelect }: FleetRootBlockProps) {
   const persistKey = `fleet:${peer.id}:root:${root.id}`;
   const [collapsedSet, setCollapsedSet] = useState<Set<string>>(() => readCollapsedKeys(FLEET_ROOT_COLLAPSED_KEY));
   const open = !collapsedSet.has(persistKey);
@@ -368,7 +375,7 @@ function FleetRootBlock({ peer, root, projects, shellStates, selected, onSelect 
       <button type="button" onClick={toggle} aria-expanded={open} aria-label={`${root.name} on ${peer.name}, ${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}
         data-testid="remote-root-toggle"
         className="w-full text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] flex items-center gap-2.5">
-        <RootFolderGlyph color={rootHueVar(`${peer.id}:${root.name}`)} testId={null} />
+        <RootFolderGlyph color={hue} testId={null} />
         <span className="truncate flex-1">{root.name}</span>
         <span className="text-[10px] opacity-70">{aliveCount > 0 ? `${aliveCount}/${projects.length}` : projects.length}</span>
         <ChevronIcon collapsed={!open} />
@@ -494,7 +501,7 @@ function Section({
         aria-label={status ? `${title}, ${status.label.toLowerCase()}` : undefined}
         aria-expanded={!collapsed}
         data-testid={`${testId}-toggle`}
-        className={`w-full ${status ? 'min-h-11 mb-2 focus-visible:ring-2 focus-visible:ring-[--accent]' : 'h-[26px] mb-1'} px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]`}
+        className={`w-full h-[26px] mb-1 ${status ? 'focus-visible:ring-2 focus-visible:ring-[--accent]' : ''} px-0 flex items-center gap-2 text-left text-[11px] uppercase tracking-[0.06em] font-medium text-[--text]`}
       >
         {accent && <StatusDot state={dotState ?? 'idle'} />}
         <span className={`flex-1 ${accent ? '' : 'text-[--text-muted]'}`}>{title}</span>
