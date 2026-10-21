@@ -11,7 +11,7 @@ export interface Beacon {
   readonly name: string;
   readonly port: number;
 }
-export type Operation = 'status' | 'launch' | 'launch-claude' | 'stop' | 'write' | 'snapshot' | 'subscribe' | 'unsubscribe' | 'resize';
+export type Operation = 'status' | 'launch' | 'launch-claude' | 'profiles' | 'launch-cli' | 'set-default-cli' | 'remove-cli-profile' | 'stop' | 'write' | 'snapshot' | 'subscribe' | 'unsubscribe' | 'resize';
 export type WireMessage =
   | { readonly type: 'hello'; readonly id: string; readonly nonce: string }
   | { readonly type: 'approve'; readonly id: string; readonly nonce: string }
@@ -43,6 +43,35 @@ const text = (value: unknown, max: number): value is string =>
   value.length > 0 &&
   Buffer.byteLength(value, 'utf8') <= max &&
   !value.includes('\0');
+const profileName = (value: unknown): value is string =>
+  text(value, 80) && value.trim().length > 0 &&
+  !/[\/\\\p{Cc}]/u.test(value);
+const timestamp = (value: unknown): value is string | null =>
+  value === null || (typeof value === 'string' && value.length <= 40 &&
+    /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])[ T](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?$/.test(value));
+
+/** Restricts peer-facing profile lists to a bounded allow-list of display metadata. */
+export function validateProfiles(value: unknown): {
+  profiles: readonly { name: string; scope: 'project' | 'global'; icon?: string }[];
+  defaultCliName: string | null;
+} | null {
+  if (!record(value) || !keys(value, ['profiles', 'defaultCliName']) ||
+    Object.keys(value).length !== 2 || !Array.isArray(value.profiles) ||
+    value.profiles.length > 64 ||
+    (value.defaultCliName !== null && !profileName(value.defaultCliName))) return null;
+  const names = new Set<string>();
+  const profiles: { name: string; scope: 'project' | 'global'; icon?: string }[] = [];
+  for (const item of value.profiles) {
+    if (!record(item) || !keys(item, ['name', 'scope', 'icon']) ||
+      !profileName(item.name) || names.has(item.name) ||
+      (item.scope !== 'project' && item.scope !== 'global') ||
+      (Object.hasOwn(item, 'icon') && (!text(item.icon, 32) || /[\/\\\p{Cc}]/u.test(item.icon)))) return null;
+    names.add(item.name);
+    profiles.push({ name: item.name, scope: item.scope,
+      ...(typeof item.icon === 'string' ? { icon: item.icon } : {}) });
+  }
+  return { profiles, defaultCliName: value.defaultCliName };
+}
 
 /** Decodes a public multicast beacon without accepting private or extra fields. */
 export function decodeBeacon(bytes: Buffer): Beacon | null {
@@ -95,7 +124,8 @@ export function certificateIdentity(certificate: Buffer): string {
   return createHash('sha256').update(certificate).digest('hex');
 }
 
-function validArgs(op: Operation, args: unknown): args is Record<string, unknown> {
+/** Validates bounded operation arguments before local IPC sends and after peer decoding. */
+export function validArgs(op: Operation, args: unknown): args is Record<string, unknown> {
   if (!record(args)) return false;
   if (op === 'status') {
     if (
@@ -118,6 +148,23 @@ function validArgs(op: Operation, args: unknown): args is Record<string, unknown
   if (!index(args.projectId) || args.projectId < 1) return false;
   if (op === 'launch' || op === 'launch-claude')
     return keys(args, ['projectId']) && Object.keys(args).length === 1;
+  if (op === 'profiles')
+    return keys(args, ['projectId']) && Object.keys(args).length === 1;
+  if (op === 'set-default-cli')
+    return keys(args, ['projectId', 'name']) && Object.keys(args).length === 2 &&
+      (args.name === null || profileName(args.name));
+  if (op === 'remove-cli-profile')
+    return keys(args, ['projectId', 'name']) && Object.keys(args).length === 2 && profileName(args.name);
+  if (op === 'launch-cli') {
+    if (!keys(args, ['projectId', 'profileName', 'argv', 'save']) ||
+      (args.profileName !== undefined && !profileName(args.profileName)) ||
+      (args.save !== undefined && typeof args.save !== 'boolean') ||
+      (args.argv !== undefined && (!Array.isArray(args.argv) || args.argv.length < 1 ||
+        args.argv.length > 24 || args.argv.some((part: unknown) => !text(part, 1024)))) ||
+      Buffer.byteLength(JSON.stringify(args), 'utf8') > 8192) return false;
+    return (args.profileName !== undefined || args.argv !== undefined) &&
+      (args.save !== true || (args.profileName !== undefined && args.argv !== undefined));
+  }
   if (!index(args.shellIndex)) return false;
   if (op === 'subscribe')
     return keys(args, ['projectId', 'shellIndex', 'subscriptionId']) &&
@@ -164,6 +211,8 @@ export function decodeMessage(frame: string): WireMessage | null {
   if (value.type === 'request') {
     if (!keys(value, ['type', 'id', 'op', 'args']) || Object.keys(value).length !== 4) return null;
     if (value.op !== 'status' && value.op !== 'launch' && value.op !== 'launch-claude' &&
+      value.op !== 'profiles' && value.op !== 'launch-cli' &&
+      value.op !== 'set-default-cli' && value.op !== 'remove-cli-profile' &&
       value.op !== 'stop' && value.op !== 'write' && value.op !== 'snapshot' &&
       value.op !== 'subscribe' && value.op !== 'unsubscribe' && value.op !== 'resize')
       return null;
@@ -225,16 +274,20 @@ function validateStatusRows(value: unknown): FleetStatus | null {
     projects.push({ id: item.id, rootId: item.rootId, name: item.name });
   }
   for (const item of value.shells) {
-    if (!record(item) || !keys(item, ['projectId', 'shellIndex', 'agent', 'state']) ||
-      Object.keys(item).length !== 4 || !index(item.projectId) ||
-      item.projectId < 1 || !index(item.shellIndex)) return null;
+    if (!record(item) || !keys(item, ['projectId', 'shellIndex', 'agent', 'state',
+      'launchName', 'pinned', 'startedAt', 'lastActiveAt']) ||
+      Object.keys(item).length !== 8 || !index(item.projectId) ||
+      item.projectId < 1 || !index(item.shellIndex) ||
+      !text(item.launchName, 160) || /[\/\\\p{Cc}]/u.test(item.launchName) ||
+      typeof item.pinned !== 'boolean' || !timestamp(item.startedAt) || !timestamp(item.lastActiveAt)) return null;
     if (item.agent !== null && item.agent !== 'claude' && item.agent !== 'omp') return null;
     if (item.state !== 'idle' && item.state !== 'busy' && item.state !== 'blocked') return null;
     const identity = `${item.projectId}:${item.shellIndex}`;
     if (shellIds.has(identity)) return null;
     shellIds.add(identity);
     shells.push({ projectId: item.projectId, shellIndex: item.shellIndex,
-      agent: item.agent, state: item.state });
+      agent: item.agent, state: item.state, launchName: item.launchName,
+      pinned: item.pinned, startedAt: item.startedAt, lastActiveAt: item.lastActiveAt });
   }
   return { roots, projects, shells };
 }

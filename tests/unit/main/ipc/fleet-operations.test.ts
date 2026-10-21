@@ -66,7 +66,9 @@ describe('local Fleet operation boundary', () => {
         const { shellIndex } = await operations.launch(project.id);
         expect(shellIndex).toBe(1);
         expect((await operations.status()).shells).toEqual([
-          { projectId: project.id, shellIndex, agent: null, state: 'idle' },
+          expect.objectContaining({ projectId: project.id, shellIndex, agent: null, state: 'idle',
+            launchName: 'Terminal', pinned: false, startedAt: expect.any(String),
+            lastActiveAt: expect.any(String) }),
         ]);
         const identity = services.ptyManager.liveShell(project.id, shellIndex);
         if (!identity) throw new Error('Local PTY identity missing');
@@ -75,8 +77,41 @@ describe('local Fleet operation boundary', () => {
         tracker.ompReport({ projectId: project.id, shellIndex }, identity.generation, 'busy');
         services.agentStatus = tracker;
         expect((await operations.status()).shells).toEqual([
-          { projectId: project.id, shellIndex, agent: 'omp', state: 'busy' },
+          expect.objectContaining({ projectId: project.id, shellIndex, agent: 'omp', state: 'busy',
+            launchName: 'Terminal', pinned: false }),
         ]);
+        const listed = await operations.profiles(project.id);
+        expect(listed).toEqual({ profiles: expect.any(Array), defaultCliName: null });
+        services.settings.set('default_cli_profiles', [
+          { name: 'Global', argv: ['/secret/bin/agent'], env: { TOKEN: 'private' }, icon: 'G' },
+        ]);
+        services.projects.updateConfig(project.id, { cliProfiles: [
+          { name: 'Custom', argv: ['local-agent'], env: { TOKEN: 'private' }, icon: 'C' },
+        ] });
+        expect(await operations.profiles(project.id)).toEqual({
+          profiles: [{ name: 'Custom', scope: 'project', icon: 'C' },
+            { name: 'Global', scope: 'global', icon: 'G' }],
+          defaultCliName: null,
+        });
+        const cap = services.settings.get('keep_alive_cap');
+        services.settings.set('keep_alive_cap', 1);
+        services.shells.setPinned(project.id, shellIndex, true);
+        await expect(operations.launchCli(project.id, { profileName: 'Custom' }))
+          .rejects.toThrow(/all shells are pinned/);
+        expect((await operations.status()).shells[0]?.pinned).toBe(true);
+        services.shells.setPinned(project.id, shellIndex, false);
+        services.settings.set('keep_alive_cap', cap);
+        const mockSpawn = vi.spyOn(services.ptyManager, 'spawn').mockResolvedValue({ pid: 123 });
+        expect(await operations.launchCli(project.id, { profileName: 'Custom' })).toEqual({ shellIndex: 0 });
+        expect(mockSpawn).toHaveBeenCalledWith(project.id, 0,
+          expect.objectContaining({ argv: ['local-agent'], cwd: projectPath }));
+        expect(await operations.setDefaultCli(project.id, 'Custom')).toEqual({ defaultCliName: 'Custom' });
+        expect(await operations.profiles(project.id)).toMatchObject({ defaultCliName: 'Custom' });
+        expect(await operations.removeCliProfile(project.id, 'Custom')).toEqual({ ok: true });
+        expect((await operations.profiles(project.id)).profiles).toEqual([
+          { name: 'Global', scope: 'global', icon: 'G' },
+        ]);
+        mockSpawn.mockRestore();
         services.agentStatus = null;
         const activeShell = services.ptyManager.liveShells()[0];
         if (!activeShell) throw new Error('Local PTY did not start');
@@ -255,6 +290,9 @@ describe('registered Fleet IPC over two real services', () => {
             data: 'echo never\\r',
           }),
         ).rejects.toThrow();
+        await expect(invoke('fleet:profiles', { peerId: peer.id, projectId: project.id })).rejects.toThrow();
+        await expect(invoke('fleet:launch-cli', { peerId: peer.id, projectId: project.id,
+          argv: ['echo', 'never'] })).rejects.toThrow();
         await invoke('fleet:pair', { peerId: peer.id });
         await vi.waitFor(() => {
           expect(local.state().peers.find(({ id }) => id === peer.id)?.status).toBe('pending');
@@ -322,8 +360,37 @@ describe('registered Fleet IPC over two real services', () => {
         expect(
           await invoke('fleet:snapshot', { peerId: peer.id, projectId: project.id, shellIndex }),
         ).toMatchObject({ alive: false });
+        b.settings.set('default_cli_profiles', [
+          { name: 'Host agent', argv: ['/secret/bin/agent'], env: { ACCESS_TOKEN: 'never-wire' }, icon: 'H' },
+        ]);
+        b.projects.updateConfig(project.id, { cliProfiles: [
+          { name: 'Project agent', argv: ['agent'], env: { TOKEN: 'private' }, icon: 'P' },
+        ] });
+        expect(await invoke('fleet:profiles', { peerId: peer.id, projectId: project.id })).toEqual({
+          profiles: [{ name: 'Project agent', scope: 'project', icon: 'P' },
+            { name: 'Host agent', scope: 'global', icon: 'H' }], defaultCliName: null,
+        });
+        expect(JSON.stringify(await invoke('fleet:profiles', { peerId: peer.id, projectId: project.id })))
+          .not.toMatch(/never-wire|private|\/secret\/bin/);
+        expect(await invoke('fleet:set-default-cli', { peerId: peer.id, projectId: project.id,
+          name: 'Project agent' })).toEqual({ defaultCliName: 'Project agent' });
+        const spawn = vi.spyOn(b.ptyManager, 'spawn').mockResolvedValue({ pid: 123 });
+        expect(await invoke('fleet:launch-cli', { peerId: peer.id, projectId: project.id,
+          profileName: 'Project agent' })).toMatchObject({ shellIndex: expect.any(Number) });
+        expect(spawn).toHaveBeenCalledWith(project.id, expect.any(Number),
+          expect.objectContaining({ argv: ['agent'], env: expect.objectContaining({ TOKEN: 'private' }) }));
+        await invoke('fleet:launch-cli', { peerId: peer.id, projectId: project.id,
+          profileName: 'Saved agent', argv: ['agent', '--quiet'], save: true });
+        expect(await invoke('fleet:profiles', { peerId: peer.id, projectId: project.id }))
+          .toMatchObject({ profiles: expect.arrayContaining([{ name: 'Saved agent', scope: 'project' }]) });
+        expect(await invoke('fleet:remove-cli-profile', { peerId: peer.id, projectId: project.id,
+          name: 'Saved agent' })).toEqual({ ok: true });
+        expect(await invoke('fleet:set-default-cli', { peerId: peer.id, projectId: project.id,
+          name: null })).toEqual({ defaultCliName: null });
+        spawn.mockRestore();
         await invoke('fleet:revoke', { peerId: peer.id });
         await expect(invoke('fleet:status', { peerId: peer.id })).rejects.toThrow();
+        await expect(invoke('fleet:profiles', { peerId: peer.id, projectId: project.id })).rejects.toThrow();
       } finally {
         for (const shell of b.ptyManager.liveShells()) {
           await b.ptyManager.kill(shell.projectId, shell.shellIndex);

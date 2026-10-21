@@ -72,7 +72,7 @@ const onSelectRemote = vi.fn();
 const status: FleetStatus = {
   roots: [{ id: 1, name: 'Workspace' }, { id: 2, name: 'Archive' }],
   projects: [{ id: 12, rootId: 1, name: 'Service' }, { id: 14, rootId: 2, name: 'Old Site' }, { id: 13, rootId: 1, name: 'Client' }],
-  shells: [{ projectId: 12, shellIndex: 0, agent: null, state: 'busy' }],
+  shells: [{ projectId: 12, shellIndex: 0, agent: null, state: 'busy', launchName: 'Claude', pinned: false, startedAt: null, lastActiveAt: null }],
 };
 const props = {
   selectedProjectId: null,
