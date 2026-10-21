@@ -97,6 +97,8 @@ function row(node: ReactElement, testId: string): boolean {
     'data-testid' in props && props['data-testid'] === testId;
 }
 function markup() { scenario.cursor = 0; scenario.refCursor = 0; return renderToStaticMarkup(<Sidebar {...props} />); }
+/** The folder tree only, after the In use and Recents sections. */
+function treeMarkup() { const html = markup(); return html.slice(html.indexOf('data-testid="section-all')); }
 function clickButton(testId: string, label: string): void {
   scenario.cursor = 0;
   scenario.refCursor = 0;
@@ -140,7 +142,7 @@ describe('Projects sidebar Fleet grouping', () => {
   });
 
   it('groups remote projects beneath their matching named folders in server order with project counts and live status', () => {
-    const html = markup();
+    const html = treeMarkup();
     const workspace = html.match(/aria-label="Workspace on Build Mac[^"]*"[^>]*>[\s\S]*?<\/button>/)?.[0];
     const archive = html.match(/aria-label="Archive on Build Mac[^"]*"[^>]*>[\s\S]*?<\/button>/)?.[0];
     expect(workspace).toContain('2 projects');
@@ -186,7 +188,7 @@ describe('Projects sidebar Fleet grouping', () => {
       { id: 'machine-c', name: 'Other Mac', status: 'linked' },
     ] };
     clickButton('remote-root-toggle', 'Workspace on Build Mac');
-    const html = markup();
+    const html = treeMarkup();
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-label="Workspace on Build Mac/);
     expect(html).not.toContain('Service on Build Mac');
     expect(html).toContain('Old Site on Build Mac');
@@ -194,14 +196,14 @@ describe('Projects sidebar Fleet grouping', () => {
     expect(html).toContain('data-testid="project-row"');
     expect(html).toContain('data-testid="root-toggle"');
     clickButton('remote-root-toggle', 'Archive on Build Mac');
-    expect(markup()).not.toContain('Old Site on Build Mac');
+    expect(treeMarkup()).not.toContain('Old Site on Build Mac');
     scenario.states.clear();
-    expect(markup()).not.toContain('Service on Build Mac');
-    expect(markup()).not.toContain('Old Site on Build Mac');
+    expect(treeMarkup()).not.toContain('Service on Build Mac');
+    expect(treeMarkup()).not.toContain('Old Site on Build Mac');
     clickButton('remote-root-toggle', 'Workspace on Build Mac');
-    expect(markup()).toMatch(/<button[^>]*aria-expanded="true"[^>]*aria-label="Workspace on Build Mac/);
-    expect(markup()).toContain('Service on Build Mac');
-    expect(markup()).not.toContain('Old Site on Build Mac');
+    expect(treeMarkup()).toMatch(/<button[^>]*aria-expanded="true"[^>]*aria-label="Workspace on Build Mac/);
+    expect(treeMarkup()).toContain('Service on Build Mac');
+    expect(treeMarkup()).not.toContain('Old Site on Build Mac');
   });
 
   it('keeps a peer section collapsed independently of its root folders', () => {
@@ -212,13 +214,13 @@ describe('Projects sidebar Fleet grouping', () => {
     });
     clickButton('remote-root-toggle', 'Workspace on Build Mac');
     clickButton('fleet-machine-machine-b-toggle', 'Build Mac, online');
-    expect(markup()).not.toContain('Workspace on Build Mac');
-    expect(markup()).toContain('Build Mac, online');
+    expect(treeMarkup()).not.toContain('Workspace on Build Mac');
+    expect(treeMarkup()).toContain('Build Mac, online');
     scenario.states.clear();
-    expect(markup()).not.toContain('Workspace on Build Mac');
+    expect(treeMarkup()).not.toContain('Workspace on Build Mac');
     clickButton('fleet-machine-machine-b-toggle', 'Build Mac, online');
-    expect(markup()).toContain('Workspace on Build Mac');
-    expect(markup()).not.toContain('Service on Build Mac');
+    expect(treeMarkup()).toContain('Workspace on Build Mac');
+    expect(treeMarkup()).not.toContain('Service on Build Mac');
   });
 
   it('selects a same-numbered project on another peer without selecting the first peer or local project', () => {
@@ -368,5 +370,40 @@ describe('Projects sidebar Fleet grouping', () => {
     expect(markup()).toContain('data-testid=\"remote-project-row\"');
     if (typeof stopRefresh === 'function') stopRefresh();
     if (typeof disconnect === 'function') disconnect();
+  });
+
+  it('lists remote projects with a live shell in "In use", labelled with their machine', () => {
+    const html = markup();
+    const inUse = html.slice(html.indexOf('data-testid="section-in-use'), html.indexOf('data-testid="section-all'));
+    expect(inUse).toContain('data-testid="remote-in-use-row"');
+    expect(inUse).toContain('aria-label="Service on Build Mac"');
+    expect(inUse).not.toContain('Client on Build Mac');
+    expect(inUse).not.toContain('on Other Mac');
+  });
+
+  it('remembers an opened remote project and shows it in Recents, newest first with local recents', () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
+    clickButton('remote-project-row', 'Client on Build Mac');
+    expect(onSelectRemote).toHaveBeenCalledWith({ peerId: 'machine-b', peerName: 'Build Mac', projectId: 13, projectName: 'Client' });
+    const saved: unknown = JSON.parse(stored.get('metaide.fleetRecents') ?? '[]');
+    expect(saved).toMatchObject([{ peerId: 'machine-b', projectId: 13, projectName: 'Client' }]);
+    scenario.states.clear();
+    const html = markup();
+    const recents = html.slice(html.indexOf('data-testid="section-recents'), html.indexOf('data-testid="section-all'));
+    expect(recents).toContain('data-testid="remote-recent-row"');
+    expect(recents).toContain('aria-label="Client on Build Mac"');
+    expect(recents).not.toContain('Service on Build Mac');
+  });
+
+  it('hides remote recents for machines that are offline or no longer have the project', () => {
+    const entry = { peerId: 'machine-c', peerName: 'Other Mac', projectId: 13, projectName: 'Client', openedAt: '2026-01-01T00:00:00Z' };
+    const gone = { peerId: 'machine-b', peerName: 'Build Mac', projectId: 99, projectName: 'Gone', openedAt: '2026-01-01T00:00:00Z' };
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'metaide.fleetRecents' ? JSON.stringify([entry, gone]) : null, setItem: () => undefined });
+    const html = markup();
+    expect(html).not.toContain('data-testid="remote-recent-row"');
   });
 });

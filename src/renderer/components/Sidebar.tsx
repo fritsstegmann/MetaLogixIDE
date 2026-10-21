@@ -7,7 +7,7 @@ import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { useOverallAgentState, useProjectAgentState } from '@renderer/hooks/useAgentStates';
 import type { Project, Root } from '@shared/types';
 import type { AgentState } from '@shared/agent-state';
-import type { FleetPeer, FleetProject, FleetRoot, FleetState, FleetStatus } from '@shared/fleet-contract';
+import type { FleetPeer, FleetProject, FleetRoot, FleetShell, FleetState, FleetStatus } from '@shared/fleet-contract';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
 import { AnimatePresence } from 'motion/react';
@@ -113,9 +113,11 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
     }
   }, []);
   useEffect(() => {
-    if (!selectedRemote || !fleet?.enabled || fleet.peers.find((peer) => peer.id === selectedRemote.peerId)?.status !== 'linked') return;
-    void loadRemote(selectedRemote.peerId);
-    const timer = window.setInterval(() => void loadRemote(selectedRemote.peerId), 5000);
+    if (!fleet?.enabled) return;
+    const linked = fleet.peers.filter((peer) => peer.status === 'linked').map((peer) => peer.id);
+    if (linked.length === 0) return;
+    if (selectedRemote && linked.includes(selectedRemote.peerId)) void loadRemote(selectedRemote.peerId);
+    const timer = window.setInterval(() => { for (const id of linked) void loadRemote(id); }, 5000);
     return () => window.clearInterval(timer);
   }, [fleet, selectedRemote, loadRemote]);
 
@@ -141,14 +143,6 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
     return sorted;
   }, [projects, aliveIds, filter]);
 
-  // Recents excluding the ones already shown in "In use".
-  const recentsShown = useMemo(() => {
-    const skip = new Set(inUse.map((p) => p.id));
-    const list = recents.filter((p) => !skip.has(p.id));
-    if (filter) return list.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase()));
-    return list.slice(0, 6);
-  }, [recents, inUse, filter]);
-
   const grouped = useMemo(() => {
     const byRoot = new Map<number, Project[]>();
     for (const p of projects) {
@@ -161,6 +155,52 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
 
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const askRename = useCallback((p: Project) => setRenameTarget(p), []);
+
+  const [remoteRecents, setRemoteRecents] = useState<RemoteRecent[]>(readRemoteRecents);
+  const selectRemote = useCallback((project: RemoteProjectSelection) => {
+    setRemoteRecents((prev) => rememberRemote(prev, project));
+    onSelectRemote(project);
+  }, [onSelectRemote]);
+
+  // Remote projects with a live shell, per linked machine, in the machine's project order.
+  const remoteInUse = useMemo(() => {
+    if (!fleet?.enabled) return [];
+    const query = filter.toLowerCase();
+    const list: RemoteRowItem[] = [];
+    for (const peer of fleet.peers) {
+      const data = peer.status === 'linked' ? remoteStatuses[peer.id]?.data : undefined;
+      if (!data) continue;
+      const states = remoteShellStates(data.shells);
+      for (const project of data.projects) {
+        const state = states.get(project.id);
+        if (!state || (query && !project.name.toLowerCase().includes(query))) continue;
+        list.push({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name, state });
+      }
+    }
+    return list;
+  }, [fleet, remoteStatuses, filter]);
+
+  // Local and remote recents merged by last-opened time, excluding anything already "In use".
+  const recentRows = useMemo(() => {
+    const query = filter.toLowerCase();
+    const skipLocal = new Set(inUse.map((p) => p.id));
+    const skipRemote = new Set(remoteInUse.map((r) => `${r.peerId}:${r.projectId}`));
+    const rows: Array<{ at: string; local?: Project; remote?: RemoteRowItem }> = [];
+    for (const p of recents) if (!skipLocal.has(p.id)) rows.push({ at: p.lastOpenedAt ?? '', local: p });
+    for (const r of remoteRecents) {
+      const peer = fleet?.enabled ? fleet.peers.find((item) => item.id === r.peerId && item.status === 'linked') : undefined;
+      if (!peer || skipRemote.has(`${r.peerId}:${r.projectId}`)) continue;
+      const data = remoteStatuses[peer.id]?.data;
+      const current = data?.projects.find((project) => project.id === r.projectId);
+      if (data && !current) continue;
+      const state = data ? remoteShellStates(data.shells).get(r.projectId) : undefined;
+      rows.push({ at: r.openedAt, remote: { peerId: peer.id, peerName: peer.name, projectId: r.projectId, projectName: current?.name ?? r.projectName, state } });
+    }
+    rows.sort((a, b) => toTime(b.at) - toTime(a.at));
+    const name = (row: (typeof rows)[number]) => (row.local?.name ?? row.remote?.projectName ?? '').toLowerCase();
+    return query ? rows.filter((row) => name(row).includes(query)) : rows.slice(0, 6);
+  }, [recents, remoteRecents, inUse, remoteInUse, fleet, remoteStatuses, filter]);
+  const isSelectedRemote = (item: RemoteRowItem) => selectedRemote?.peerId === item.peerId && selectedRemote.projectId === item.projectId;
 
   return (
     <aside
@@ -180,7 +220,7 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-4 flex flex-col gap-7">
-        {inUse.length > 0 && (
+        {inUse.length + remoteInUse.length > 0 && (
           <Section title="In use" testId="section-in-use" accent dotState={overallAgentState}>
             {inUse.map((p) => (
               <ProjectRow
@@ -194,12 +234,16 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
                 onProjectSettings={onProjectSettings}
               />
             ))}
+            {remoteInUse.map((item) => (
+              <RemoteProjectRow key={`${item.peerId}:${item.projectId}`} item={item} testId="remote-in-use-row" showMachine
+                selected={isSelectedRemote(item)} onSelect={selectRemote} />
+            ))}
           </Section>
         )}
 
-        {recentsShown.length > 0 && (
+        {recentRows.length > 0 && (
           <Section title="Recents" testId="section-recents">
-            {recentsShown.map((p) => (
+            {recentRows.map(({ local: p, remote }) => p ? (
               <ProjectRow
                 key={p.id}
                 project={p}
@@ -210,6 +254,9 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
                 onEditEnv={onEditEnv}
                 onProjectSettings={onProjectSettings}
               />
+            ) : remote && (
+              <RemoteProjectRow key={`${remote.peerId}:${remote.projectId}`} item={remote} testId="remote-recent-row" showMachine
+                selected={isSelectedRemote(remote)} onSelect={selectRemote} />
             ))}
           </Section>
         )}
@@ -232,7 +279,7 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
         {fleet?.enabled && fleet.peers.filter((peer) => peer.status === 'linked' || peer.status === 'offline').map((peer) => (
           <Section key={peer.id} title={peer.name} persistKey={`fleet:${peer.id}`} testId={`fleet-machine-${peer.id}`}
             status={peer.status === 'linked' ? { label: 'Online', tone: 'text-[--hue-green]' } : { label: 'Offline', tone: 'text-[--hue-pink]' }}>
-            <FleetMachine peer={peer} status={remoteStatuses[peer.id]} filter={filter} selected={selectedRemote} onSelect={onSelectRemote} onLoad={loadRemote} />
+            <FleetMachine peer={peer} status={remoteStatuses[peer.id]} filter={filter} selected={selectedRemote} onSelect={selectRemote} onLoad={loadRemote} />
           </Section>
         ))}
         {fleetError && <div className="px-2"><p role="alert" className="text-base text-[--danger]">Could not load Fleet machines.</p><button type="button" onClick={() => void retryFleet()} className="min-h-11 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Retry Fleet</button></div>}
@@ -262,7 +309,7 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
   useEffect(() => { if (online && !status) void onLoad(peer.id); }, [online, status, onLoad, peer.id]);
   const data = online && status?.kind !== 'error' ? status?.data : undefined;
   const grouped = new Map<number, FleetProject[]>();
-  const shellStates = new Map<number, AgentState>();
+  const shellStates = data ? remoteShellStates(data.shells) : new Map<number, AgentState>();
   if (data) {
     const query = filter.toLowerCase();
     for (const project of data.projects) {
@@ -271,15 +318,9 @@ function FleetMachine({ peer, status, filter, selected, onSelect, onLoad }: Flee
       projects.push(project);
       grouped.set(project.rootId, projects);
     }
-    for (const shell of data.shells) {
-      const previous = shellStates.get(shell.projectId);
-      if (!previous || shell.state === 'blocked' || (shell.state === 'busy' && previous === 'idle')) {
-        shellStates.set(shell.projectId, shell.state);
-      }
-    }
   }
   return (
-    <div className="min-w-0 pl-4">
+    <div className="min-w-0">
       {online && !status && <button type="button" onClick={() => void onLoad(peer.id)} className="min-h-11 px-2 text-base text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent]">Load projects</button>}
       {status?.kind === 'loading' && !status.data && <p role="status" className="px-2 py-2 text-base text-[--text-muted]">Loading projects…</p>}
       {status?.kind === 'error' && online && (
@@ -323,34 +364,88 @@ function FleetRootBlock({ peer, root, projects, shellStates, selected, onSelect 
   let aliveCount = 0;
   for (const project of projects) if (shellStates.has(project.id)) aliveCount += 1;
   return (
-    <div className="mb-2">
+    <div>
       <button type="button" onClick={toggle} aria-expanded={open} aria-label={`${root.name} on ${peer.name}, ${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}
         data-testid="remote-root-toggle"
-        className="w-full min-h-11 text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] flex items-center gap-2.5">
+        className="w-full text-left px-2.5 py-1 text-xs text-[--text-muted] hover:text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] flex items-center gap-2.5">
         <RootFolderGlyph color={rootHueVar(`${peer.id}:${root.name}`)} testId={null} />
         <span className="truncate flex-1">{root.name}</span>
         <span className="text-[10px] opacity-70">{aliveCount > 0 ? `${aliveCount}/${projects.length}` : projects.length}</span>
         <ChevronIcon collapsed={!open} />
       </button>
-      {open && <ul aria-label={`Projects in ${root.name} on ${peer.name}`} className="mt-2 space-y-2">
-        {projects.map((project) => {
-          const state = shellStates.get(project.id);
-          return (
-            <li key={project.id}>
-              <button type="button" data-testid="remote-project-row"
-                aria-label={`${project.name} on ${peer.name}`}
-                aria-current={selected?.peerId === peer.id && selected.projectId === project.id ? 'true' : undefined}
-                onClick={() => onSelect({ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name })}
-                className={`flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-lg pl-6 pr-2.5 text-left text-base focus-visible:ring-2 focus-visible:ring-[--accent] ${selected?.peerId === peer.id && selected.projectId === project.id ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}>
-                {state && <StatusDot state={state} />}
-                <span className="truncate">{project.name}</span>
-              </button>
-            </li>
-          );
-        })}
+      {open && <ul aria-label={`Projects in ${root.name} on ${peer.name}`} >
+        {projects.map((project) => (
+          <li key={project.id}>
+            <RemoteProjectRow item={{ peerId: peer.id, peerName: peer.name, projectId: project.id, projectName: project.name, state: shellStates.get(project.id) }}
+              testId="remote-project-row" indent selected={selected?.peerId === peer.id && selected.projectId === project.id} onSelect={onSelect} />
+          </li>
+        ))}
       </ul>}
     </div>
   );
+}
+
+interface RemoteRowItem extends RemoteProjectSelection {
+  readonly state?: AgentState;
+}
+
+/** A remote project row styled like a local ProjectRow; `showMachine` labels it outside its machine section. */
+function RemoteProjectRow({ item, testId, selected, onSelect, indent = false, showMachine = false }: {
+  readonly item: RemoteRowItem;
+  readonly testId: string;
+  readonly selected: boolean;
+  readonly onSelect: (project: RemoteProjectSelection) => void;
+  readonly indent?: boolean;
+  readonly showMachine?: boolean;
+}) {
+  const { peerId, peerName, projectId, projectName, state } = item;
+  return (
+    <button type="button" data-testid={testId}
+      aria-label={`${projectName} on ${peerName}`}
+      aria-current={selected ? 'true' : undefined}
+      onClick={() => onSelect({ peerId, peerName, projectId, projectName })}
+      className={`flex h-[34px] w-full min-w-0 items-center gap-2.5 rounded-lg ${indent ? 'pl-[22px]' : 'pl-2.5'} pr-2.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-[--accent] ${selected ? 'bg-[--accent-soft] font-medium' : 'hover:bg-[--surface-hover]'}`}>
+      {state ? <StatusDot state={state} className="shrink-0" /> : <span aria-hidden className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${selected ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--surface-active]'}`} />}
+      <span className="truncate">{projectName}</span>
+      {showMachine && <span className="ml-auto shrink-0 max-w-[45%] truncate text-[11px] text-[--text-muted]">{peerName}</span>}
+    </button>
+  );
+}
+
+/** Worst agent state per remote project: blocked beats busy beats idle. */
+function remoteShellStates(shells: readonly FleetShell[]): Map<number, AgentState> {
+  const states = new Map<number, AgentState>();
+  for (const shell of shells) {
+    const previous = states.get(shell.projectId);
+    if (!previous || shell.state === 'blocked' || (shell.state === 'busy' && previous === 'idle')) states.set(shell.projectId, shell.state);
+  }
+  return states;
+}
+
+interface RemoteRecent extends RemoteProjectSelection {
+  readonly openedAt: string;
+}
+const REMOTE_RECENTS_KEY = 'metaide.fleetRecents';
+const REMOTE_RECENTS_LIMIT = 10;
+function readRemoteRecents(): RemoteRecent[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(REMOTE_RECENTS_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((r): r is RemoteRecent => r !== null && typeof r === 'object' &&
+      typeof r.peerId === 'string' && typeof r.peerName === 'string' && typeof r.projectId === 'number' &&
+      typeof r.projectName === 'string' && typeof r.openedAt === 'string');
+  } catch { return []; }
+}
+function rememberRemote(list: readonly RemoteRecent[], project: RemoteProjectSelection): RemoteRecent[] {
+  const { peerId, peerName, projectId, projectName } = project;
+  const next = [{ peerId, peerName, projectId, projectName, openedAt: new Date().toISOString() },
+    ...list.filter((r) => r.peerId !== peerId || r.projectId !== projectId)].slice(0, REMOTE_RECENTS_LIMIT);
+  try { localStorage.setItem(REMOTE_RECENTS_KEY, JSON.stringify(next)); } catch { /* storage full or unavailable */ }
+  return next;
+}
+function toTime(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? 0 : t;
 }
 
 const SECTION_COLLAPSED_KEY = 'metaide.sectionsCollapsed';
