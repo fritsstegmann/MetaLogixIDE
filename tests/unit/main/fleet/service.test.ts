@@ -25,6 +25,10 @@ const operations = (): FleetOperations => ({
   status: () => ({ roots: [{ id: 2, name: 'Workspace' }], projects: [{ id: 1, rootId: 2, name: 'Project' }], shells: [] }),
   launch: async () => ({ shellIndex: 0 }),
   launchClaude: async () => ({ shellIndex: 0 }),
+  profiles: async () => ({ profiles: [], defaultCliName: null }),
+  launchCli: async () => ({ shellIndex: 0 }),
+  setDefaultCli: async (_projectId, name) => ({ defaultCliName: name }),
+  removeCliProfile: async () => ({ ok: true }),
   stop: async () => {},
   write: async () => {},
   resize: async () => {},
@@ -597,7 +601,8 @@ describe('fleet authorization', () => {
     const cases = [
       [first, { ...last, roots: [{ id: 1, name: 'Duplicate' }] }],
       [{ ...first, projects: [{ id: 1, rootId: 99, name: 'Orphan' }] }, last],
-      [{ ...first, shells: [{ projectId: 99, shellIndex: 0, agent: null, state: 'idle' }],
+      [{ ...first, shells: [{ projectId: 99, shellIndex: 0, agent: null, state: 'idle', launchName: 'Claude',
+        pinned: false, startedAt: null, lastActiveAt: null }],
         shellTotal: 1 }, { ...last, shellOffset: 1, shellTotal: 1 }],
     ] as const;
     for (const [start, end] of cases) {

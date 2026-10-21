@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type * as ReactModule from 'react';
-import type { FleetTerminalEvent } from '@shared/fleet-contract';
+import type { FleetShell, FleetTerminalEvent } from '@shared/fleet-contract';
 import type { RemoteProjectSelection } from '@renderer/components/Sidebar';
 import type { TerminalKeyEvent, TerminalKeyHandler } from '@renderer/shortcut-contract';
 
@@ -44,6 +44,14 @@ const runtime = vi.hoisted(() => {
       slots[index] = { fn, deps };
       return fn;
     },
+    useMemo<F>(fn: () => F, deps: readonly unknown[]): F {
+      const index = cursor++;
+      const previous = slots[index] as { value: F; deps: readonly unknown[] } | undefined;
+      if (previous && !changed(previous.deps, deps)) return previous.value;
+      const value = fn();
+      slots[index] = { value, deps };
+      return value;
+    },
     useEffect(run: () => unknown, deps?: readonly unknown[]) {
       const index = effectCursor++;
       const previous = effects[index];
@@ -52,7 +60,7 @@ const runtime = vi.hoisted(() => {
     },
   };
 });
-vi.mock('react', async (original) => ({ ...(await original<typeof ReactModule>()), useState: runtime.useState, useRef: runtime.useRef, useCallback: runtime.useCallback, useEffect: runtime.useEffect }));
+vi.mock('react', async (original) => ({ ...(await original<typeof ReactModule>()), useState: runtime.useState, useRef: runtime.useRef, useCallback: runtime.useCallback, useMemo: runtime.useMemo, useEffect: runtime.useEffect }));
 const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; disposed: boolean; cols: number; rows: number }> }));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -87,11 +95,24 @@ vi.mock('@renderer/fonts/terminal-font-weight-context', () => ({ useTerminalFont
 vi.mock('@renderer/shortcut-platform', () => ({ useShortcutPlatform: () => 'other' }));
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Set<(event: FleetTerminalEvent) => void>());
-vi.mock('@renderer/api', () => ({ api: { invoke, on: vi.fn((_channel: string, listener: (event: FleetTerminalEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }) } }));
+const remote = vi.hoisted(() => ({
+  shells: [] as FleetShell[],
+  status: null as (() => Promise<{ roots: never[]; projects: never[]; shells: FleetShell[] }>) | null,
+}));
+vi.mock('@renderer/api', () => ({ api: { invoke: (channel: string, ...args: unknown[]) => channel === 'fleet:status'
+  ? remote.status?.() ?? Promise.resolve({ roots: [], projects: [], shells: remote.shells })
+  : channel === 'fleet:profiles'
+    ? Promise.resolve({ profiles: [], defaultCliName: null })
+    : invoke(channel, ...args), on: vi.fn((_channel: string, listener: (event: FleetTerminalEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }) } }));
 const { RemoteTerminal } = await import('@renderer/components/RemoteTerminal');
+const { ShellTabsBar } = await import('@renderer/components/ShellTabsBar');
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 const project: RemoteProjectSelection = { peerId: 'machine-b', peerName: 'Build Mac', projectId: 12, projectName: 'Service' };
 const event = (kind: FleetTerminalEvent['kind'], data: string, subscriptionId = 'sub-1'): FleetTerminalEvent => ({ peerId: 'machine-b', projectId: 12, shellIndex: 2, subscriptionId, kind, data });
+const shellRow = (shellIndex: number, launchName = 'Terminal'): FleetShell => ({
+  projectId: 12, shellIndex, launchName, agent: null, state: 'idle',
+  pinned: false, startedAt: null, lastActiveAt: null,
+});
 function nodes(node: ReactNode): ReactElement[] {
   if (!isValidElement(node)) return [];
   const children = (node.props as { children?: ReactNode }).children;
@@ -121,8 +142,13 @@ function mount() {
     draw,
     refresh,
     visible: () => text(draw()),
+    bar() {
+      const bar = nodes(draw()).find((node) => node.type === ShellTabsBar);
+      if (!bar) throw new Error('Missing remote shell tab strip');
+      return bar.props as ReactModule.ComponentProps<typeof ShellTabsBar>;
+    },
     control(label: string) {
-      const node = nodes(draw()).find((item) => item.type === 'button' && text((item.props as { children?: ReactNode }).children) === label);
+      const node = nodes(draw()).find((item) => item.type === 'button' && (text((item.props as { children?: ReactNode }).children) === label || (item.props as { 'aria-label'?: string })['aria-label'] === label));
       if (!node) throw new Error(`Missing button ${label}`);
       return node.props as { disabled?: boolean; onClick: () => void };
     },
@@ -143,6 +169,8 @@ beforeEach(() => {
   fits.count = 0;
   fits.dimensions = { cols: 80, rows: 24 };
   font.size = 13;
+  remote.shells = [];
+  remote.status = null;
   invoke.mockReset();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} });
@@ -155,6 +183,7 @@ afterEach(() => { runtime.unmount(); vi.unstubAllGlobals(); });
 describe('RemoteTerminal', () => {
   it('launches remote Claude, attaches once, writes ANSI snapshot before live output, and sends interactive data', async () => {
     const app = mount();
+    await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:launch-claude', { peerId: 'machine-b', projectId: 12 });
     await flush();
     app.draw();
@@ -276,16 +305,138 @@ describe('RemoteTerminal', () => {
     expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.objectContaining({ data: 'ignored' }));
   });
 
-  it('reattaches Claude on reconnect rather than creating a local shell', async () => {
+  it('shows all peer shells as tabs and switches PTY subscriptions without relaunching Claude', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
     const app = mount();
     await flush();
     app.draw();
     await flush();
+    expect(app.bar().shells.map(({ shellIndex, launchName }) => [shellIndex, launchName])).toEqual([[0, 'Claude'], [2, 'Terminal']]);
+    expect(app.bar().active).toBe(0);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:launch-claude', expect.anything());
+    expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 0 });
+    const first = terminal.instances[0];
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    expect(first?.disposed).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-1' });
+    expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 2 });
+    app.emit(event('ready', ''));
+    terminal.instances[1]?.data('second shell\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'second shell\r' });
+  });
+
+  it('launches saved and custom agents on the peer, not the controller, and selects each new tab', async () => {
+    remote.shells = [shellRow(0, 'Claude')];
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'fleet:launch-cli') {
+        const next = remote.shells.length + 1;
+        remote.shells = [...remote.shells, shellRow(next, next === 2 ? 'Pi' : 'Llama')];
+        return Promise.resolve({ shellIndex: next });
+      }
+      if (channel === 'fleet:subscribe') return Promise.resolve({ subscriptionId: 'sub-1' });
+      return Promise.resolve({ ok: true });
+    });
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onLaunchProfile('Pi');
+    await flush();
+    app.draw();
+    expect(invoke).toHaveBeenCalledWith('fleet:launch-cli', { peerId: 'machine-b', projectId: 12, profileName: 'Pi' });
+    expect(app.bar().active).toBe(2);
+    app.bar().onLaunchCustom('Llama', 'llama chat --model "tiny local"', true);
+    await flush();
+    app.draw();
+    expect(invoke).toHaveBeenCalledWith('fleet:launch-cli', {
+      peerId: 'machine-b', projectId: 12, profileName: 'Llama',
+      argv: ['llama', 'chat', '--model', 'tiny local'], save: true,
+    });
+    expect(app.bar().active).toBe(3);
+    expect(app.bar().shells.map(({ launchName }) => launchName)).toEqual(['Claude', 'Pi', 'Llama']);
+    expect(invoke).not.toHaveBeenCalledWith('shells:launch-cli', expect.anything());
+  });
+
+  it('ignores stale status replies after a newer refresh lists a newly launched tab', async () => {
+    remote.shells = [shellRow(0, 'Claude')];
+    const old = Promise.withResolvers<{ roots: never[]; projects: never[]; shells: FleetShell[] }>();
+    let statusCalls = 0;
+    remote.status = () => {
+      statusCalls++;
+      return statusCalls === 2 ? old.promise : Promise.resolve({ roots: [], projects: [], shells: remote.shells });
+    };
+    let refresh!: () => void;
+    vi.stubGlobal('setInterval', (callback: () => void) => { refresh = callback; return 1; });
+    vi.stubGlobal('clearInterval', vi.fn());
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'fleet:launch') {
+        remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+        return Promise.resolve({ shellIndex: 2 });
+      }
+      if (channel === 'fleet:subscribe') return Promise.resolve({ subscriptionId: 'sub-1' });
+      return Promise.resolve({ ok: true });
+    });
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onLaunchPlainTab();
+    await flush();
+    refresh();
+    await flush();
+    app.draw();
+    old.resolve({ roots: [], projects: [], shells: [shellRow(0, 'Claude')] });
+    await flush();
+    expect(statusCalls).toBe(3);
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([0, 2]);
+  });
+
+  it('closes one remote tab and selects a surviving tab without stopping its PTY', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Pi')];
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onSelect(2);
+    app.draw();
+    app.bar().onClose(2);
+    await flush();
+    app.draw();
+    expect(invoke).toHaveBeenCalledWith('fleet:stop', { peerId: 'machine-b', projectId: 12, shellIndex: 2 });
+    expect(app.bar().active).toBe(0);
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([0]);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', { peerId: 'machine-b', projectId: 12, shellIndex: 0 });
+  });
+
+  it('manages remote CLI defaults and profile removal through authenticated Fleet operations', async () => {
+    remote.shells = [shellRow(0, 'Claude')];
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'fleet:set-default-cli') return Promise.resolve({ defaultCliName: 'Pi' });
+      return Promise.resolve({ ok: true });
+    });
+    const app = mount();
+    await flush();
+    const menu = app.bar().remoteMenu;
+    expect(menu).toBeDefined();
+    await menu!.setDefault('Pi');
+    await menu!.remove('Pi');
+    expect(invoke).toHaveBeenCalledWith('fleet:set-default-cli', { peerId: 'machine-b', projectId: 12, name: 'Pi' });
+    expect(invoke).toHaveBeenCalledWith('fleet:remove-cli-profile', { peerId: 'machine-b', projectId: 12, name: 'Pi' });
+    expect(app.bar().defaultCliName).toBe('Pi');
+    expect(invoke).not.toHaveBeenCalledWith('shells:set-default-cli', expect.anything());
+  });
+
+  it('reattaches an existing remote shell on reconnect without launching another agent', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    remote.shells = [shellRow(2, 'Claude')];
     app.offline();
     app.online();
     await flush();
     app.draw();
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:launch-claude')).toHaveLength(2);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:launch-claude')).toHaveLength(1);
     expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:subscribe')).toHaveLength(2);
     expect(invoke).not.toHaveBeenCalledWith('shells:launch', expect.anything());
   });
@@ -296,7 +447,7 @@ describe('RemoteTerminal', () => {
     app.draw();
     await flush();
     const first = terminal.instances[0];
-    app.control('Retry Claude').onClick();
+    app.control('Reconnect terminal').onClick();
     await flush();
     app.draw();
     expect(first?.disposed).toBe(true);
@@ -344,7 +495,7 @@ describe('RemoteTerminal', () => {
     await flush();
     expect(renderToStaticMarkup(app.draw())).toContain('role="alert"');
     expect(app.visible()).not.toContain('private launch command');
-    app.control('New plain shell').onClick();
+    app.bar().onLaunchPlainTab();
     await flush();
     app.draw();
     await flush();

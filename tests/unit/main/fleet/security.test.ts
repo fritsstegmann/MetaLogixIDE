@@ -7,6 +7,7 @@ import {
   pairingCode,
   validateSnapshot,
   validateStatus,
+  validateProfiles,
   validateStatusPage,
 } from '@main/fleet/protocol';
 
@@ -104,6 +105,61 @@ describe('fleet network boundaries', () => {
     expect(decodeMessage(JSON.stringify({ type: 'response', id: 'c'.repeat(32),
       ok: false, error: '/secret/path' }))).toBeNull();
   });
+  it('rejects malformed profile operations and never accepts secret-bearing profile results', () => {
+    const request = (op: string, args: unknown) =>
+      decodeMessage(JSON.stringify({ type: 'request', id: 'c'.repeat(32), op, args }));
+    for (const op of ['profiles', 'launch-cli', 'set-default-cli', 'remove-cli-profile'])
+      expect(request(op, { projectId: 1, ...(op === 'remove-cli-profile' ? { name: 'Agent' } :
+        op === 'set-default-cli' ? { name: null } :
+        op === 'launch-cli' ? { profileName: 'Agent' } : {}) })).not.toBeNull();
+    for (const [op, args] of [
+      ['profiles', { projectId: 0 }],
+      ['profiles', { projectId: 1, path: '/secret' }],
+      ['launch-cli', { projectId: 1 }],
+      ['launch-cli', { projectId: 1, argv: [] }],
+      ['launch-cli', { projectId: 1, argv: ['x'.repeat(1025)] }],
+      ['launch-cli', { projectId: 1, argv: ['x', ''] }],
+      ['launch-cli', { projectId: 1, argv: ['x'], env: { SECRET: 'key' } }],
+      ['launch-cli', { projectId: 1, argv: ['x'], save: true }],
+      ['launch-cli', { projectId: 1, profileName: 'Agent', argv: ['x'], save: 'true' }],
+      ['launch-cli', { projectId: 1, argv: Array.from({ length: 10 }, () => 'x'.repeat(1024)) }],
+      ['profiles', { projectId: 1, env: { SECRET: 'private' } }],
+      ['set-default-cli', { projectId: 1, name: 'Agent', argv: ['sh'] }],
+      ['set-default-cli', { projectId: 1, name: ' '.repeat(81) }],
+      ['set-default-cli', { projectId: 1, name: '' }],
+      ['remove-cli-profile', { projectId: 1, name: null }],
+    ] as const) expect(request(op, args)).toBeNull();
+  });
+
+  it('allows only bounded tab metadata, never shell command or path fields', () => {
+    const shell = { projectId: 1, shellIndex: 0, agent: null, state: 'idle',
+      launchName: 'Terminal', pinned: false, startedAt: null, lastActiveAt: '2026-10-21 12:00:00' };
+    const status = { roots: [{ id: 4, name: 'Workspace' }],
+      projects: [{ id: 1, rootId: 4, name: 'safe' }], shells: [shell] };
+    expect(validateStatus(status)).toEqual(status);
+    for (const bad of [
+      { ...shell, launchName: '/secret/bin' }, { ...shell, launchName: 'x'.repeat(161) },
+      { ...shell, pinned: 'false' }, { ...shell, startedAt: 'x'.repeat(100) },
+      { ...shell, launchArgv: ['/secret/agent'] }, { ...shell, env: { TOKEN: 'secret' } },
+    ]) expect(validateStatus({ ...status, shells: [bad] })).toBeNull();
+  });
+  it('rejects secret fields, duplicate identities and oversized profile metadata', () => {
+    const valid = { profiles: [{ name: 'Agent', scope: 'project', icon: 'A' }],
+      defaultCliName: 'Agent' };
+    expect(validateProfiles(valid)).toEqual(valid);
+    for (const profiles of [
+      [{ ...valid.profiles[0], argv: ['/secret/bin'] }],
+      [{ ...valid.profiles[0], env: { TOKEN: 'secret' } }],
+      [{ ...valid.profiles[0], icon: '/secret' }],
+      [{ ...valid.profiles[0], icon: 'x'.repeat(33) }],
+      [{ ...valid.profiles[0], name: 'Agent\nspoof' }],
+      [{ ...valid.profiles[0], icon: 'A\u001b[31m' }],
+      [{ ...valid.profiles[0], scope: 'unknown' }],
+      [valid.profiles[0], valid.profiles[0]],
+      Array.from({ length: 65 }, (_, i) => ({ name: `Agent ${i}`, scope: 'global' })),
+    ]) expect(validateProfiles({ ...valid, profiles })).toBeNull();
+    expect(validateProfiles({ ...valid, defaultCliName: '/secret' })).toBeNull();
+  });
 
   it('rejects malformed status page offsets, tokens and impossible page lengths', () => {
     const request = (args: unknown) =>
@@ -124,6 +180,18 @@ describe('fleet network boundaries', () => {
     ]) {
       expect(request(args)).toBeNull();
     }
+  });
+  it('checks metadata on each paginated shell before forwarding it', () => {
+    const shell = { projectId: 1, shellIndex: 0, agent: null, state: 'idle',
+      launchName: 'Terminal', pinned: true, startedAt: '2026-10-21 12:00:00',
+      lastActiveAt: null };
+    const page = { roots: [{ id: 2, name: 'Root' }],
+      projects: [{ id: 1, rootId: 2, name: 'Project' }], shells: [shell],
+      rootOffset: 0, projectOffset: 0, shellOffset: 0,
+      rootTotal: 1, projectTotal: 1, shellTotal: 1, token: 'a'.repeat(32) };
+    expect(validateStatusPage(page)?.shells).toEqual([shell]);
+    expect(validateStatusPage({ ...page, shells: [{ ...shell, launchArgv: ['/secret/bin'] }] })).toBeNull();
+    expect(validateStatusPage({ ...page, shells: [{ ...shell, pinned: 'true' }] })).toBeNull();
   });
 
   it('requires exact page shape, totals, and bounded progress', () => {
@@ -170,7 +238,8 @@ describe('fleet network boundaries', () => {
     const valid = {
       roots: [{ id: 4, name: 'Workspace' }],
       projects: [{ id: 1, rootId: 4, name: 'safe' }],
-      shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
+      shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy',
+        launchName: 'Agent', pinned: false, startedAt: null, lastActiveAt: null }],
     };
     expect(validateStatus(valid)).toEqual(valid);
     for (const invalid of [

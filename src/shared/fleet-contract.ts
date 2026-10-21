@@ -43,11 +43,16 @@ export interface FleetControl {
   readonly shellIndex: number;
   readonly peerName: string;
 }
+/** Public live tab information; executable arguments, environment, paths and credentials stay on the host. */
 export interface FleetShell {
   readonly projectId: number;
   readonly shellIndex: number;
   readonly agent: AgentKind | null;
   readonly state: AgentState;
+  readonly launchName: string;
+  readonly pinned: boolean;
+  readonly startedAt: string | null;
+  readonly lastActiveAt: string | null;
 }
 
 export interface FleetStatus {

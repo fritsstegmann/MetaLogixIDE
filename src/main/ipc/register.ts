@@ -241,6 +241,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'fleet:status': async (s, { peerId }) => needFleet(s).status(peerId),
   'fleet:launch': async (s, { peerId, projectId }) => needFleet(s).launch(peerId, projectId),
   'fleet:launch-claude': async (s, { peerId, projectId }) => needFleet(s).launchClaude(peerId, projectId),
+  'fleet:profiles': async (s, { peerId, projectId }) => needFleet(s).profiles(peerId, projectId),
+  'fleet:launch-cli': async (s, { peerId, projectId, profileName, argv, save }) =>
+    needFleet(s).launchCli(peerId, projectId, { ...(profileName !== undefined ? { profileName } : {}),
+      ...(argv !== undefined ? { argv } : {}), ...(save !== undefined ? { save } : {}) }),
+  'fleet:set-default-cli': async (s, { peerId, projectId, name }) => needFleet(s).setDefaultCli(peerId, projectId, name),
+  'fleet:remove-cli-profile': async (s, { peerId, projectId, name }) => needFleet(s).removeCliProfile(peerId, projectId, name),
   'fleet:subscribe': async (s, { peerId, projectId, shellIndex }) => needFleet(s).subscribe(peerId, projectId, shellIndex),
   'fleet:unsubscribe': async (s, { peerId, subscriptionId }) => {
     await needFleet(s).unsubscribe(peerId, subscriptionId);
@@ -1442,15 +1448,36 @@ export function createFleetOperations(services: Services): FleetOperations {
         (services.agentStatus?.list() ?? []).map((entry) =>
           [`${entry.projectId}:${entry.shellIndex}`, entry]),
       );
+      const shellRows = new Map(services.shells.list().map(row => [`${row.projectId}:${row.shellIndex}`, row]));
       const shells = live.filter(({ projectId }) => visibleProjects.has(projectId))
         .map(({ projectId, shellIndex }) => {
           const agent = agents.get(`${projectId}:${shellIndex}`);
-          return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const };
+          const row = shellRows.get(`${projectId}:${shellIndex}`);
+          const bin = row?.launchArgv?.[0] ?? '';
+          const base = bin.replace(/.*\//, '');
+          const launchName = base === '$SHELL' || /^(zsh|bash|sh|fish)$/.test(base)
+            ? 'Terminal' : base ? base[0]!.toUpperCase() + base.slice(1) : `Shell ${shellIndex}`;
+          return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const,
+            launchName: fleetName(launchName.replaceAll('\\', '/').split('/').at(-1) ?? ''),
+            pinned: !!row?.pinned, startedAt: row?.startedAt ?? null, lastActiveAt: row?.lastActiveAt ?? null };
         });
       return { roots, projects, shells };
     },
     launch: (projectId) => handlers['shells:launch-plain'](services, { projectId }),
     launchClaude: (projectId) => handlers['shells:launch'](services, { projectId }),
+    profiles: async (projectId) => {
+      const { profiles } = await handlers['shells:cli-profiles-list'](services, { projectId });
+      return { profiles: profiles.map(({ name, scope, icon }) =>
+        ({ name, scope, ...(icon !== undefined ? { icon } : {}) })),
+        defaultCliName: services.projects.get(projectId)?.config.defaultCliName ?? null };
+    },
+    launchCli: (projectId, options) => handlers['shells:launch-cli'](services, { projectId, ...options }),
+    setDefaultCli: async (projectId, name) => {
+      const { project } = await handlers['shells:set-default-cli'](services, { projectId, name });
+      return { defaultCliName: project.config.defaultCliName ?? null };
+    },
+    removeCliProfile: (projectId, name) =>
+      handlers['shells:cli-profiles-remove'](services, { projectId, name }),
     hasProject: (projectId) => Boolean(services.projects.get(projectId)),
     isAlive: (projectId, shellIndex) =>
       Boolean(services.projects.get(projectId)) && services.ptyManager.isAlive(projectId, shellIndex),

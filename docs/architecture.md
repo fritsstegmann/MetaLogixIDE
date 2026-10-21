@@ -84,28 +84,38 @@ previous revocation history is then lost. If storage cannot be written **or**
 removed, Fleet reports an error and cannot guarantee durable revocation until
 the storage fault is repaired (`src/main/fleet/service.ts`).
 
-A linked peer can read root display names, project names and live shell status.
-It can launch or reattach the remote machine's configured primary Claude
-command, launch a secondary plain shell, stop or write to a shell, and subscribe
-to terminal output. The remote machine enforces its own Claude permission
-mode, launch command, project-path checks and shell limit. Plain shells start
-at index 1 so they cannot occupy the primary shell slot. Status travels in
-bounded pages from one captured snapshot. It returns complete root, project
-and shell lists (`src/main/fleet/service.ts`, `src/main/ipc/register.ts`).
-At most 256 roots, 256 projects and 256 live shells per machine are published.
-A larger inventory is rejected rather than silently truncated.
-No peer can request full root or project paths, environment values, arbitrary
-launch arguments or unrelated IPC operations. Shell input can execute
-arbitrary commands on the peer: **only link devices you trust**.
+A linked peer can read root and project display names, live shell labels,
+agent status, pin/timestamp metadata, and remote CLI profile names, scopes and
+icons. It can launch or reattach the remote machine's configured primary
+Claude command, launch a plain shell or saved CLI profile, submit a bounded
+custom command, change a folder's default CLI, remove a folder profile, and
+control a terminal. The remote machine enforces its project-path checks,
+Claude permission mode and shell limit. Plain shells start at index 1 so
+they cannot occupy the primary slot. Status travels in bounded pages from
+one captured snapshot; inventories over 256 roots, projects or live shells
+are rejected (`src/main/fleet/service.ts`, `src/main/ipc/register.ts`).
+Profile lists never include executable arguments or environment values.
+A linked peer cannot request full root or project paths, environment values
+or unrelated IPC operations. It **can** run bounded custom argv directly
+or send commands through PTY input: **only link devices you trust**.
 
 The Projects sidebar lists linked and offline machines below local folders.
 Each machine has its own collapsible heading with the same styling as the
 Projects heading. An online machine publishes its root folder display names
 and groups projects beneath each root. The remote root headings show project
 counts and collapse independently. Full paths remain on the driven machine.
-Selecting a remote project opens an interactive xterm attached to its Claude
-shell. A plain shell is a separate action. Selecting a local folder restores
-the local workspace; local and remote numeric project IDs remain separate.
+Selecting a remote project reattaches an existing remote shell, or starts
+its primary Claude command if there are no live shells. The header uses the
+local Shell tab styling, project pill and shell tab strip; each tab reflects
+the driven machine's live shell and agent state. The add-shell menu lists
+that machine's CLI profiles and supports profile launches, custom commands,
+plain shells, folder defaults and removal of saved folder profiles. Switching
+tabs detaches only the selected terminal stream; other PTYs stay alive on
+the remote machine. Stopping a tab terminates that remote PTY. Local-only
+Files/Diff/Env/project-settings views, split and popout controls are not
+shown for remote projects because Fleet does not expose those operations.
+Selecting a local folder restores its workspace; local and remote numeric
+project IDs remain separate.
 The selected remote machine refreshes its status while visible. The Fleet
 activity opens a side sheet beside the workspace, not over its terminal.
 Opening and closing the sheet does not detach the terminal or close the peer

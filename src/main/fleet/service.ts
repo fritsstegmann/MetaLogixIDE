@@ -17,6 +17,8 @@ import {
   pairingCode,
   validateSnapshot,
   validateStatus,
+  validateProfiles,
+  validArgs,
   validateStatusPage,
   ROOT_PAGE_SIZE,
   STATUS_PAGE_SIZE,
@@ -29,6 +31,13 @@ export interface FleetOperations {
   readonly status: () => Promise<FleetStatus> | FleetStatus;
   readonly launch: (projectId: number) => Promise<{ shellIndex: number }>;
   readonly launchClaude: (projectId: number) => Promise<{ shellIndex: number }>;
+  readonly profiles: (projectId: number) => Promise<{
+    profiles: readonly { name: string; scope: 'project' | 'global'; icon?: string }[];
+    defaultCliName: string | null;
+  }>;
+  readonly launchCli: (projectId: number, options: { profileName?: string; argv?: string[]; save?: boolean }) => Promise<{ shellIndex: number }>;
+  readonly setDefaultCli: (projectId: number, name: string | null) => Promise<{ defaultCliName: string | null }>;
+  readonly removeCliProfile: (projectId: number, name: string) => Promise<{ ok: true }>;
   readonly stop: (projectId: number, shellIndex: number) => Promise<void>;
   readonly write: (projectId: number, shellIndex: number, data: string) => Promise<void>;
   readonly resize: (projectId: number, shellIndex: number, cols: number, rows: number) => Promise<void>;
@@ -810,16 +819,10 @@ export class FleetService {
     let value: unknown;
     try {
       if (op === 'status') value = await this.statusPage(session, args);
-      else if (op === 'launch' || op === 'launch-claude') {
-        const launched: unknown = await (op === 'launch'
-          ? this.options.operations.launch(Number(args.projectId))
-          : this.options.operations.launchClaude(Number(args.projectId)));
-        if (!launched || typeof launched !== 'object' || !('shellIndex' in launched) ||
-          !Number.isSafeInteger(launched.shellIndex) || Number(launched.shellIndex) < 0 ||
-          Number(launched.shellIndex) > 1_000_000)
-          throw new Error('Invalid fleet launch result');
-        value = { shellIndex: Number(launched.shellIndex) };
-      } else if (op === 'subscribe') {
+      else if (op === 'profiles' || op === 'set-default-cli' || op === 'remove-cli-profile' ||
+        op === 'launch' || op === 'launch-claude' || op === 'launch-cli')
+        value = await this.projectRequest(op, args);
+      else if (op === 'subscribe') {
         value = this.acceptSubscription(session, Number(args.projectId), Number(args.shellIndex), String(args.subscriptionId));
       } else if (op === 'unsubscribe') {
         if (!session.incoming.has(String(args.subscriptionId))) throw new Error('Unknown subscription');
@@ -859,6 +862,40 @@ export class FleetService {
           ...(safeError ? { error: safeError } : {}) });
     }
   }
+  private async projectRequest(
+    op: 'profiles' | 'set-default-cli' | 'remove-cli-profile' | 'launch' | 'launch-claude' | 'launch-cli',
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const projectId = Number(args.projectId);
+    if (op === 'profiles') return validateProfiles(await this.options.operations.profiles(projectId));
+    if (op === 'set-default-cli') {
+      const result = await this.options.operations.setDefaultCli(projectId, args.name as string | null);
+      if (!result || !Object.hasOwn(result, 'defaultCliName') ||
+        !validArgs('set-default-cli', { projectId, name: result.defaultCliName }))
+        throw new Error('Invalid fleet default');
+      return { defaultCliName: result.defaultCliName };
+    }
+    if (op === 'remove-cli-profile') {
+      const result = await this.options.operations.removeCliProfile(projectId, String(args.name));
+      if (!result || result.ok !== true) throw new Error('Invalid fleet removal');
+      return { ok: true };
+    }
+    const launched: unknown = op === 'launch'
+      ? await this.options.operations.launch(projectId)
+      : op === 'launch-claude'
+        ? await this.options.operations.launchClaude(projectId)
+        : await this.options.operations.launchCli(projectId, {
+          ...(typeof args.profileName === 'string' ? { profileName: args.profileName } : {}),
+          ...(Array.isArray(args.argv) ? { argv: args.argv as string[] } : {}),
+          ...(typeof args.save === 'boolean' ? { save: args.save } : {}),
+        });
+    if (!launched || typeof launched !== 'object' || !('shellIndex' in launched) ||
+      !Number.isSafeInteger(launched.shellIndex) || Number(launched.shellIndex) < 0 ||
+      Number(launched.shellIndex) > 1_000_000)
+      throw new Error('Invalid fleet launch result');
+    return { shellIndex: Number(launched.shellIndex) };
+  }
+
   private launchFailure(error: unknown): 'permission-mode' | 'claude-missing' | 'shell-cap' | 'project-unavailable' | undefined {
     if (!(error instanceof Error)) return undefined;
     if (error.message === 'Choose a Claude permission mode first') return 'permission-mode';
@@ -1247,6 +1284,49 @@ export class FleetService {
       !Number.isSafeInteger(value.shellIndex) || Number(value.shellIndex) < 0 ||
       Number(value.shellIndex) > 1_000_000) throw new Error('Invalid peer shell');
     return { shellIndex: Number(value.shellIndex) };
+  }
+
+  /** Lists only public profile labels and the saved project default of a linked peer. */
+  async profiles(peerId: string, projectId: number): Promise<{
+    profiles: readonly { name: string; scope: 'project' | 'global'; icon?: string }[];
+    defaultCliName: string | null;
+  }> {
+    if (!validArgs('profiles', { projectId })) throw new Error('Invalid project ID');
+    const result = validateProfiles(await this.linked(peerId).request('profiles', { projectId }));
+    if (!result) throw new Error('Invalid peer profiles');
+    return result;
+  }
+
+  /** Launches a remote saved profile or bounded custom command using its own environment and cap. */
+  async launchCli(peerId: string, projectId: number,
+    options: { profileName?: string; argv?: string[]; save?: boolean }): Promise<{ shellIndex: number }> {
+    const args = { projectId, ...options };
+    if (!validArgs('launch-cli', args)) throw new Error('Invalid CLI launch');
+    const result = await this.linked(peerId).request('launch-cli', args);
+    if (!result || typeof result !== 'object' || !('shellIndex' in result) ||
+      !Number.isSafeInteger(result.shellIndex) || Number(result.shellIndex) < 0 ||
+      Number(result.shellIndex) > 1_000_000) throw new Error('Invalid peer shell');
+    return { shellIndex: Number(result.shellIndex) };
+  }
+
+  /** Updates the linked host's default only when its local catalog permits the name. */
+  async setDefaultCli(peerId: string, projectId: number, name: string | null): Promise<{ defaultCliName: string | null }> {
+    if (!validArgs('set-default-cli', { projectId, name })) throw new Error('Invalid CLI default');
+    const value = await this.linked(peerId).request('set-default-cli', { projectId, name });
+    if (!value || typeof value !== 'object' || !('defaultCliName' in value) ||
+      (value.defaultCliName !== null && typeof value.defaultCliName !== 'string') ||
+      !validArgs('set-default-cli', { projectId, name: value.defaultCliName }))
+      throw new Error('Invalid peer default');
+    return { defaultCliName: value.defaultCliName };
+  }
+
+  /** Removes a saved project profile on the linked host without exposing its configuration. */
+  async removeCliProfile(peerId: string, projectId: number, name: string): Promise<{ ok: true }> {
+    if (!validArgs('remove-cli-profile', { projectId, name })) throw new Error('Invalid CLI profile');
+    const result = await this.linked(peerId).request('remove-cli-profile', { projectId, name });
+    if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true)
+      throw new Error('Invalid peer removal');
+    return { ok: true };
   }
 
   /** Attaches to an existing remote PTY, with terminal events allowed before acknowledgement. */

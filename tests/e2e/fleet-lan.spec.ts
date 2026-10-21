@@ -1,5 +1,7 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { basename } from 'node:path';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import type * as Keytar from 'keytar';
 import { closeApp, launch } from './helpers/claude-harness';
 import type {} from '../../src/renderer/api';
@@ -107,6 +109,30 @@ async function isolateFleetCredentials(app: ElectronApplication): Promise<void> 
   });
 }
 
+async function reserveAvailablePort(): Promise<number> {
+  const server = createServer();
+  const listening = once(server, 'listening');
+  server.listen(0, '127.0.0.1');
+  await listening;
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No TCP port available for Fleet test');
+  const closed = once(server, 'close');
+  server.close();
+  await closed;
+  return address.port;
+}
+
+async function chooseFleetPort(win: Page): Promise<void> {
+  const port = await reserveAvailablePort();
+  await win.getByTestId('settings-open').click();
+  const settings = win.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Fleet' }).click();
+  await settings.getByRole('spinbutton', { name: 'Fleet port' }).fill(String(port));
+  await settings.getByRole('button', { name: 'Save port' }).click();
+  await expect.poll(async () => (await win.evaluate(() => window.api.invoke('fleet:get-state', undefined))).port).toBe(port);
+  await win.getByTestId('settings-done').click();
+}
+
 /** This host does not loop multicast back to a second local UDP socket. Only public
  * discovery beacons are injected; pairing, trust, shell operations and PTY traffic
  * still traverse the two Electron processes' real TLS channels. */
@@ -181,6 +207,8 @@ test('paired Electron instances show remote root folders and hand viewport contr
     const { projects } = await driven.win.evaluate(() => window.api.invoke('projects:list', undefined));
     const project = projects.find((entry) => entry.name === 'Driven Fleet Project');
     if (!project) throw new Error('Driven project missing');
+    await chooseFleetPort(driver.win);
+    await chooseFleetPort(driven.win);
     await driver.win.getByRole('button', { name: 'Fleet', exact: true }).click();
     await driven.win.getByRole('button', { name: 'Fleet', exact: true }).click();
     await driver.win.getByRole('switch', { name: 'Enable Fleet discovery' }).click();
@@ -211,6 +239,24 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await expect(machine.getByTestId('remote-project-row')).toContainText('Driven Fleet Project');
     await machine.getByTestId('remote-project-row').click();
     await expect(driver.win.locator('main .xterm')).toBeVisible();
+    const workspace = driver.win.getByTestId('remote-workspace');
+    await expect(workspace.getByRole('button', { name: 'Shell', exact: true })).toHaveAttribute('aria-current', 'page');
+    const tabs = workspace.getByTestId('shell-tab-button');
+    await expect(tabs).toHaveCount(1);
+    await expect(tabs.first()).toContainText('Claude');
+    await workspace.getByTestId('tabbar-new-shell').click();
+    const addShell = workspace.locator('[data-new-shell-menu="1"]');
+    await expect(addShell.getByRole('button', { name: /Claude/ }).first()).toBeVisible();
+    await addShell.getByRole('button', { name: /Terminal/ }).click();
+    await expect(tabs).toHaveCount(2);
+    await expect(tabs.last()).toContainText('Terminal');
+    await expect(workspace.locator('.xterm')).toBeVisible();
+    await workspace.getByTestId('tabbar-new-shell').click();
+    await addShell.getByRole('button', { name: /Claude/ }).first().click();
+    await expect(tabs).toHaveCount(3);
+    await expect(tabs.last()).toContainText('Claude');
+    await tabs.first().click();
+    await expect(workspace.locator('.xterm')).toBeVisible();
     await expect(driven.win.getByText(/terminal is controlled remotely by/)).toBeVisible();
     await expect(driven.win.locator('main .xterm')).toHaveCount(0);
     await expect(driver.win.getByRole('button', { name: 'Paste', exact: true })).toBeEnabled();

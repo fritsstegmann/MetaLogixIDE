@@ -395,6 +395,15 @@ export interface IpcContract {
   'fleet:launch':      { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
   /** Launches or reattaches Claude using the remote host's existing project policy. */
   'fleet:launch-claude': { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  /** Lists only display metadata from the remote host's project and global CLI catalog. */
+  'fleet:profiles': { request: { peerId: string; projectId: number };
+    response: { profiles: readonly { name: string; scope: 'project' | 'global'; icon?: string }[]; defaultCliName: string | null } };
+  /** Launches a saved remote CLI or a bounded inline command without transmitting environment values. */
+  'fleet:launch-cli': { request: { peerId: string; projectId: number; profileName?: string; argv?: string[]; save?: boolean };
+    response: { shellIndex: number } };
+  'fleet:set-default-cli': { request: { peerId: string; projectId: number; name: string | null };
+    response: { defaultCliName: string | null } };
+  'fleet:remove-cli-profile': { request: { peerId: string; projectId: number; name: string }; response: { ok: true } };
   /** One active terminal attachment streams a full screen snapshot, then live PTY output. */
   'fleet:subscribe': { request: { peerId: string; projectId: number; shellIndex: number }; response: { subscriptionId: string } };
   'fleet:unsubscribe': { request: { peerId: string; subscriptionId: string }; response: { ok: true } };

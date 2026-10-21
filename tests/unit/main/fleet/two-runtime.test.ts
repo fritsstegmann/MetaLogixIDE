@@ -57,9 +57,15 @@ it('streams a remote Claude shell through one authenticated subscription and can
   const launchClaude = vi.fn(async () => ({ shellIndex: 0 }));
   const resize = vi.fn(async () => {});
   const remoteOps: FleetOperations = {
-    status: () => ({ roots: [{ id: 3, name: 'Root' }], projects: [{ id: 7, rootId: 3, name: 'Remote' }], shells: [{ projectId: 7, shellIndex: 0, agent: 'claude', state: 'busy' }] }),
+    status: () => ({ roots: [{ id: 3, name: 'Root' }], projects: [{ id: 7, rootId: 3, name: 'Remote' }],
+      shells: [{ projectId: 7, shellIndex: 0, agent: 'claude', state: 'busy',
+        launchName: 'Claude', pinned: false, startedAt: null, lastActiveAt: null }] }),
     launch: async () => ({ shellIndex: 1 }),
     launchClaude,
+    profiles: async () => ({ profiles: [], defaultCliName: null }),
+    launchCli: async () => ({ shellIndex: 1 }),
+    setDefaultCli: async (_id, name) => ({ defaultCliName: name }),
+    removeCliProfile: async () => ({ ok: true }),
     stop: async () => {},
     write: async () => {},
     resize,
@@ -182,6 +188,10 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     status: () => ({ roots: [], projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
     launchClaude: async () => ({ shellIndex: 0 }),
+    profiles: async () => ({ profiles: [], defaultCliName: null }),
+    launchCli: async () => ({ shellIndex: 0 }),
+    setDefaultCli: async (_id, name) => ({ defaultCliName: name }),
+    removeCliProfile: async () => ({ ok: true }),
     stop: async () => {},
     write: async () => {},
     resize: async () => {},
@@ -194,7 +204,8 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   let remoteStatus: FleetStatus = {
     roots: [{ id: 2, name: 'Workspace' }],
     projects: [{ id: 1, rootId: 2, name: 'Remote project' }],
-    shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
+    shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy',
+      launchName: 'Terminal', pinned: false, startedAt: null, lastActiveAt: null }],
   };
   let observedStatus = 0;
   const remoteOps: FleetOperations = {
@@ -207,6 +218,10 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
       return { shellIndex: 0 };
     },
     launchClaude: async () => ({ shellIndex: 0 }),
+    profiles: async () => ({ profiles: [{ name: 'Agent', scope: 'project', icon: 'A' }], defaultCliName: null }),
+    launchCli: async () => ({ shellIndex: 1 }),
+    setDefaultCli: async (_id, name) => ({ defaultCliName: name }),
+    removeCliProfile: async () => ({ ok: true }),
     stop: async (id, index) => {
       stopped.push(`${id}:${index}`);
     },
@@ -321,8 +336,36 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   expect(await pendingStatus).toEqual({
     roots: [{ id: 2, name: 'Workspace' }],
     projects: [{ id: 1, rootId: 2, name: 'Remote project' }],
-    shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
+    shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy',
+      launchName: 'Terminal', pinned: false, startedAt: null, lastActiveAt: null }],
   });
+  await expect(a.profiles(idB, 1)).resolves.toEqual({
+    profiles: [{ name: 'Agent', scope: 'project', icon: 'A' }], defaultCliName: null,
+  });
+  const launchCli = vi.spyOn(remoteOps, 'launchCli');
+  await expect(a.launchCli(idB, 1, { profileName: 'Agent' })).resolves.toEqual({ shellIndex: 1 });
+  expect(launchCli).toHaveBeenCalledWith(1, { profileName: 'Agent' });
+  await expect(a.launchCli(idB, 1, { profileName: 'Saved', argv: ['agent', '--quiet'], save: true }))
+    .resolves.toEqual({ shellIndex: 1 });
+  expect(launchCli).toHaveBeenCalledWith(1, { profileName: 'Saved', argv: ['agent', '--quiet'], save: true });
+  await expect(a.setDefaultCli(idB, 1, 'Agent')).resolves.toEqual({ defaultCliName: 'Agent' });
+  await expect(a.removeCliProfile(idB, 1, 'Agent')).resolves.toEqual({ ok: true });
+  await expect(a.launchCli(idB, 1, { argv: ['x'.repeat(1025)] })).rejects.toThrow('Invalid CLI launch');
+  expect(launchCli).toHaveBeenCalledTimes(2);
+  await expect(a.profiles(idB, 0)).rejects.toThrow('Invalid project ID');
+  await expect(a.setDefaultCli(idB, 1, '/secret')).rejects.toThrow('Invalid CLI default');
+  await expect(a.removeCliProfile(idB, 1, '')).rejects.toThrow('Invalid CLI profile');
+  const profilesSpy = vi.spyOn(remoteOps, 'profiles').mockResolvedValueOnce({
+    profiles: [{ name: 'Agent', scope: 'project', icon: '/secret' }], defaultCliName: null,
+  });
+  await expect(a.profiles(idB, 1)).rejects.toThrow('Peer refused fleet operation');
+  profilesSpy.mockRestore();
+  const failure = vi.spyOn(remoteOps, 'launchCli').mockRejectedValueOnce(
+    new Error('command failed at /secret/bin with TOKEN=private'),
+  );
+  await expect(a.launchCli(idB, 1, { profileName: 'Agent' }))
+    .rejects.toThrow('Peer refused fleet operation');
+  failure.mockRestore();
   remoteStatus = {
     roots: [{ id: 2, name: 'Workspace' }],
     projects: Array.from({ length: 91 }, (_, index) => ({
@@ -347,6 +390,8 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
       shellIndex: index,
       agent: 'omp',
       state: 'busy',
+      launchName: 'Agent', pinned: index % 2 === 0,
+      startedAt: '2026-10-21 12:00:00', lastActiveAt: null,
     })),
   };
   expect(await a.status(idB)).toEqual(remoteStatus);
@@ -523,6 +568,10 @@ it('keeps one comparison code when both devices request a link at once', async (
     status: () => ({ roots: [], projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
     launchClaude: async () => ({ shellIndex: 0 }),
+    profiles: async () => ({ profiles: [], defaultCliName: null }),
+    launchCli: async () => ({ shellIndex: 0 }),
+    setDefaultCli: async (_id, name) => ({ defaultCliName: name }),
+    removeCliProfile: async () => ({ ok: true }),
     stop: async () => {},
     write: async () => {},
     resize: async () => {},
