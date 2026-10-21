@@ -33,11 +33,12 @@ import {
 } from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
 import { describeGitFailure, runGit } from '@main/git/run-git';
+import { gitCommandError, runGitCommand } from '@main/git/run-git-command';
 import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
@@ -326,7 +327,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (initGit) {
       const gitDir = join(path, '.git');
       if (!existsSync(gitDir)) {
-        const r = spawnSync('git', ['init', '-q', path], { cwd: path });
+        const r = await runGitCommand(path, ['init', '-q', path]);
         if (r.status !== 0) {
           // Fall back to just an empty .git directory marker so discovery picks it up.
           mkdirSync(gitDir, { recursive: true });
@@ -361,11 +362,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // Delegate the clone to system git — much simpler than a JS libgit2
     // dependency and handles SSH, https, credential helpers, submodules, …
     // exactly like the user's own terminal would.
-    const r = spawnSync('git', ['clone', '--', url, path], { cwd: root.path });
-    if (r.status !== 0) {
-      const stderr = r.stderr?.toString() || 'git clone failed';
-      throw new Error(stderr.trim());
-    }
+    const r = await runGitCommand(root.path, ['clone', '--', url, path]);
+    if (r.status !== 0) throw gitCommandError(r, 'git clone failed');
     const project = s.projects.upsert(rootId, path, folder);
     s.projects.markLastOpened(project.id, new Date());
     return { project };
@@ -1186,8 +1184,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     if (paths.length === 0) return { ok: true } as const;
-    const r = spawnSync('git', ['-C', p.path, 'add', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git add failed');
+    const r = await runGitCommand(p.path, ['add', '--', ...paths], { timeout: 15000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git add failed');
     return { ok: true } as const;
   },
   'git:unstage': async (s, { projectId, paths }) => {
@@ -1195,8 +1193,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!p) throw new Error(`no project ${projectId}`);
     if (paths.length === 0) return { ok: true } as const;
     // `git restore --staged` is the modern equivalent of `git reset HEAD --`.
-    const r = spawnSync('git', ['-C', p.path, 'restore', '--staged', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git unstage failed');
+    const r = await runGitCommand(p.path, ['restore', '--staged', '--', ...paths], { timeout: 15000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git unstage failed');
     return { ok: true } as const;
   },
   'git:commit':  async (s, { projectId, message }) => {
@@ -1205,22 +1203,22 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!message.trim()) throw new Error('commit message is empty');
     // Pass the message via `-F -` on stdin so we never worry about shell
     // quoting on multi-line messages or embedded backticks/dollars.
-    const r = spawnSync('git', ['-C', p.path, 'commit', '-F', '-'], { encoding: 'utf8', timeout: 30000, input: message });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || r.stdout.trim() || 'git commit failed');
+    const r = await runGitCommand(p.path, ['commit', '-F', '-'], { timeout: 30000, input: message });
+    if (r.status !== 0) throw gitCommandError(r, 'git commit failed');
     return { ok: true } as const;
   },
   'git:push':    async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const r = spawnSync('git', ['-C', p.path, 'push'], { encoding: 'utf8', timeout: 60000 });
-    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git push failed');
+    const r = await runGitCommand(p.path, ['push'], { timeout: 60000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git push failed');
     return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
   },
   'git:pull':    async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const r = spawnSync('git', ['-C', p.path, 'pull'], { encoding: 'utf8', timeout: 60000 });
-    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git pull failed');
+    const r = await runGitCommand(p.path, ['pull'], { timeout: 60000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git pull failed');
     return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
   },
 
