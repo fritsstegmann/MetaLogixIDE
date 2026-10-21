@@ -1,4 +1,5 @@
-import { app, BrowserWindow, crashReporter, ipcMain, Menu, Notification, screen, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, ipcMain, Menu, Notification, powerSaveBlocker, screen, shell } from 'electron';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -6,6 +7,7 @@ import { homedir, hostname } from 'node:os';
 import log from 'electron-log/main';
 import { buildServices, type Services } from './services';
 import { DROP_MAX_AGE_MS, testModeDropDir } from './drops/staging';
+import { installKeepAwake } from './keep-awake/install';
 import { createFleetOperations, registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
@@ -368,6 +370,18 @@ function bindWindowSettings(services: Services): void {
   readFrostedGlass = () => readStoredFrostedGlass((key) => services.settings.get(key));
 }
 
+/** Installs the macOS keep-awake timer on `services`; stays null off darwin. */
+function attachKeepAwake(services: Services): void {
+  services.keepAwake = installKeepAwake({
+    platform: process.platform,
+    env: process.env,
+    powerSaveBlocker,
+    execFile,
+    notificationClass: Notification,
+    broadcast,
+  });
+}
+
 /** Registers the renderer IPC surface, with window operations bound to this module's windows. */
 function registerMainIpc(services: Services): void {
   services.fleet = new FleetService({
@@ -439,11 +453,12 @@ function forwardPortChanges(services: Services): void {
   });
 }
 
-/** Stops the done poller, the agent-status monitor and both receivers when the app quits. */
+/** Stops the done poller, keep-awake, the agent-status monitor and both receivers when the app quits. */
 function stopOnQuit(services: Services, donePoll: NodeJS.Timeout, agentStatus: ReturnType<typeof installAgentStatus>): void {
   app.on('before-quit', () => {
     clearInterval(donePoll);
     agentStatus.stop();
+    services.keepAwake?.dispose();
     services.ompReceiver.stop();
     void services.fleet?.stop();
   });
@@ -464,6 +479,7 @@ async function startApp(): Promise<void> {
   const agentStatus = attachAgentStatus(services);
   await rescanRootsAtBoot(services);
   bindWindowSettings(services);
+  attachKeepAwake(services);
   registerMainIpc(services);
   await services.fleet?.start();
   installNotifications(services);
