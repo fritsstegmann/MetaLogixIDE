@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Duplex } from 'node:stream';
 import { FleetChannel } from '@main/fleet/channel';
-import { MAX_FRAME, STATUS_PAGE_SIZE } from '@main/fleet/protocol';
+import { MAX_FRAME, ROOT_PAGE_SIZE, STATUS_PAGE_SIZE } from '@main/fleet/protocol';
 
 function fixture() {
   const sent: string[] = [];
@@ -63,7 +63,7 @@ describe('fleet framed TLS channel', () => {
 
   it('rejects waiting requests when a peer disconnects', async () => {
     const { channel, socket, sent } = fixture();
-    const waiting = channel.request('status', { projectOffset: 0, shellOffset: 0 });
+    const waiting = channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 });
     expect(sent).toHaveLength(1);
     socket.destroy();
     await expect(waiting).rejects.toThrow('Peer disconnected');
@@ -72,7 +72,7 @@ describe('fleet framed TLS channel', () => {
   it('refuses an operation and expires a request without leaking its payload', async () => {
     vi.useFakeTimers();
     const { channel, socket, sent } = fixture();
-    const denied = channel.request('status', { projectOffset: 0, shellOffset: 0 });
+    const denied = channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 });
     const request = JSON.parse(sent[0] ?? '{}') as unknown;
     if (
       request === null ||
@@ -83,7 +83,7 @@ describe('fleet framed TLS channel', () => {
       throw new Error('Missing outbound request');
     socket.push(`${JSON.stringify({ type: 'response', id: request.id, ok: false })}\n`);
     await expect(denied).rejects.toThrow('Peer refused fleet operation');
-    const timedOut = channel.request('status', { projectOffset: 0, shellOffset: 0 });
+    const timedOut = channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 });
     const assertion = expect(timedOut).rejects.toThrow('Fleet request timed out');
     await vi.advanceTimersByTimeAsync(10_001);
     await assertion;
@@ -97,8 +97,13 @@ describe('fleet framed TLS channel', () => {
       id: 'a'.repeat(32),
       ok: true,
       value: {
+        roots: Array.from({ length: ROOT_PAGE_SIZE }, (_, index) => ({
+          id: index + 1,
+          name: '\u0001'.repeat(160),
+        })),
         projects: Array.from({ length: STATUS_PAGE_SIZE }, (_, index) => ({
           id: index + 1,
+          rootId: index % ROOT_PAGE_SIZE + 1,
           name: '\u0001'.repeat(160),
         })),
         shells: Array.from({ length: STATUS_PAGE_SIZE }, (_, index) => ({
@@ -107,8 +112,10 @@ describe('fleet framed TLS channel', () => {
           agent: 'claude',
           state: 'blocked',
         })),
+        rootOffset: 0,
         projectOffset: 0,
         shellOffset: 0,
+        rootTotal: 256,
         projectTotal: 256,
         shellTotal: 256,
         token: 'b'.repeat(32),
@@ -140,11 +147,39 @@ describe('fleet framed TLS channel', () => {
       type: 'request',
       id: 'a'.repeat(32),
       op: 'status',
-      args: { projectOffset: 0, shellOffset: 0 },
+      args: { rootOffset: 0, projectOffset: 0, shellOffset: 0 },
     })}\n`;
     socket.push(frame.repeat(129));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(onMessage).toHaveBeenCalledTimes(128);
     expect(socket.destroyed).toBe(true);
+  });
+  it('keeps an authenticated channel usable when the host clock moves backward', async () => {
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const { channel, socket } = fixture();
+    const onMessage = vi.fn();
+    channel.onMessage(onMessage);
+    const request = `${JSON.stringify({
+      type: 'request',
+      id: 'a'.repeat(32),
+      op: 'status',
+      args: { rootOffset: 0, projectOffset: 0, shellOffset: 0 },
+    })}\n`;
+    try {
+      socket.push(request);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      clock.mockReturnValue(start + 11_000);
+      socket.push(request);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      clock.mockReturnValue(start);
+      socket.push(request);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(onMessage).toHaveBeenCalledTimes(3);
+      expect(socket.destroyed).toBe(false);
+    } finally {
+      clock.mockRestore();
+      channel.close();
+    }
   });
 });

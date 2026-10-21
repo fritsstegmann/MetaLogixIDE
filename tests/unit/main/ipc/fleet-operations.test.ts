@@ -35,9 +35,30 @@ describe('local Fleet operation boundary', () => {
       const operations = createFleetOperations(services);
       try {
         expect(await operations.status()).toEqual({
-          projects: [{ id: project.id, name: 'Example' }],
+          roots: [{ id: root.id, name: 'root' }],
+          projects: [{ id: project.id, rootId: root.id, name: 'Example' }],
           shells: [],
         });
+        const secondPath = join(home, 'private', 'second-root');
+        mkdirSync(secondPath, { recursive: true });
+        const secondRoot = services.roots.add(secondPath);
+        const secondProject = services.projects.upsert(
+          secondRoot.id, join(secondPath, 'another'), 'Another',
+        );
+        expect(await operations.status()).toMatchObject({
+          roots: [{ id: root.id, name: 'root' }, { id: secondRoot.id, name: 'second-root' }],
+          projects: [
+            { id: secondProject.id, rootId: secondRoot.id, name: 'Another' },
+            { id: project.id, rootId: root.id, name: 'Example' },
+          ],
+        });
+        expect(JSON.stringify(await operations.status())).not.toContain(home);
+        const storedRoot = services.roots.list()[0];
+        if (!storedRoot) throw new Error('Fixture root missing');
+        vi.spyOn(services.roots, 'list').mockReturnValueOnce(
+          Array.from({ length: 257 }, (_, index) => ({ ...storedRoot, id: index + 1 })),
+        );
+        expect(() => operations.status()).toThrow(/256-root\/project\/shell limit/);
         await expect(operations.launch(project.id + 10_000)).rejects.toThrow(/no project/);
         expect(services.ptyManager.liveShells()).toEqual([]);
         services.settings.set('claude_permission_mode', null);
@@ -62,7 +83,7 @@ describe('local Fleet operation boundary', () => {
         vi.spyOn(services.ptyManager, 'liveShells').mockReturnValueOnce(
           Array.from({ length: 257 }, (_, index) => ({ ...activeShell, shellIndex: index })),
         );
-        expect(() => operations.status()).toThrow(/256-project\/shell limit/);
+        expect(() => operations.status()).toThrow(/256-root\/project\/shell limit/);
         await operations.write(project.id, shellIndex, 'printf "FLEET_OPERATION_READY\\n"\n');
         await vi.waitFor(
           async () => {
@@ -94,18 +115,20 @@ describe('local Fleet operation boundary', () => {
         expect(
           (await operations.status()).projects.find(({ id }) => id === longProject.id),
         ).toEqual({
+          rootId: root.id,
           id: longProject.id,
           name: 'a'.repeat(155),
         });
         const unnamed = services.projects.upsert(root.id, join(home, 'root', 'unnamed'), '\0');
         expect((await operations.status()).projects.find(({ id }) => id === unnamed.id)).toEqual({
           id: unnamed.id,
+          rootId: root.id,
           name: 'Unnamed project',
         });
-        for (let index = 0; index < 254; index++) {
+        for (let index = 0; index < 253; index++) {
           services.projects.upsert(root.id, join(home, 'root', `extra-${index}`), `Extra ${index}`);
         }
-        expect(() => operations.status()).toThrow(/256-project\/shell limit/);
+        expect(() => operations.status()).toThrow(/256-root\/project\/shell limit/);
       } finally {
         for (const shell of services.ptyManager.liveShells()) {
           await services.ptyManager.kill(shell.projectId, shell.shellIndex);
@@ -171,6 +194,21 @@ describe('registered Fleet IPC over two real services', () => {
         a,
         broadcast,
       );
+      const remoteChannels = new Map<string, (...args: unknown[]) => unknown>();
+      const remoteBroadcast = vi.fn();
+      remote.onChanged((state) => remoteBroadcast('fleet:changed', state));
+      registerIpc(
+        { handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
+          remoteChannels.set(channel, handler);
+        } } as unknown as IpcMain,
+        b,
+        remoteBroadcast,
+      );
+      const invokeRemote = async (channel: string, req: unknown): Promise<unknown> => {
+        const handler = remoteChannels.get(channel);
+        if (!handler) throw new Error(`Remote IPC channel unavailable: ${channel}`);
+        return handler({ sender: {} }, req);
+      };
       const invoke = async (channel: string, req: unknown): Promise<unknown> => {
         const handler = channels.get(channel);
         if (!handler) throw new Error(`IPC channel unavailable: ${channel}`);
@@ -233,7 +271,8 @@ describe('registered Fleet IPC over two real services', () => {
           expect(local.state().peers.find(({ id }) => id === peer.id)?.status).toBe('linked'),
         );
         expect(await invoke('fleet:status', { peerId: peer.id })).toMatchObject({
-          projects: [{ id: project.id, name: 'Remote project' }],
+          roots: [{ id: root.id, name: 'root' }],
+          projects: [{ id: project.id, rootId: root.id, name: 'Remote project' }],
         });
         const launched = await invoke('fleet:launch', { peerId: peer.id, projectId: project.id });
         if (
@@ -249,7 +288,18 @@ describe('registered Fleet IPC over two real services', () => {
           typeof attached.subscriptionId !== 'string') throw new Error('No remote subscription');
         await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith('fleet:terminal',
           expect.objectContaining({ peerId: peer.id, subscriptionId: attached.subscriptionId, kind: 'ready' })));
+        expect(remote.state().controls).toEqual([
+          { projectId: project.id, shellIndex, peerName: 'Local IDE' },
+        ]);
+        expect(remoteBroadcast).toHaveBeenCalledWith('fleet:changed',
+          expect.objectContaining({ controls: remote.state().controls }));
+        const resize = vi.spyOn(b.ptyManager, 'resize');
+        await expect(invokeRemote('shells:resize', {
+          projectId: project.id, shellIndex, cols: 71, rows: 22,
+        })).resolves.toEqual({ ok: true });
+        expect(resize).not.toHaveBeenCalled();
         await invoke('fleet:resize', { peerId: peer.id, projectId: project.id, shellIndex, cols: 91, rows: 35 });
+        expect(resize).toHaveBeenCalledWith(project.id, shellIndex, 91, 35);
         await invoke('fleet:write', {
           peerId: peer.id,
           projectId: project.id,
@@ -265,6 +315,9 @@ describe('registered Fleet IPC over two real services', () => {
           expect.objectContaining({ peerId: peer.id, subscriptionId: attached.subscriptionId,
             kind: 'data', data: expect.stringContaining('FLEET_IPC_READY') })));
         await invoke('fleet:unsubscribe', { peerId: peer.id, subscriptionId: attached.subscriptionId });
+        expect(remote.state().controls).toEqual([]);
+        await invokeRemote('shells:resize', { projectId: project.id, shellIndex, cols: 77, rows: 23 });
+        expect(resize).toHaveBeenCalledWith(project.id, shellIndex, 77, 23);
         await invoke('fleet:stop', { peerId: peer.id, projectId: project.id, shellIndex });
         expect(
           await invoke('fleet:snapshot', { peerId: peer.id, projectId: project.id, shellIndex }),

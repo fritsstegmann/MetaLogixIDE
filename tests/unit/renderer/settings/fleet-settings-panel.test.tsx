@@ -85,8 +85,8 @@ vi.mock('@renderer/components/settings/GeneralPanel', () => ({
 const { FleetSettingsPanel } = await import('@renderer/components/settings/FleetSettingsPanel');
 const { SettingsSectionPanel } = await import('@renderer/components/settings/SettingsSectionPanel');
 const { Switch } = await import('@renderer/components/settings/primitives');
-const off: FleetState = { enabled: false, peers: [], port: 43872 };
-const on: FleetState = { enabled: true, peers: [], port: 43872 };
+const off: FleetState = { enabled: false, peers: [], port: 43872, controls: [] };
+const on: FleetState = { enabled: true, peers: [], port: 43872, controls: [] };
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();

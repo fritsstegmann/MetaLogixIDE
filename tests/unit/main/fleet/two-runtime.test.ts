@@ -57,7 +57,7 @@ it('streams a remote Claude shell through one authenticated subscription and can
   const launchClaude = vi.fn(async () => ({ shellIndex: 0 }));
   const resize = vi.fn(async () => {});
   const remoteOps: FleetOperations = {
-    status: () => ({ projects: [{ id: 7, name: 'Remote' }], shells: [{ projectId: 7, shellIndex: 0, agent: 'claude', state: 'busy' }] }),
+    status: () => ({ roots: [{ id: 3, name: 'Root' }], projects: [{ id: 7, rootId: 3, name: 'Remote' }], shells: [{ projectId: 7, shellIndex: 0, agent: 'claude', state: 'busy' }] }),
     launch: async () => ({ shellIndex: 1 }),
     launchClaude,
     stop: async () => {},
@@ -75,7 +75,7 @@ it('streams a remote Claude shell through one authenticated subscription and can
   };
   const localOps: FleetOperations = {
     ...remoteOps,
-    status: () => ({ projects: [], shells: [] }),
+    status: () => ({ roots: [], projects: [], shells: [] }),
     isAlive: () => false,
   };
   const instance = (name: string, operations: FleetOperations): FleetService => {
@@ -116,9 +116,14 @@ it('streams a remote Claude shell through one authenticated subscription and can
   await expect(a.resize(peer.id, 7, 0, 501, 35)).rejects.toThrow('Invalid terminal dimensions');
   expect(await a.launchClaude(peer.id, 7)).toEqual({ shellIndex: 0 });
   expect(launchClaude).toHaveBeenCalledWith(7);
+  await expect(a.resize(peer.id, 7, 0, 91, 35)).rejects.toThrow('Peer refused fleet operation');
+  expect(resize).not.toHaveBeenCalled();
   const events: Array<{ subscriptionId: string; kind: string; data: string }> = [];
   a.onTerminal((event) => events.push(event));
   const { subscriptionId } = await a.subscribe(peer.id, 7, 0);
+  expect(b.state().controls).toEqual([{ projectId: 7, shellIndex: 0, peerName: 'stream A' }]);
+  await expect(a.subscribe(peer.id, 7, 0)).rejects.toThrow('Peer refused fleet operation');
+  expect(b.state().controls).toHaveLength(1);
   output?.('\x1b[36mduring-snapshot\x1b[0m');
   await vi.waitFor(() => expect(events.some((event) => event.kind === 'ready')).toBe(true));
   expect(events.filter((event) => event.kind === 'snapshot').map((event) => event.data).join('')).toBe('\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m');
@@ -144,12 +149,16 @@ it('streams a remote Claude shell through one authenticated subscription and can
   await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ kind: 'data', data: '\x1b[32mready\x1b[0m' }));
   await a.unsubscribe(peer.id, subscriptionId);
   expect(output).toBeUndefined();
+  expect(b.state().controls).toEqual([]);
+  await expect(a.resize(peer.id, 7, 0, 92, 36)).rejects.toThrow('Peer refused fleet operation');
+  expect(resize).toHaveBeenCalledTimes(1);
   await expect(a.unsubscribe(peer.id, subscriptionId)).rejects.toThrow();
   const next = await a.subscribe(peer.id, 7, 0);
   await vi.waitFor(() => expect(events.some((event) => event.subscriptionId === next.subscriptionId && event.kind === 'ready')).toBe(true));
   exit?.();
   await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ subscriptionId: next.subscriptionId, kind: 'exit' }));
   expect(output).toBeUndefined();
+  expect(b.state().controls).toEqual([]);
   vi.spyOn(remoteOps, 'terminalSnapshot').mockResolvedValueOnce('x'.repeat(4_194_305));
   const oversized = await a.subscribe(peer.id, 7, 0);
   await vi.waitFor(() => expect(events.some((event) =>
@@ -159,8 +168,10 @@ it('streams a remote Claude shell through one authenticated subscription and can
   expect(output).toBeUndefined();
   const revoked = await a.subscribe(peer.id, 7, 0);
   await vi.waitFor(() => expect(events.some((event) => event.subscriptionId === revoked.subscriptionId && event.kind === 'ready')).toBe(true));
+  expect(b.state().controls).toEqual([{ projectId: 7, shellIndex: 0, peerName: 'stream A' }]);
   await a.revoke(peer.id);
   await vi.waitFor(() => expect(output).toBeUndefined());
+  await vi.waitFor(() => expect(b.state().controls).toEqual([]));
   expect(events.filter((event) => event.subscriptionId === revoked.subscriptionId).at(-1)?.kind).toBe('ready');
 }, 20_000);
 
@@ -168,7 +179,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   const writes: string[] = [];
   const stopped: string[] = [];
   const localOps: FleetOperations = {
-    status: () => ({ projects: [], shells: [] }),
+    status: () => ({ roots: [], projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
     launchClaude: async () => ({ shellIndex: 0 }),
     stop: async () => {},
@@ -181,7 +192,8 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     snapshot: async () => ({ output: '', alive: false }),
   };
   let remoteStatus: FleetStatus = {
-    projects: [{ id: 1, name: 'Remote project' }],
+    roots: [{ id: 2, name: 'Workspace' }],
+    projects: [{ id: 1, rootId: 2, name: 'Remote project' }],
     shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
   };
   let observedStatus = 0;
@@ -307,20 +319,27 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   );
   if (!pendingStatus) throw new Error('Status was not requested during trust save');
   expect(await pendingStatus).toEqual({
-    projects: [{ id: 1, name: 'Remote project' }],
+    roots: [{ id: 2, name: 'Workspace' }],
+    projects: [{ id: 1, rootId: 2, name: 'Remote project' }],
     shells: [{ projectId: 1, shellIndex: 0, agent: 'omp', state: 'busy' }],
   });
   remoteStatus = {
+    roots: [{ id: 2, name: 'Workspace' }],
     projects: Array.from({ length: 91 }, (_, index) => ({
       id: index + 1,
+      rootId: 2,
       name: 'P'.repeat(160),
     })),
     shells: [],
   };
   expect(await a.status(idB)).toEqual(remoteStatus);
   remoteStatus = {
+    roots: Array.from({ length: 256 }, (_, index) => ({
+      id: index + 1, name: `Root ${index + 1}`,
+    })),
     projects: Array.from({ length: 256 }, (_, index) => ({
       id: index + 1,
+      rootId: index + 1,
       name: String.fromCharCode(1).repeat(160),
     })),
     shells: Array.from({ length: 256 }, (_, index): FleetStatus['shells'][number] => ({
@@ -345,24 +364,26 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   const linkedChannel = session.channel;
   const fullStatus = remoteStatus;
   remoteStatus = {
-    projects: Array.from({ length: 13 }, (_, index) => ({ id: index + 1, name: 'Snapshot' })),
+    roots: [{ id: 2, name: 'Workspace' }],
+    projects: Array.from({ length: 13 }, (_, index) => ({ id: index + 1, rootId: 2, name: 'Snapshot' })),
     shells: [],
   };
   try {
     const pages = await Promise.all(
       Array.from({ length: 4 }, () =>
-        linkedChannel.request('status', { projectOffset: 0, shellOffset: 0 }),
+        linkedChannel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 }),
       ),
     );
     const tokens = pages.map((page) => validateStatusPage(page)?.token);
     expect(tokens.every((token) => typeof token === 'string')).toBe(true);
     await expect(
-      session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+      session.channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 }),
     ).rejects.toThrow('Peer refused fleet operation');
     for (const token of tokens) {
       if (!token) throw new Error('Snapshot token missing');
       const lastPage = validateStatusPage(
         await session.channel.request('status', {
+          rootOffset: 1,
           projectOffset: 12,
           shellOffset: 0,
           token,
@@ -374,6 +395,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     remoteStatus = fullStatus;
   }
   const firstPage: unknown = await session.channel.request('status', {
+    rootOffset: 0,
     projectOffset: 0,
     shellOffset: 0,
   });
@@ -385,15 +407,17 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   )
     throw new Error('Status page missing token');
   const capturedStatus = remoteStatus;
-  remoteStatus = { projects: [], shells: [] };
+  remoteStatus = { roots: [], projects: [], shells: [] };
   try {
     const next = validateStatusPage(
       await session.channel.request('status', {
+        rootOffset: 2,
         projectOffset: 12,
         shellOffset: 12,
         token: firstPage.token,
       }),
     );
+    expect(next?.roots[0]?.id).toBe(3);
     expect(next?.projects[0]?.id).toBe(13);
     expect(next?.shells[0]?.shellIndex).toBe(12);
     expect(next?.projectTotal).toBe(256);
@@ -402,6 +426,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   }
   await expect(
     session.channel.request('status', {
+      rootOffset: 256,
       projectOffset: 256,
       shellOffset: 0,
       token: firstPage.token,
@@ -411,6 +436,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   try {
     await expect(
       session.channel.request('status', {
+        rootOffset: 4,
         projectOffset: 24,
         shellOffset: 24,
         token: firstPage.token,
@@ -428,12 +454,12 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   expect(stopped).toEqual(['1:0']);
   for (let i = 0; i < 4; i++) {
     const page = validateStatusPage(
-      await session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+      await session.channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 }),
     );
     expect(page?.projects).toHaveLength(12);
   }
   await expect(
-    session.channel.request('status', { projectOffset: 0, shellOffset: 0 }),
+    session.channel.request('status', { rootOffset: 0, projectOffset: 0, shellOffset: 0 }),
   ).rejects.toThrow('Peer refused fleet operation');
   expect(a.state().peers.find((peer) => peer.id === idB)?.status).toBe('linked');
   const server: unknown = Reflect.get(b, 'server');
@@ -494,7 +520,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
 
 it('keeps one comparison code when both devices request a link at once', async () => {
   const operations: FleetOperations = {
-    status: () => ({ projects: [], shells: [] }),
+    status: () => ({ roots: [], projects: [], shells: [] }),
     launch: async () => ({ shellIndex: 0 }),
     launchClaude: async () => ({ shellIndex: 0 }),
     stop: async () => {},

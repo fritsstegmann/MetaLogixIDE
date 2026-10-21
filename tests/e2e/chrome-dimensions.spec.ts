@@ -509,12 +509,13 @@ test('AC24a: the projects, chat and git panels paint no section tint in any pale
         for (const theme of THEMES) {
           await setLook(win, palette, theme);
           const at = `${palette}/${theme} ${view}`;
-          if (mac && view === 'chat') {
+          const signedOut = view === 'chat' && (await win.locator('[data-view="chat"] > .chat-signin').count()) > 0;
+          if (mac && view === 'chat' && !signedOut) {
             // D10/AC10 (docs/specs/macos-frosted-chrome.md): on macOS the
-            // chat column gets its own solid surface, painted directly on
-            // the panel element itself (not a pseudo or ancestor tint) —
-            // exactly one layer, exactly --sheet-solid. Off mac, unchanged
-            // (the `else` branch below, which this view still hits there).
+            // signed-in chat column gets its own solid surface, painted
+            // directly on the panel element itself (not a pseudo or ancestor
+            // tint) — exactly one layer, exactly --sheet-solid. Signed out it
+            // shows the chrome like the other sheets; off mac, unchanged.
             expect(await tints(view), `${at} panel tint layers (mac, D10)`).toEqual([await expectedChatTint()]);
           } else {
             expect(await tints(view), `${at} panel tint layers`).toEqual([]);

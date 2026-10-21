@@ -155,6 +155,10 @@
 :root[data-platform="mac"] [data-view="chat"] {
   background-color: var(--sheet-solid);
 }
+/* Signed out, the column holds only the sign-in card, so it shows the chrome like the other sheets. */
+:root[data-platform="mac"] [data-view="chat"]:has(> .chat-signin) {
+  background-color: transparent;
+}
 
 :root[data-platform="mac"],
 :root[data-platform="mac"][data-theme="dark"] {

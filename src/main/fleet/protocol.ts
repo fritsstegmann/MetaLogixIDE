@@ -4,6 +4,7 @@ import type { FleetStatus } from '../../shared/fleet-contract';
 
 export const MAX_FRAME = 16_384;
 export const STATUS_PAGE_SIZE = 12;
+export const ROOT_PAGE_SIZE = 2;
 export interface Beacon {
   readonly v: 1;
   readonly id: string;
@@ -98,17 +99,19 @@ function validArgs(op: Operation, args: unknown): args is Record<string, unknown
   if (!record(args)) return false;
   if (op === 'status') {
     if (
-      !keys(args, ['projectOffset', 'shellOffset', 'token']) ||
+      !keys(args, ['rootOffset', 'projectOffset', 'shellOffset', 'token']) ||
+      !index(args.rootOffset) ||
+      args.rootOffset > 256 ||
       !index(args.projectOffset) ||
       args.projectOffset > 256 ||
       !index(args.shellOffset) ||
       args.shellOffset > 256
     )
       return false;
-    const initial = args.projectOffset === 0 && args.shellOffset === 0;
+    const initial = args.rootOffset === 0 && args.projectOffset === 0 && args.shellOffset === 0;
     return initial
-      ? Object.keys(args).length === 2
-      : Object.keys(args).length === 3 && hex(args.token, 32);
+      ? Object.keys(args).length === 3
+      : Object.keys(args).length === 4 && hex(args.token, 32);
   }
   if (op === 'unsubscribe')
     return keys(args, ['subscriptionId']) && Object.keys(args).length === 1 && hex(args.subscriptionId, 32);
@@ -182,55 +185,64 @@ export function decodeMessage(frame: string): WireMessage | null {
   return null;
 }
 
-/** Accepts only bounded status fields, without project paths or shell content. */
+/** Accepts only bounded status fields and complete, unambiguous hierarchy. */
 export function validateStatus(value: unknown): FleetStatus | null {
-  if (
-    !record(value) ||
-    !keys(value, ['projects', 'shells']) ||
-    Object.keys(value).length !== 2 ||
-    !Array.isArray(value.projects) ||
-    !Array.isArray(value.shells) ||
-    value.projects.length > 256 ||
-    value.shells.length > 256
-  )
-    return null;
+  const status = validateStatusRows(value);
+  if (!status) return null;
+  const roots = new Set(status.roots.map((root) => root.id));
+  const projects = new Set(status.projects.map((project) => project.id));
+  if (status.projects.some((project) => !roots.has(project.rootId)) ||
+    status.shells.some((shell) => !projects.has(shell.projectId))) return null;
+  return status;
+}
+
+function validIdentity(item: unknown, fields: readonly string[]): item is Record<string, unknown> & { id: number; name: string } {
+  return record(item) && keys(item, fields) && Object.keys(item).length === fields.length &&
+    index(item.id) && item.id > 0 && text(item.name, 160) &&
+    !item.name.includes('/') && !item.name.includes('\\');
+}
+
+function validateStatusRows(value: unknown): FleetStatus | null {
+  if (!record(value) || !keys(value, ['roots', 'projects', 'shells']) ||
+    Object.keys(value).length !== 3 || !Array.isArray(value.roots) ||
+    !Array.isArray(value.projects) || !Array.isArray(value.shells) ||
+    value.roots.length > 256 || value.projects.length > 256 || value.shells.length > 256) return null;
+  const roots: FleetStatus['roots'][number][] = [];
   const projects: FleetStatus['projects'][number][] = [];
   const shells: FleetStatus['shells'][number][] = [];
+  const rootIds = new Set<number>();
+  const projectIds = new Set<number>();
+  const shellIds = new Set<string>();
+  for (const item of value.roots) {
+    if (!validIdentity(item, ['id', 'name']) || rootIds.has(item.id)) return null;
+    rootIds.add(item.id);
+    roots.push({ id: item.id, name: item.name });
+  }
   for (const item of value.projects) {
-    if (
-      !record(item) ||
-      !keys(item, ['id', 'name']) ||
-      Object.keys(item).length !== 2 ||
-      !index(item.id) ||
-      item.id < 1 ||
-      !text(item.name, 160)
-    )
-      return null;
-    projects.push({ id: item.id, name: item.name });
+    if (!validIdentity(item, ['id', 'rootId', 'name']) ||
+      !index(item.rootId) || item.rootId < 1 || projectIds.has(item.id)) return null;
+    projectIds.add(item.id);
+    projects.push({ id: item.id, rootId: item.rootId, name: item.name });
   }
   for (const item of value.shells) {
-    if (
-      !record(item) ||
-      !keys(item, ['projectId', 'shellIndex', 'agent', 'state']) ||
-      Object.keys(item).length !== 4 ||
-      !index(item.projectId) ||
-      item.projectId < 1 ||
-      !index(item.shellIndex)
-    )
-      return null;
+    if (!record(item) || !keys(item, ['projectId', 'shellIndex', 'agent', 'state']) ||
+      Object.keys(item).length !== 4 || !index(item.projectId) ||
+      item.projectId < 1 || !index(item.shellIndex)) return null;
     if (item.agent !== null && item.agent !== 'claude' && item.agent !== 'omp') return null;
     if (item.state !== 'idle' && item.state !== 'busy' && item.state !== 'blocked') return null;
-    shells.push({
-      projectId: item.projectId,
-      shellIndex: item.shellIndex,
-      agent: item.agent,
-      state: item.state,
-    });
+    const identity = `${item.projectId}:${item.shellIndex}`;
+    if (shellIds.has(identity)) return null;
+    shellIds.add(identity);
+    shells.push({ projectId: item.projectId, shellIndex: item.shellIndex,
+      agent: item.agent, state: item.state });
   }
-  return { projects, shells };
+  return { roots, projects, shells };
 }
 
 export interface StatusPage {
+  readonly roots: FleetStatus['roots'];
+  readonly rootOffset: number;
+  readonly rootTotal: number;
   readonly projects: FleetStatus['projects'];
   readonly shells: FleetStatus['shells'];
   readonly projectOffset: number;
@@ -242,41 +254,28 @@ export interface StatusPage {
 
 /** Validates one exact status slice and its offsets before aggregating peer data. */
 export function validateStatusPage(value: unknown): StatusPage | null {
-  if (
-    !record(value) ||
-    !keys(value, [
-      'projects',
-      'shells',
-      'projectOffset',
-      'shellOffset',
-      'projectTotal',
-      'shellTotal',
-      'token',
-    ]) ||
-    Object.keys(value).length !== 7 ||
-    !index(value.projectOffset) ||
-    !index(value.shellOffset) ||
-    !index(value.projectTotal) ||
-    !index(value.shellTotal) ||
-    value.projectTotal > 256 ||
-    value.shellTotal > 256 ||
-    value.projectOffset > value.projectTotal ||
-    value.shellOffset > value.shellTotal ||
-    !hex(value.token, 32)
-  )
-    return null;
-  const status = validateStatus({ projects: value.projects, shells: value.shells });
-  if (
-    !status ||
-    status.projects.length !==
-      Math.min(STATUS_PAGE_SIZE, value.projectTotal - value.projectOffset) ||
-    status.shells.length !== Math.min(STATUS_PAGE_SIZE, value.shellTotal - value.shellOffset)
-  )
-    return null;
+  if (!record(value) ||
+    !keys(value, ['roots', 'projects', 'shells', 'rootOffset', 'projectOffset',
+      'shellOffset', 'rootTotal', 'projectTotal', 'shellTotal', 'token']) ||
+    Object.keys(value).length !== 10 ||
+    !index(value.rootOffset) || !index(value.projectOffset) || !index(value.shellOffset) ||
+    !index(value.rootTotal) || !index(value.projectTotal) || !index(value.shellTotal) ||
+    value.rootTotal > 256 || value.projectTotal > 256 || value.shellTotal > 256 ||
+    value.rootOffset > value.rootTotal || value.projectOffset > value.projectTotal ||
+    value.shellOffset > value.shellTotal || !hex(value.token, 32)) return null;
+  const status = validateStatusRows({
+    roots: value.roots, projects: value.projects, shells: value.shells,
+  });
+  if (!status ||
+    status.roots.length !== Math.min(ROOT_PAGE_SIZE, value.rootTotal - value.rootOffset) ||
+    status.projects.length !== Math.min(STATUS_PAGE_SIZE, value.projectTotal - value.projectOffset) ||
+    status.shells.length !== Math.min(STATUS_PAGE_SIZE, value.shellTotal - value.shellOffset)) return null;
   return {
     ...status,
+    rootOffset: value.rootOffset,
     projectOffset: value.projectOffset,
     shellOffset: value.shellOffset,
+    rootTotal: value.rootTotal,
     projectTotal: value.projectTotal,
     shellTotal: value.shellTotal,
     token: value.token,

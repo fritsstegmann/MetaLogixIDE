@@ -18,6 +18,7 @@ import {
   validateSnapshot,
   validateStatus,
   validateStatusPage,
+  ROOT_PAGE_SIZE,
   STATUS_PAGE_SIZE,
   type StatusPage,
   type WireMessage,
@@ -58,6 +59,7 @@ interface TerminalSubscription {
   snapshot: string | null;
   offset: number;
   ready: boolean;
+  exited: boolean;
   readonly pending: WireMessage[];
   pendingBytes: number;
   deadline?: NodeJS.Timeout;
@@ -77,7 +79,7 @@ interface Session {
   deadline?: NodeJS.Timeout;
   readonly statusSnapshots: Map<
     string,
-    { status: FleetStatus; expires: number; projectOffset: number; shellOffset: number }
+    { status: FleetStatus; expires: number; rootOffset: number; projectOffset: number; shellOffset: number }
   >;
   statusPending: number;
   readonly incoming: Map<string, TerminalSubscription>;
@@ -167,7 +169,7 @@ export class FleetService {
     return result;
   }
 
-  /** Returns only public peer identity before approval and never includes terminal content. */
+  /** Returns trusted peer identities and active local shell controllers without terminal content. */
   state(): FleetState {
     const peers = this.presence
       .filter((peer) => !this.trust.revoked.includes(peer.id))
@@ -206,10 +208,20 @@ export class FleetService {
         verificationCode: session.code,
       });
     }
+    const controls: FleetState['controls'][number][] = [];
+    for (const session of this.sessions.values()) {
+      if (!this.trust.enabled || !this.started || !session.remoteNonce || session.code ||
+        this.trust.revoked.includes(session.id)) continue;
+      const peerName = this.trust.trusted.find((peer) => peer.id === session.id)?.name;
+      if (!peerName) continue;
+      for (const { projectId, shellIndex, exited } of session.incoming.values())
+        if (!exited) controls.push({ projectId, shellIndex, peerName });
+    }
     return {
       enabled: this.trust.enabled && this.started,
       peers,
       port: this.options.getPort?.() ?? 0,
+      controls,
       ...(this.networkError ? { error: this.networkError } : {}),
       ...(this.recovery ? { recovery: this.recovery } : {}),
     };
@@ -814,9 +826,12 @@ export class FleetService {
         this.removeSubscription(session, String(args.subscriptionId));
         value = { ok: true };
       } else if (op === 'resize') {
-        if (!this.options.operations.isAlive(Number(args.projectId), Number(args.shellIndex)))
+        const projectId = Number(args.projectId);
+        const shellIndex = Number(args.shellIndex);
+        if (!this.controlsShell(session, projectId, shellIndex) ||
+          !this.options.operations.isAlive(projectId, shellIndex))
           throw new Error('Shell unavailable');
-        await this.options.operations.resize(Number(args.projectId), Number(args.shellIndex), Number(args.cols), Number(args.rows));
+        await this.options.operations.resize(projectId, shellIndex, Number(args.cols), Number(args.rows));
         value = { ok: true };
       } else if (op === 'stop') {
         await this.options.operations.stop(Number(args.projectId), Number(args.shellIndex));
@@ -862,6 +877,22 @@ export class FleetService {
     session.outgoing.clear();
   }
 
+  private controlsShell(session: Session, projectId: number, shellIndex: number): boolean {
+    for (const subscription of session.incoming.values())
+      if (!subscription.exited &&
+        subscription.projectId === projectId && subscription.shellIndex === shellIndex) return true;
+    return false;
+  }
+
+  /** Reports whether a live remote controller owns this local PTY's dimensions. */
+  isRemotelyControlled(projectId: number, shellIndex: number): boolean {
+    if (!this.started || !this.trust.enabled) return false;
+    for (const session of this.sessions.values())
+      if (session.remoteNonce && !session.code &&
+        this.trust.trusted.some((peer) => peer.id === session.id) &&
+        this.controlsShell(session, projectId, shellIndex)) return true;
+    return false;
+  }
   private removeSubscription(session: Session, id: string): void {
     const subscription = session.incoming.get(id);
     if (!subscription) return;
@@ -869,6 +900,7 @@ export class FleetService {
     session.incoming.delete(id);
     subscription.pending.length = 0;
     subscription.unsubscribe();
+    this.notify();
     if (session.incoming.size === 0) {
       clearInterval(session.streamTimer);
       session.streamTimer = undefined;
@@ -889,8 +921,12 @@ export class FleetService {
       subscription.pendingBytes += Buffer.byteLength(chunk, 'utf8');
       offset = end;
     }
-    if (kind === 'exit') subscription.pending.push({ type: 'terminal', id: subscription.id,
-      projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
+    if (kind === 'exit') {
+      subscription.exited = true;
+      this.notify();
+      subscription.pending.push({ type: 'terminal', id: subscription.id,
+        projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
+    }
   }
 
   private chunkEnd(data: string, offset: number): number {
@@ -917,15 +953,17 @@ export class FleetService {
 
   private acceptSubscription(session: Session, projectId: number, shellIndex: number, id: string): { subscriptionId: string } {
     if (session.incoming.size >= 4 || session.incoming.has(id) ||
+      this.isRemotelyControlled(projectId, shellIndex) ||
       !this.options.operations.hasProject(projectId) ||
       !this.options.operations.isAlive(projectId, shellIndex))
       throw new Error('Shell unavailable');
     const snapshot = this.options.operations.terminalSnapshot(projectId, shellIndex);
     const subscription: TerminalSubscription = {
       id, projectId, shellIndex, unsubscribe: () => {}, snapshot: null,
-      offset: 0, ready: false, pending: [], pendingBytes: 0,
+      offset: 0, ready: false, exited: false, pending: [], pendingBytes: 0,
     };
     session.incoming.set(id, subscription);
+    this.notify();
     const unsubscribe = this.options.operations.watch(projectId, shellIndex,
       (data) => this.queueOutput(session, subscription, 'data', data),
       () => this.queueOutput(session, subscription, 'exit', ''));
@@ -1005,6 +1043,7 @@ export class FleetService {
       session.statusSnapshots.set(token, {
         status,
         expires: Date.now() + 10_000,
+        rootOffset: 0,
         projectOffset: 0,
         shellOffset: 0,
       });
@@ -1015,6 +1054,7 @@ export class FleetService {
   }
 
   private async statusPage(session: Session, args: Record<string, unknown>): Promise<StatusPage> {
+    const rootOffset = Number(args.rootOffset);
     const projectOffset = Number(args.projectOffset);
     const shellOffset = Number(args.shellOffset);
     const now = Date.now();
@@ -1022,7 +1062,7 @@ export class FleetService {
       if (snapshot.expires <= now) session.statusSnapshots.delete(token);
     let token: string;
     let status: FleetStatus;
-    if (projectOffset === 0 && shellOffset === 0) {
+    if (rootOffset === 0 && projectOffset === 0 && shellOffset === 0) {
       ({ status, token } = await this.captureStatus(session));
     } else {
       token = String(args.token);
@@ -1031,29 +1071,36 @@ export class FleetService {
         !snapshot ||
         snapshot.expires <= now ||
         snapshot.projectOffset !== projectOffset ||
+        snapshot.rootOffset !== rootOffset ||
         snapshot.shellOffset !== shellOffset
       )
         throw new Error('Invalid fleet status offset');
       status = snapshot.status;
       snapshot.expires = now + 10_000;
     }
-    if (projectOffset > status.projects.length || shellOffset > status.shells.length)
+    if (rootOffset > status.roots.length ||
+      projectOffset > status.projects.length || shellOffset > status.shells.length)
       throw new Error('Invalid fleet status offset');
     const page: StatusPage = {
+      roots: status.roots.slice(rootOffset, rootOffset + ROOT_PAGE_SIZE),
       projects: status.projects.slice(projectOffset, projectOffset + STATUS_PAGE_SIZE),
       shells: status.shells.slice(shellOffset, shellOffset + STATUS_PAGE_SIZE),
+      rootOffset,
       projectOffset,
       shellOffset,
+      rootTotal: status.roots.length,
       projectTotal: status.projects.length,
       shellTotal: status.shells.length,
       token,
     };
     const snapshot = session.statusSnapshots.get(token);
     if (snapshot) {
+      snapshot.rootOffset = rootOffset + page.roots.length;
       snapshot.projectOffset = projectOffset + page.projects.length;
       snapshot.shellOffset = shellOffset + page.shells.length;
     }
     if (
+      rootOffset + page.roots.length === page.rootTotal &&
       projectOffset + page.projects.length === page.projectTotal &&
       shellOffset + page.shells.length === page.shellTotal
     )
@@ -1132,37 +1179,47 @@ export class FleetService {
     return session.channel;
   }
 
-  /** Returns complete bounded projects and shell status from a linked, online peer. */
+  /** Returns the complete bounded root, project, and shell hierarchy of a linked peer. */
   async status(peerId: string): Promise<FleetStatus> {
     const channel = this.linked(peerId);
+    const roots: FleetStatus['roots'][number][] = [];
     const projects: FleetStatus['projects'][number][] = [];
     const shells: FleetStatus['shells'][number][] = [];
     let token: string | undefined;
+    let rootTotal: number | undefined;
     let projectTotal: number | undefined;
     let shellTotal: number | undefined;
     do {
       if (this.linked(peerId) !== channel) throw new Error('Fleet peer changed during status');
       const args = token
-        ? { projectOffset: projects.length, shellOffset: shells.length, token }
-        : { projectOffset: 0, shellOffset: 0 };
+        ? { rootOffset: roots.length, projectOffset: projects.length, shellOffset: shells.length, token }
+        : { rootOffset: 0, projectOffset: 0, shellOffset: 0 };
       const page = validateStatusPage(await channel.request('status', args));
       if (
         !page ||
+        page.rootOffset !== roots.length ||
         page.projectOffset !== projects.length ||
         page.shellOffset !== shells.length ||
         (token && page.token !== token) ||
+        (rootTotal !== undefined && page.rootTotal !== rootTotal) ||
         (projectTotal !== undefined && page.projectTotal !== projectTotal) ||
         (shellTotal !== undefined && page.shellTotal !== shellTotal)
       )
         throw new Error('Invalid peer status page');
       token = page.token;
+      rootTotal = page.rootTotal;
       projectTotal = page.projectTotal;
       shellTotal = page.shellTotal;
+      roots.push(...page.roots);
       projects.push(...page.projects);
       shells.push(...page.shells);
-    } while (projects.length < projectTotal || shells.length < shellTotal);
+      if (roots.length < rootTotal)
+        await new Promise<void>((resolve) => setTimeout(resolve, 12));
+    } while (roots.length < rootTotal || projects.length < projectTotal || shells.length < shellTotal);
     if (this.linked(peerId) !== channel) throw new Error('Fleet peer changed during status');
-    return { projects, shells };
+    const status = validateStatus({ roots, projects, shells });
+    if (!status) throw new Error('Invalid peer status');
+    return status;
   }
 
   /** Launches a shell through the peer's existing local shell policy. */

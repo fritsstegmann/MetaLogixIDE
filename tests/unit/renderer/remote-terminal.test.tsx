@@ -53,7 +53,7 @@ const runtime = vi.hoisted(() => {
   };
 });
 vi.mock('react', async (original) => ({ ...(await original<typeof ReactModule>()), useState: runtime.useState, useRef: runtime.useRef, useCallback: runtime.useCallback, useEffect: runtime.useEffect }));
-const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; disposed: boolean }> }));
+const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; disposed: boolean; cols: number; rows: number }> }));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {};
@@ -77,10 +77,12 @@ vi.mock('@xterm/xterm', () => ({
     dispose() { this.disposed = true; }
   },
 }));
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }));
+const fits = vi.hoisted(() => ({ count: 0, dimensions: { cols: 80, rows: 24 } }));
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() { fits.count++; const instance = terminal.instances.at(-1); if (instance) { instance.cols = fits.dimensions.cols; instance.rows = fits.dimensions.rows; } } } }));
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class { activate() { return undefined; } } }));
 vi.mock('@renderer/fonts/font-settings-context', () => ({ useFontSettings: () => ({ terminalFontFamily: null }) }));
-vi.mock('@renderer/fonts/terminal-font-size-context', () => ({ useTerminalFontSize: () => ({ size: 13 }) }));
+const font = vi.hoisted(() => ({ size: 13 }));
+vi.mock('@renderer/fonts/terminal-font-size-context', () => ({ useTerminalFontSize: () => ({ size: font.size }) }));
 vi.mock('@renderer/fonts/terminal-font-weight-context', () => ({ useTerminalFontWeight: () => ({ weight: 400, boldWeight: 700 }) }));
 vi.mock('@renderer/shortcut-platform', () => ({ useShortcutPlatform: () => 'other' }));
 const invoke = vi.hoisted(() => vi.fn());
@@ -104,6 +106,8 @@ function text(node: ReactNode): string {
 function mount() {
   let available = true;
   const host = { clientWidth: 500, clientHeight: 300 };
+  const observers: Array<() => void> = [];
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { observers.push(callback); } observe() {} disconnect() {} });
   const refresh = vi.fn();
   const draw = () => runtime.render(() => RemoteTerminal({ project, available, onRefreshAvailability: refresh }), (tree) => {
     const region = nodes(tree).find((node) => node.type === 'div' && (node.props as { role?: string }).role === 'region');
@@ -125,12 +129,20 @@ function mount() {
     offline() { available = false; return draw(); },
     online() { available = true; return draw(); },
     emit(next: FleetTerminalEvent) { for (const listener of listeners) listener(next); },
+    resizeHost(cols: number, rows: number) {
+      host.clientWidth = cols * 8;
+      host.clientHeight = rows * 16;
+      fits.dimensions = { cols, rows };
+      for (const notify of observers) notify();
+    },
   };
 }
 beforeEach(() => {
   runtime.reset();
   terminal.instances.length = 0;
-  listeners.clear();
+  fits.count = 0;
+  fits.dimensions = { cols: 80, rows: 24 };
+  font.size = 13;
   invoke.mockReset();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} });
@@ -158,6 +170,9 @@ describe('RemoteTerminal', () => {
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'pwd\r' });
     expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 80, rows: 24 });
+    expect(invoke.mock.invocationCallOrder[invoke.mock.calls.findIndex(([channel]) => channel === 'fleet:subscribe')]).toBeLessThan(
+      invoke.mock.invocationCallOrder[invoke.mock.calls.findIndex(([channel]) => channel === 'fleet:resize')] ?? 0,
+    );
   });
 
   it('buffers early events until subscribe resolves and discards other subscription IDs', async () => {
@@ -175,6 +190,7 @@ describe('RemoteTerminal', () => {
     await flush();
     expect(terminal.instances[0]?.writes).toEqual(['one', 'two']);
     expect(app.control('Paste').disabled).toBe(false);
+    expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 80, rows: 24 });
   });
 
   it('unsubscribes and disables input on offline/revoke, and ignores late events', async () => {
@@ -226,6 +242,24 @@ describe('RemoteTerminal', () => {
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-1' });
     expect(terminal.instances[0]?.writes).toEqual([]);
+  });
+
+  it('never resizes a remote PTY after its pending attachment is abandoned', async () => {
+    let finishSubscribe: (value: { subscriptionId: string }) => void = () => undefined;
+    invoke.mockImplementation((channel: string) => channel === 'fleet:launch-claude'
+      ? Promise.resolve({ shellIndex: 2 })
+      : channel === 'fleet:subscribe'
+        ? new Promise<{ subscriptionId: string }>((resolve) => { finishSubscribe = resolve; })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    app.resizeHost(110, 40);
+    app.offline();
+    finishSubscribe({ subscriptionId: 'sub-1' });
+    await flush();
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:resize')).toHaveLength(0);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:unsubscribe')).toHaveLength(1);
   });
 
   it('announces process exit and ignores subsequent output or keystrokes', async () => {
@@ -341,6 +375,49 @@ describe('RemoteTerminal', () => {
     fontsLoaded();
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 2 });
+  });
+
+  it('fits before subscription but resizes only after acknowledgement using latest measured viewport', async () => {
+    let resolve: (value: { subscriptionId: string }) => void = () => undefined;
+    invoke.mockImplementation((channel: string) => channel === 'fleet:launch-claude'
+      ? Promise.resolve({ shellIndex: 2 })
+      : channel === 'fleet:subscribe'
+        ? new Promise<{ subscriptionId: string }>((done) => { resolve = done; })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    expect(fits.count).toBeGreaterThan(0);
+    app.resizeHost(102, 32);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:resize')).toHaveLength(0);
+    resolve({ subscriptionId: 'sub-1' });
+    await flush();
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:resize').map(([, request]) => request)).toEqual([
+      { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 102, rows: 32 },
+    ]);
+  });
+
+  it('refits on viewport and font updates without repeating PTY geometry', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    const initialFits = fits.count;
+    app.resizeHost(80, 24);
+    expect(fits.count).toBeGreaterThan(initialFits);
+    fits.dimensions = { cols: 74, rows: 20 };
+    font.size = 16;
+    app.draw();
+    expect(fits.count).toBeGreaterThan(initialFits + 1);
+    app.resizeHost(100, 31);
+    app.resizeHost(100, 31);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:resize').map(([, request]) => [request.cols, request.rows])).toEqual([
+      [80, 24], [74, 20], [100, 31],
+    ]);
+    app.emit(event('exit', '0'));
+    app.resizeHost(120, 40);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:resize')).toHaveLength(3);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-1' });
   });
 
   it('routes terminal paste shortcut into the remote PTY without local shell input', async () => {

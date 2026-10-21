@@ -146,11 +146,25 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
     let pending: FleetTerminalEvent[] = [];
     let pendingBytes = 0;
     let writeQueue = Promise.resolve();
+    let lastSize: { cols: number; rows: number } | null = null;
+    const detach = () => {
+      active = false;
+      runningRef.current = false;
+      if (subscriptionId) {
+        void api.invoke('fleet:unsubscribe', { peerId, subscriptionId }).catch(() => undefined);
+        subscriptionId = null;
+      }
+    };
     const resize = () => {
       if (!active || !opened || exited || host.clientWidth < 20 || host.clientHeight < 20) return;
       fit.fit();
+      if (!subscriptionId || (lastSize !== null && lastSize.cols === term.cols && lastSize.rows === term.rows)) return;
+      lastSize = { cols: term.cols, rows: term.rows };
       void api.invoke('fleet:resize', { peerId, projectId, shellIndex, cols: term.cols, rows: term.rows }).catch(() => {
-        if (active && !exited) { runningRef.current = false; setSession({ kind: 'error', message: 'Could not resize remote terminal. Check the connection and retry.' }); }
+        if (active && !exited) {
+          detach();
+          setSession({ kind: 'error', message: 'Could not resize remote terminal. Check the connection and retry.' });
+        }
       });
     };
     resizeRef.current = resize;
@@ -164,7 +178,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
       }
       if (event.kind === 'exit') {
         exited = true;
-        runningRef.current = false;
+        detach();
         setSession({ kind: 'exited', shellIndex });
       }
     };
@@ -174,8 +188,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
       pendingBytes += event.data.length;
       if (pendingBytes > MAX_PENDING_BYTES || pending.length >= MAX_PENDING_EVENTS) {
         pending = [];
-        active = false;
-        runningRef.current = false;
+        detach();
         setSession({ kind: 'error', message: 'Remote terminal output exceeded the attachment buffer. Retry to reconnect.' });
         return;
       }
@@ -187,7 +200,10 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
         writeQueue = writeQueue.then(async () => {
           if (active && runningRef.current) await api.invoke('fleet:write', { peerId, projectId, shellIndex, data: chunk });
         }).catch(() => {
-          if (active) { runningRef.current = false; setSession({ kind: 'error', message: 'Could not send input to the remote machine. Check the connection and retry.' }); }
+          if (active) {
+            detach();
+            setSession({ kind: 'error', message: 'Could not send input to the remote machine. Check the connection and retry.' });
+          }
         });
       }
     });
@@ -206,14 +222,18 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
       void api.invoke('fleet:subscribe', { peerId, projectId, shellIndex }).then((result) => {
         subscriptionId = result.subscriptionId;
         if (!active) {
-          void api.invoke('fleet:unsubscribe', { peerId, subscriptionId }).catch(() => undefined);
+          detach();
           return;
         }
+        resize();
         for (const event of pending) applyEvent(event);
         pending = [];
         pendingBytes = 0;
       }).catch(() => {
-        if (active) { runningRef.current = false; setSession({ kind: 'error', message: 'Could not attach remote terminal. Check the connection and retry.' }); }
+        if (active) {
+          detach();
+          setSession({ kind: 'error', message: 'Could not attach remote terminal. Check the connection and retry.' });
+        }
       });
     };
     let fontsReady = false;
@@ -237,9 +257,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
     if (document.fonts) void document.fonts.ready.then(markFontsReady, markFontsReady);
     else markFontsReady();
     return () => {
-      active = false;
+      detach();
       clearTimeout(fontTimeout);
-      runningRef.current = false;
       pending = [];
       off();
       observer.disconnect();
@@ -248,7 +267,6 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
       term.dispose();
       if (resizeRef.current === resize) resizeRef.current = null;
       if (terminalRef.current === term) terminalRef.current = null;
-      if (subscriptionId) void api.invoke('fleet:unsubscribe', { peerId, subscriptionId }).catch(() => undefined);
     };
   }, [available, peerId, projectId, shellIndex, attachmentEpoch]);
 
