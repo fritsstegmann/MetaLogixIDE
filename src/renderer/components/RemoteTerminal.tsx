@@ -34,10 +34,26 @@ const REMOTE_LAUNCH_ERRORS = [
 const MAX_PENDING_EVENTS = 2048;
 type Session = { kind: 'starting' } | { kind: 'connecting'; shellIndex: number } | { kind: 'running'; shellIndex: number } | { kind: 'exited'; shellIndex: number } | { kind: 'error'; message: string };
 
+/** A request to show one shell; a new `seq` asks again for the same index. */
+export interface RemoteShellFocus {
+  readonly shellIndex: number;
+  readonly seq: number;
+}
+
+/** The project's live shell count and the shell on screen, null while none is attached or the peer is offline. */
+export interface RemoteShellsState {
+  readonly count: number;
+  readonly shownShellIndex: number | null;
+}
+
 interface Props {
   readonly project: RemoteProjectSelection;
   readonly available: boolean;
   readonly onRefreshAvailability: () => void;
+  /** Selects this shell once it is listed on the peer, for example after a notice click. */
+  readonly focusShell?: RemoteShellFocus | null;
+  /** Reports shell count and shown shell whenever either changes; reuses the 4 s `fleet:status` poll. */
+  readonly onShellsChange?: (state: RemoteShellsState) => void;
 }
 
 function terminalTheme(): ITheme {
@@ -69,7 +85,7 @@ function* terminalChunks(data: string): Generator<string> {
 }
 
 /** Attaches only the active remote PTY; its other shells stay alive on the peer. */
-export function RemoteTerminal({ project, available, onRefreshAvailability }: Props) {
+export function RemoteTerminal({ project, available, onRefreshAvailability, focusShell = null, onShellsChange }: Props) {
   const { peerId, peerName, projectId, projectName } = project;
   const [session, setSession] = useState<Session>({ kind: 'starting' });
   const [shellIndex, setShellIndex] = useState<number | null>(null);
@@ -84,6 +100,9 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
   const generation = useRef(0);
   const statusRequest = useRef(0);
   const mounted = useRef(true);
+  const focusRef = useRef(focusShell);
+  focusRef.current = focusShell;
+  const handledFocus = useRef<number | null>(null);
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
   platformRef.current = platform;
@@ -141,7 +160,10 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
       void refreshShells().then((existing) => {
         if (!existing || !mounted.current || generation.current !== attempt) return;
         if (existing.length > 0) {
-          const index = existing.find((shell) => shell.shellIndex === 0)?.shellIndex ?? existing[0]!.shellIndex;
+          const requested = focusRef.current;
+          const wanted = requested && existing.some((shell) => shell.shellIndex === requested.shellIndex) ? requested : null;
+          if (wanted) handledFocus.current = wanted.seq;
+          const index = wanted?.shellIndex ?? existing.find((shell) => shell.shellIndex === 0)?.shellIndex ?? existing[0]!.shellIndex;
           setShellIndex(index);
           setSession({ kind: 'connecting', shellIndex: index });
         } else void launch('claude');
@@ -312,6 +334,20 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
   }, [available, peerId, projectId, shellIndex, attachmentEpoch]);
 
   useEffect(() => {
+    if (!focusShell || handledFocus.current === focusShell.seq || !shells.some((shell) => shell.shellIndex === focusShell.shellIndex)) return;
+    handledFocus.current = focusShell.seq;
+    if (focusShell.shellIndex === shellIndex) return;
+    runningRef.current = false;
+    setSession({ kind: 'connecting', shellIndex: focusShell.shellIndex });
+    setShellIndex(focusShell.shellIndex);
+  }, [focusShell, shells, shellIndex]);
+
+  const shownShellIndex = available ? shellIndex : null;
+  useEffect(() => {
+    onShellsChange?.({ count: shells.length, shownShellIndex });
+  }, [onShellsChange, shells.length, shownShellIndex]);
+
+  useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
     term.options.fontFamily = buildFontFamilyStack(terminalFontFamily, TERMINAL_FONT_FALLBACK);
@@ -383,7 +419,6 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
   return (
     <section aria-label={`Remote project ${projectName} on ${peerName}`} data-testid="remote-workspace" className="flex h-full min-h-0 min-w-0 flex-col text-[--text]">
       <header className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0">
-        <button type="button" aria-current="page" className="h-8 px-3 rounded-lg transition-colors bg-[--accent-soft] text-[--accent-soft-text] font-medium">Shell</button>
         <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2 pr-2">
           <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={`${projectName} on ${peerName}`}>
             <StatusDot state={shells.find((shell) => shell.shellIndex === shellIndex)?.state ?? 'idle'} />

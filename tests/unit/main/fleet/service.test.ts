@@ -37,6 +37,7 @@ const operations = (): FleetOperations => ({
   watch: () => () => {},
   snapshot: async () => ({ output: 'safe', alive: true }),
   terminalSnapshot: async () => 'safe',
+  gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
 });
 function service(name: string, callbacks: FleetOperations = operations()) {
   const storageDir = mkdtempSync(join(tmpdir(), 'fleet-service-'));

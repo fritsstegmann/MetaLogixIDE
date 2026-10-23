@@ -5,7 +5,9 @@ import { join, resolve } from 'node:path';
 import { Server as TlsServer } from 'node:tls';
 import type { IpcMain } from 'electron';
 import { buildServices } from '@main/services';
-import { createFleetOperations, registerIpc } from '@main/ipc/register';
+import { createFleetOperations, fleetGitSummary, registerIpc } from '@main/ipc/register';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { AgentStatusTracker } from '@main/agent-status/state-tracker';
 import { FleetService } from '@main/fleet/service';
 import { FleetDiscovery } from '@main/fleet/discovery';
@@ -312,6 +314,11 @@ describe('registered Fleet IPC over two real services', () => {
           roots: [{ id: root.id, name: 'root' }],
           projects: [{ id: project.id, rootId: root.id, name: 'Remote project' }],
         });
+        expect(await invoke('fleet:git-status', { peerId: peer.id, projectId: project.id })).toEqual({
+          isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0,
+        });
+        await expect(invoke('fleet:git-status', { peerId: peer.id, projectId: project.id + 10_000 }))
+          .rejects.toThrow('Peer refused fleet operation');
         const launched = await invoke('fleet:launch', { peerId: peer.id, projectId: project.id });
         if (
           !launched ||
@@ -485,6 +492,37 @@ describe('Fleet port and recovery IPC', () => {
     }
   });
 
+  it('records a validated fleet:viewing and rejects every cast payload without changing it', async () => {
+    const { services, invoke } = fixture();
+    try {
+      const shell = { peerId: 'a'.repeat(64), projectId: 7, shellIndex: 0 };
+      await expect(invoke('fleet:viewing', { shell })).resolves.toEqual({ ok: true });
+      expect(services.fleet?.viewing()).toEqual(shell);
+      for (const payload of [undefined, null, {}, { shell: { ...shell, peerId: 'x' } },
+        { shell: { ...shell, projectId: '7' } }, { shell: { ...shell, shellIndex: -1 } }, { shell, extra: 1 }])
+        await expect(invoke('fleet:viewing', payload), JSON.stringify(payload)).rejects.toThrow(/invalid fleet:viewing/);
+      expect(services.fleet?.viewing()).toEqual(shell);
+      await invoke('fleet:viewing', { shell: null });
+      expect(services.fleet?.viewing()).toBeNull();
+    } finally {
+      services.db.close();
+    }
+  });
+
+  it('rejects fleet:git-status for a cast project ID or an unlinked peer', async () => {
+    const { services, invoke } = fixture();
+    try {
+      await services.fleet?.start();
+      for (const projectId of [0, -1, 1.5, '7'])
+        await expect(invoke('fleet:git-status', { peerId: 'a'.repeat(64), projectId })).rejects.toThrow('Invalid project ID');
+      await expect(invoke('fleet:git-status', { peerId: 'a'.repeat(64), projectId: 1 })).rejects.toThrow('Peer is not linked and online');
+      await expect(invoke('fleet:git-status', null)).rejects.toThrow();
+    } finally {
+      await services.fleet?.stop();
+      services.db.close();
+    }
+  });
+
   it('refuses fleet:reset-identity while the identity is healthy and keeps the credential', async () => {
     const { services, invoke, credentials } = fixture();
     try {
@@ -495,6 +533,60 @@ describe('Fleet port and recovery IPC', () => {
       expect(credentials.size).toBe(0);
     } finally {
       await services.fleet?.stop();
+      services.db.close();
+    }
+  });
+});
+
+describe('Fleet git summary', () => {
+  const repo = { isRepo: true, branch: 'main', ahead: 1, behind: 2, dirty: true,
+    files: { 'src/secret.ts': 'M', '/private/key': '?' } } as const;
+
+  it('keeps only the branch, counts and dirty flag, never the paths', () => {
+    const summary = fleetGitSummary(repo);
+    expect(summary).toEqual({ isRepo: true, branch: 'main', dirty: true, ahead: 1, behind: 2, changedCount: 2 });
+    expect(JSON.stringify(summary)).not.toContain('secret');
+  });
+
+  it('carries no data for a non-repository', () => {
+    expect(fleetGitSummary({ ...repo, isRepo: false })).toEqual({
+      isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0,
+    });
+  });
+
+  it('cuts a long branch to 255 bytes on a character boundary and caps counts', () => {
+    const summary = fleetGitSummary({ ...repo, branch: 'é'.repeat(200), ahead: 5_000_000, behind: -3 });
+    expect(Buffer.byteLength(summary.branch ?? '', 'utf8')).toBe(254);
+    expect(summary.branch).toBe('é'.repeat(127));
+    expect(summary.ahead).toBe(1_000_000);
+    expect(summary.behind).toBe(0);
+    expect(fleetGitSummary({ ...repo, branch: 'b'.repeat(300) }).branch).toBe('b'.repeat(255));
+  });
+
+  it('drops a branch containing control characters and an empty branch', () => {
+    expect(fleetGitSummary({ ...repo, branch: 'main\x1b[2J' }).branch).toBeNull();
+    expect(fleetGitSummary({ ...repo, branch: '' }).branch).toBeNull();
+  });
+
+  it.skipIf(process.platform === 'win32')('serves only visible projects through the real git status handler', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'fleet-git-'));
+    roots.push(home);
+    const projectPath = join(home, 'root', 'repo');
+    mkdirSync(projectPath, { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'feature/x'], { cwd: projectPath });
+    writeFileSync(join(projectPath, 'secret-name.txt'), 'x');
+    const services = buildServices({ homeDir: home, dbPath: join(home, 'state.db'), migrationsDir: resolve('migrations') });
+    try {
+      const root = services.roots.add(join(home, 'root'));
+      const project = services.projects.upsert(root.id, projectPath, 'Repo');
+      const operations = createFleetOperations(services);
+      const summary = await operations.gitStatus(project.id);
+      expect(summary).toMatchObject({ isRepo: true, dirty: true, changedCount: 1 });
+      expect(JSON.stringify(summary)).not.toContain('secret-name');
+      await expect(operations.gitStatus(project.id + 10_000)).rejects.toThrow(/no project/);
+      services.projects.setHidden(project.id, true);
+      await expect(operations.gitStatus(project.id)).rejects.toThrow(/no project/);
+    } finally {
       services.db.close();
     }
   });

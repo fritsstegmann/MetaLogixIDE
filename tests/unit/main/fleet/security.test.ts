@@ -9,6 +9,8 @@ import {
   validateStatus,
   validateProfiles,
   validateStatusPage,
+  validateGitStatus,
+  validArgs,
 } from '@main/fleet/protocol';
 
 const id = 'a'.repeat(64);
@@ -259,5 +261,88 @@ describe('fleet network boundaries', () => {
     ]) expect(validateStatus(invalid)).toBeNull();
     expect(validateSnapshot({ output: 'x'.repeat(8193), alive: true })).toBeNull();
     expect(validateSnapshot({ output: 'ok', alive: true, token: 'secret' })).toBeNull();
+  });
+});
+
+describe('fleet git-status and notice frames', () => {
+  const frameId = 'c'.repeat(32);
+  const request = (args: unknown, extra: object = {}) =>
+    JSON.stringify({ type: 'request', id: frameId, op: 'git-status', args, ...extra });
+  const notice = { type: 'notice', id: frameId, projectId: 7, shellIndex: 2, kind: 'needs-input', body: 'Claude needs your input' };
+  const repo = { isRepo: true, branch: 'main', dirty: true, ahead: 1, behind: 2, changedCount: 3 };
+
+  it('accepts a git-status request carrying only a positive project ID', () => {
+    expect(decodeMessage(request({ projectId: 7 }))).toEqual({ type: 'request', id: frameId, op: 'git-status', args: { projectId: 7 } });
+    for (const args of [{}, { projectId: 0 }, { projectId: -1 }, { projectId: 1.5 }, { projectId: '7' },
+      { projectId: 1_000_001 }, { projectId: 7, path: '/etc' }, { projectId: 7, shellIndex: 0 }, null, []])
+      expect(decodeMessage(request(args))).toBeNull();
+    expect(decodeMessage(request({ projectId: 7 }, { secret: 'x' }))).toBeNull();
+    expect(validArgs('git-status', { projectId: 7 })).toBe(true);
+    expect(validArgs('git-status', { projectId: 7, extra: 1 })).toBe(false);
+  });
+
+  it('accepts an exact, bounded git summary and nothing that could carry paths', () => {
+    expect(validateGitStatus(repo)).toEqual(repo);
+    expect(validateGitStatus({ ...repo, branch: null })).toEqual({ ...repo, branch: null });
+    expect(validateGitStatus({ ...repo, branch: 'é'.repeat(127) })).not.toBeNull();
+    const notRepo = { isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 };
+    expect(validateGitStatus(notRepo)).toEqual(notRepo);
+    for (const invalid of [
+      { ...repo, files: { 'secret.txt': 'M' } },
+      { ...repo, paths: ['/private'] },
+      Object.fromEntries(Object.entries(repo).filter(([key]) => key !== 'changedCount')),
+      { ...repo, branch: 'b'.repeat(256) },
+      { ...repo, branch: 'é'.repeat(128) },
+      { ...repo, branch: '' },
+      { ...repo, branch: 'main\x1b[31m' },
+      { ...repo, branch: 'main\0' },
+      { ...repo, branch: 7 },
+      { ...repo, ahead: -1 },
+      { ...repo, behind: 1.5 },
+      { ...repo, changedCount: 1_000_001 },
+      { ...repo, changedCount: Number.NaN },
+      { ...repo, dirty: 'yes' },
+      { ...repo, isRepo: 1 },
+      { ...notRepo, branch: 'main' },
+      { ...notRepo, dirty: true },
+      { ...notRepo, ahead: 1 },
+      { ...notRepo, behind: 1 },
+      { ...notRepo, changedCount: 1 },
+      null,
+      [],
+      'main',
+    ]) expect(validateGitStatus(invalid)).toBeNull();
+  });
+
+  it('accepts an exact notice frame with an allow-listed kind and a clean body of at most 200 characters', () => {
+    expect(decodeMessage(JSON.stringify(notice))).toEqual(notice);
+    expect(decodeMessage(JSON.stringify({ ...notice, kind: 'finished' }))).toEqual({ ...notice, kind: 'finished' });
+    expect(decodeMessage(JSON.stringify({ ...notice, body: '😀'.repeat(200) }))).toEqual({ ...notice, body: '😀'.repeat(200) });
+    expect(decodeMessage(JSON.stringify({ ...notice, body: 'x'.repeat(200) }))).not.toBeNull();
+  });
+
+  it('rejects oversize, extra-key, wrong-kind and control-character notices', () => {
+    const missingBody = Object.fromEntries(Object.entries(notice).filter(([key]) => key !== 'body'));
+    for (const invalid of [
+      { ...notice, body: 'x'.repeat(201) },
+      { ...notice, body: '😀'.repeat(201) },
+      { ...notice, body: '' },
+      { ...notice, body: 'Claude\x07needs input' },
+      { ...notice, body: 'line\nbreak' },
+      { ...notice, body: 'csi\u009b' },
+      { ...notice, body: 42 },
+      { ...notice, kind: 'command-finished' },
+      { ...notice, kind: 'NEEDS-INPUT' },
+      { ...notice, kind: null },
+      { ...notice, projectId: 0 },
+      { ...notice, projectId: '7' },
+      { ...notice, shellIndex: -1 },
+      { ...notice, shellIndex: 0.5 },
+      { ...notice, id: 'short' },
+      { ...notice, title: 'spoofed title' },
+      { ...notice, peerId: 'a'.repeat(64) },
+      missingBody,
+    ]) expect(decodeMessage(JSON.stringify(invalid))).toBeNull();
+    expect(decodeMessage(JSON.stringify({ ...notice, body: 'x'.repeat(16_400) }))).toBeNull();
   });
 });
