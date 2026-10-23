@@ -58,10 +58,18 @@ Both devices must allow multicast discovery and TCP connections on the
 listener's assigned port. Fleet does not discover peers across routed networks.
 
 Each device keeps its TLS private key in the OS credential store
-(`src/main/fleet/identity.ts:131-205`).
+(`src/main/fleet/identity.ts:138-296`).
+Values written through keytar are stored as `b64v1:` plus base64
+(`src/main/credential-encoding.ts`). A plaintext gnome-keyring writes a
+secret raw but unescapes `\n` and `\\` when it reads it. A stored value
+with a backslash or control character therefore changes after a login,
+and the next save can make the whole keyring file unreadable. An identity
+stored before this encoding still loads: raw control characters are
+re-escaped, the certificate and key are validated as usual, and the entry
+is rewritten encoded. The Metaproject password uses the same encoding.
 The owner-only trust file records the opt-in setting, trusted certificate
 fingerprints, and revoked fingerprints in at most 1 MiB
-(`src/main/fleet/identity.ts:73-115,207-268`).
+(`src/main/fleet/identity.ts:81-135,299-360`).
 The user requests a link on one device. Both devices then display a
 12-digit comparison code from their TLS identities and fresh session nonces.
 The user must compare and approve the code on **both** devices.
@@ -142,6 +150,10 @@ connection rather than returning a partial terminal state
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts`).
+If the stored identity is unreadable, or is missing while trusted or
+revoked peers exist, the panel offers a two-step Reset identity. Reset
+creates a new identity, clears trusted peers, keeps revocations, and leaves
+Fleet disabled. Paired devices must pair again.
 
 ### Main-process responsiveness
 
