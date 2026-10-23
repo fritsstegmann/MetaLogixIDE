@@ -3,6 +3,7 @@ import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'ele
 import log from 'electron-log/main';
 import type { Services } from '@main/services';
 import type { FleetOperations } from '@main/fleet/service';
+import type { FleetGitStatus } from '@shared/fleet-contract';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { pruneMissingProjects } from '@main/domain/prune-missing';
@@ -32,6 +33,7 @@ import {
   resolveTerminalWeights,
 } from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
+import { parseFleetViewing } from '@main/notifications/fleet-notices';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -267,6 +269,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
   'fleet:snapshot': async (s, { peerId, projectId, shellIndex }) =>
     needFleet(s).snapshot(peerId, projectId, shellIndex),
+  'fleet:git-status': async (s, { peerId, projectId }) => needFleet(s).gitStatus(peerId, projectId),
+  // Renderer-supplied view data: validated here; a forged view can at worst hold back the user's own notices.
+  'fleet:viewing': async (s, req) => {
+    needFleet(s).setViewing(parseFleetViewing(req));
+    return { ok: true } as const;
+  },
 
 
   'roots:list':   async (s) => ({ roots: s.roots.list() }),
@@ -1432,6 +1440,29 @@ function fleetName(name: string): string {
   return encoded.toString('utf8', 0, end);
 }
 
+/** Bounds a local git status for a peer: branch, counts and dirty flag only, never paths. */
+export function fleetGitSummary(status: { isRepo: boolean; branch: string | null; ahead: number; behind: number; dirty: boolean; files: Record<string, unknown> }): FleetGitStatus {
+  if (!status.isRepo) return { isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 };
+  const count = (value: number): number => Math.min(Math.max(Math.trunc(value) || 0, 0), 1_000_000);
+  return {
+    isRepo: true,
+    branch: fleetBranch(status.branch),
+    dirty: status.dirty,
+    ahead: count(status.ahead),
+    behind: count(status.behind),
+    changedCount: count(Object.keys(status.files).length),
+  };
+}
+
+function fleetBranch(branch: string | null): string | null {
+  if (!branch || /\p{Cc}/u.test(branch)) return null;
+  const encoded = Buffer.from(branch, 'utf8');
+  if (encoded.length <= 255) return branch;
+  let end = 255;
+  while ((encoded[end]! & 0xc0) === 0x80) end--;
+  return encoded.toString('utf8', 0, end);
+}
+
 /** Restricts peer operations to existing local shell handlers and an explicit status allow-list. */
 export function createFleetOperations(services: Services): FleetOperations {
   return {
@@ -1514,6 +1545,10 @@ export function createFleetOperations(services: Services): FleetOperations {
       let start = encoded.length - 8188;
       while ((encoded[start]! & 0xc0) === 0x80) start++;
       return { alive: result.alive, output: encoded.toString('utf8', start) };
+    },
+    gitStatus: async (projectId) => {
+      if (!services.projects.list().some(({ id }) => id === projectId)) throw new Error(`no project ${projectId}`);
+      return fleetGitSummary(await handlers['git:status'](services, { projectId }));
     },
   };
 }

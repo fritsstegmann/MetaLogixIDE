@@ -2,7 +2,7 @@
 import type { Socket } from 'node:net';
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { connect, createServer, type Server, type TLSSocket } from 'node:tls';
-import type { FleetState, FleetStatus, FleetTerminalEvent } from '../../shared/fleet-contract';
+import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus, FleetTerminalEvent } from '../../shared/fleet-contract';
 import { FleetChannel } from './channel';
 import { FleetDiscovery, type Presence } from './discovery';
 import {
@@ -16,13 +16,16 @@ import {
 import {
   certificateIdentity,
   pairingCode,
+  validateGitStatus,
   validateSnapshot,
   validateStatus,
+  validNoticeBody,
   validateProfiles,
   validArgs,
   validateStatusPage,
   ROOT_PAGE_SIZE,
   STATUS_PAGE_SIZE,
+  type NoticeKind,
   type StatusPage,
   type WireMessage,
 } from './protocol';
@@ -50,6 +53,17 @@ export interface FleetOperations {
     projectId: number,
     shellIndex: number,
   ) => Promise<{ output: string; alive: boolean }>;
+  readonly gitStatus: (projectId: number) => Promise<FleetGitStatus>;
+}
+/** A Claude notice from a trusted host for a shell this controller subscribes to; names are resolved locally. */
+export interface FleetNoticeEvent {
+  readonly peerId: string;
+  readonly peerName: string;
+  readonly projectId: number;
+  readonly projectName: string | null;
+  readonly shellIndex: number;
+  readonly kind: NoticeKind;
+  readonly body: string;
 }
 export interface FleetOptions {
   readonly name: string;
@@ -113,6 +127,12 @@ class FleetPortInUseError extends Error {
   }
 }
 
+/** True for a project ID of 1..1,000,000 and a shell index of 0..1,000,000. */
+function validShell(projectId: number, shellIndex: number): boolean {
+  return Number.isSafeInteger(projectId) && projectId >= 1 && projectId <= 1_000_000 &&
+    Number.isSafeInteger(shellIndex) && shellIndex >= 0 && shellIndex <= 1_000_000;
+}
+
 /** Accepts only integers 1024..65535 from untrusted input; anything else throws. */
 export function parseFleetPort(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1024 || value > 65535)
@@ -125,6 +145,7 @@ export class FleetService {
   private readonly store: FleetIdentityStore;
   private readonly listeners = new Set<(state: FleetState) => void>();
   private readonly terminalListeners = new Set<(event: FleetTerminalEvent) => void>();
+  private readonly noticeListeners = new Set<(event: FleetNoticeEvent) => void>();
   private readonly sessions = new Map<string, Session>();
   private readonly attempts = new Map<string, { count: number; since: number }>();
   private trust: FleetTrust = { enabled: false, trusted: [], revoked: [] };
@@ -138,6 +159,8 @@ export class FleetService {
   private networkError: string | null = null;
   private recovery: 'reset-identity' | null = null;
   private lifecycle: Promise<void> = Promise.resolve();
+  private readonly lastStatus = new Map<string, FleetStatus>();
+  private viewed: FleetShellRef | null = null;
 
   constructor(private readonly options: FleetOptions) {
     if (!options.name.trim() || Buffer.byteLength(options.name, 'utf8') > 80)
@@ -759,6 +782,10 @@ export class FleetService {
       this.forwardTerminal(session, message);
       return;
     }
+    if (message.type === 'notice') {
+      this.forwardNotice(session, message);
+      return;
+    }
     if (message.type !== 'request') {
       session.channel.close();
       return;
@@ -825,6 +852,7 @@ export class FleetService {
     let value: unknown;
     try {
       if (op === 'status') value = await this.statusPage(session, args);
+      else if (op === 'git-status') value = validateGitStatus(await this.options.operations.gitStatus(Number(args.projectId)));
       else if (op === 'profiles' || op === 'set-default-cli' || op === 'remove-cli-profile' ||
         op === 'launch' || op === 'launch-claude' || op === 'launch-cli')
         value = await this.projectRequest(op, args);
@@ -1075,6 +1103,23 @@ export class FleetService {
     for (const listener of this.terminalListeners) listener(event);
   }
 
+  private forwardNotice(session: Session, frame: Extract<WireMessage, { type: 'notice' }>): void {
+    const peerName = this.trust.trusted.find((peer) => peer.id === session.id)?.name;
+    if (!peerName || !this.trust.enabled || !this.trustedSession(session) ||
+      ![...session.outgoing.values()].some((subscription) =>
+        subscription.projectId === frame.projectId && subscription.shellIndex === frame.shellIndex)) return;
+    const projectName = this.lastStatus.get(session.id)?.projects
+      .find((project) => project.id === frame.projectId)?.name ?? null;
+    const event: FleetNoticeEvent = { peerId: session.id, peerName, projectId: frame.projectId, projectName,
+      shellIndex: frame.shellIndex, kind: frame.kind, body: frame.body };
+    for (const listener of this.noticeListeners) listener(event);
+  }
+
+  private trustedSession(session: Session): boolean {
+    return this.sessions.get(session.id) === session && !!session.remoteNonce && !session.code &&
+      !this.trust.revoked.includes(session.id) && this.trust.trusted.some((peer) => peer.id === session.id);
+  }
+
   private async captureStatus(session: Session): Promise<{ status: FleetStatus; token: string }> {
     if (session.statusSnapshots.size + session.statusPending >= 4)
       throw new Error('Too many status snapshots');
@@ -1262,6 +1307,7 @@ export class FleetService {
     if (this.linked(peerId) !== channel) throw new Error('Fleet peer changed during status');
     const status = validateStatus({ roots, projects, shells });
     if (!status) throw new Error('Invalid peer status');
+    this.lastStatus.set(peerId, status);
     return status;
   }
 
@@ -1403,12 +1449,48 @@ export class FleetService {
   }
 
   private validateShell(projectId: number, shellIndex: number): void {
-    if (
-      !Number.isSafeInteger(projectId) ||
-      projectId < 1 || projectId > 1_000_000 ||
-      !Number.isSafeInteger(shellIndex) ||
-      shellIndex < 0 || shellIndex > 1_000_000
-    )
-      throw new Error('Invalid shell identity');
+    if (!validShell(projectId, shellIndex)) throw new Error('Invalid shell identity');
+  }
+
+  /** Observes Claude notices from trusted hosts for shells this controller subscribes to. */
+  onNotice(listener: (event: FleetNoticeEvent) => void): () => void {
+    this.noticeListeners.add(listener);
+    return () => this.noticeListeners.delete(listener);
+  }
+
+  /** Sends a Claude notice to every trusted session controlling the shell; returns how many were sent. */
+  sendNotice(notice: { projectId: number; shellIndex: number; kind: NoticeKind; body: string }): number {
+    const { projectId, shellIndex, kind, body } = notice;
+    if (!this.started || !this.trust.enabled || !validNoticeBody(body) ||
+      (kind !== 'needs-input' && kind !== 'finished') || !validShell(projectId, shellIndex)) return 0;
+    let sent = 0;
+    for (const session of this.sessions.values()) {
+      if (!this.trustedSession(session) || !this.controlsShell(session, projectId, shellIndex)) continue;
+      try {
+        session.channel.send({ type: 'notice', id: randomBytes(16).toString('hex'), projectId, shellIndex, kind, body });
+        sent++;
+      } catch {
+        session.channel.close();
+      }
+    }
+    return sent;
+  }
+
+  /** Reads the bounded git summary of a project the linked peer exposes. */
+  async gitStatus(peerId: string, projectId: number): Promise<FleetGitStatus> {
+    if (!validArgs('git-status', { projectId })) throw new Error('Invalid project ID');
+    const result = validateGitStatus(await this.linked(peerId).request('git-status', { projectId }));
+    if (!result) throw new Error('Invalid peer git status');
+    return result;
+  }
+
+  /** Records the remote shell this window shows, or null. */
+  setViewing(shell: FleetShellRef | null): void {
+    this.viewed = shell ? { peerId: shell.peerId, projectId: shell.projectId, shellIndex: shell.shellIndex } : null;
+  }
+
+  /** The remote shell this window shows, or null. */
+  viewing(): FleetShellRef | null {
+    return this.viewed;
   }
 }

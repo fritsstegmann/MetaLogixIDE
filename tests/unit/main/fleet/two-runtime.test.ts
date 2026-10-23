@@ -77,6 +77,7 @@ it('streams a remote Claude shell through one authenticated subscription and can
       return () => { output = undefined; exit = undefined; };
     },
     terminalSnapshot: async () => '\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m',
+    gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
     snapshot: async () => ({ output: '', alive: true }),
   };
   const localOps: FleetOperations = {
@@ -199,6 +200,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     hasProject: () => false,
     watch: () => () => {},
     terminalSnapshot: async () => '',
+    gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
     snapshot: async () => ({ output: '', alive: false }),
   };
   let remoteStatus: FleetStatus = {
@@ -233,6 +235,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     hasProject: (projectId) => projectId === 1,
     watch: () => () => {},
     terminalSnapshot: async () => '<terminal text>',
+    gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
     snapshot: async () => ({ output: '<terminal text>', alive: true }),
   };
   function instance(name: string, operations: FleetOperations) {
@@ -579,6 +582,7 @@ it('keeps one comparison code when both devices request a link at once', async (
     hasProject: () => false,
     watch: () => () => {},
     terminalSnapshot: async () => '',
+    gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
     snapshot: async () => ({ output: '', alive: false }),
   };
   function instance(name: string) {

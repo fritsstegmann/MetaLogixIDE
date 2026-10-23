@@ -31,7 +31,7 @@ import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
 import { FleetPanel } from './components/FleetPanel';
-import { RemoteTerminal } from './components/RemoteTerminal';
+import { RemoteTerminal, type RemoteShellFocus, type RemoteShellsState } from './components/RemoteTerminal';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
@@ -45,6 +45,7 @@ import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { useTaskCount } from './hooks/useTaskCount';
 import { toast } from './hooks/useToasts';
 import { useKeepAwake } from './hooks/useKeepAwake';
+import { useFleetViewing, useRemoteShellFocus } from './hooks/useRemoteSession';
 import { KeepAwakeUntilDialog } from './components/KeepAwakeUntilDialog';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
@@ -91,6 +92,8 @@ interface ProjectUiState {
   rightShellIndex: number | null;
   splitRatio: number;
 }
+
+const NO_REMOTE_SHELLS: RemoteShellsState = { count: 0, shownShellIndex: null };
 
 /**
  * A side pane's fold flags and terminal hold (the sidebar, and the activity sheet inside it). `animate` is sampled when `open` flips: mouse
@@ -186,6 +189,9 @@ function MainApp() {
   const remoteAvailable = fleetState?.enabled === true && fleetState.peers.some(
     (peer) => peer.id === remoteProject?.peerId && peer.status === 'linked',
   );
+  const [remoteShells, setRemoteShells] = useState<RemoteShellsState>(NO_REMOTE_SHELLS);
+  const [remoteFocus, setRemoteFocus] = useState<RemoteShellFocus | null>(null);
+  const remoteFocusSeq = useRef(0);
   // -1 never matches a real project id, so this reads idle when nothing is selected.
   const selectedAgentState = useProjectAgentState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
@@ -211,6 +217,10 @@ function MainApp() {
     'projects',
     (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'fleet',
   );
+  useFleetViewing(remoteProject && remoteAvailable && activeView !== 'fleet' && remoteShells.shownShellIndex !== null
+    ? { peerId: remoteProject.peerId, projectId: remoteProject.projectId, shellIndex: remoteShells.shownShellIndex }
+    : null);
+  useRemoteShellFocus(fleetState, (target, shellIndex) => openRemote(target, shellIndex));
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
   const activeViewRef = useRef<ActivityView>('projects');
@@ -643,6 +653,19 @@ function MainApp() {
     void pick(p);
   }
 
+  /** Shows a remote project in the main pane, optionally on `shellIndex` (a clicked Fleet notice); null keeps the default shell. */
+  function openRemote(target: RemoteProjectSelection, shellIndex: number | null): void {
+    selectionRequestRef.current++;
+    terminalFocus.cancelRequest();
+    setProjectSettingsTarget(null);
+    setSelected(null);
+    if (remoteProject?.peerId !== target.peerId || remoteProject.projectId !== target.projectId) setRemoteShells(NO_REMOTE_SHELLS);
+    setRemoteProject(target);
+    setRemoteFocus(shellIndex === null ? null : { shellIndex, seq: ++remoteFocusSeq.current });
+    setActiveView('projects');
+    setMainTab('shell');
+  }
+
   /** Opens an explicit sidebar target without selecting its project or launching a shell. */
   function openProjectSettings(target: ProjectSettingsTarget): void {
     setRemoteProject(null);
@@ -902,14 +925,8 @@ function MainApp() {
                 selectedProjectId={selected?.id ?? null}
                 selectedRemote={remoteProject}
                 onSelectRemote={(target) => {
-                  selectionRequestRef.current++;
-                  terminalFocus.cancelRequest();
-                  setProjectSettingsTarget(null);
-                  setSelected(null);
-                  setRemoteProject(target);
-                  setActiveView('projects');
+                  openRemote(target, null);
                   if (window.innerWidth < 640) toggleSidebar(false, false);
-                  setMainTab('shell');
                 }}
                 onSelect={(project) => {
                   void pick(project);
@@ -1026,6 +1043,8 @@ function MainApp() {
               key={`${remoteProject.peerId}:${remoteProject.projectId}`}
               project={remoteProject}
               available={remoteAvailable}
+              focusShell={remoteFocus}
+              onShellsChange={setRemoteShells}
               onRefreshAvailability={() => {
                 void api.invoke('fleet:get-state', undefined).then(setFleetState).catch(() => {
                   toast('Could not refresh Fleet connection. Check the network and retry.', { kind: 'error' });
@@ -1165,11 +1184,13 @@ function MainApp() {
         </main>
       </div>
 
-      {remoteProject ? (
-        <div className="flex h-[34px] shrink-0 items-center px-3 text-base text-[--text-muted]" role="status">
-          Remote · {remoteProject.projectName} on {remoteProject.peerName}
-        </div>
-      ) : <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} keepAwake={keepAwake} />}
+      <StatusBar
+        project={remoteProject ? null : selected}
+        remote={remoteProject}
+        aliveCount={remoteProject ? remoteShells.count : aliveCount}
+        onOpenPalette={() => openPalette('')}
+        keepAwake={keepAwake}
+      />
       {keepAwakeUntilOpen && keepAwake && (
         <KeepAwakeUntilDialog onStart={(endsAt) => { void keepAwake.startUntil(endsAt); }} onClose={() => setKeepAwakeUntilOpen(false)} />
       )}
