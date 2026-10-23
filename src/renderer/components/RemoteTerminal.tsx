@@ -15,6 +15,7 @@ import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-cont
 import { terminalFontWeightOptions } from '@renderer/terminal-font-weight-apply';
 import { FROST_ATTR } from '@renderer/frosted-chrome-contract';
 import { TERMINAL_FONT_FALLBACK } from '@shared/font-settings';
+import { TERMINAL_SCROLLBACK_LINES } from '@shared/terminal-scrollback';
 import type { FleetTerminalEvent } from '@shared/fleet-contract';
 import type { FleetShell } from '@shared/fleet-contract';
 import { StatusDot } from './StatusDot';
@@ -169,7 +170,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability }: Pr
     const host = hostRef.current;
     const font = fontRef.current;
     const term = new Terminal({
-      scrollback: 10000, fontFamily: buildFontFamilyStack(font.terminalFontFamily, TERMINAL_FONT_FALLBACK),
+      scrollback: TERMINAL_SCROLLBACK_LINES, fontFamily: buildFontFamilyStack(font.terminalFontFamily, TERMINAL_FONT_FALLBACK),
       fontSize: font.fontSize, ...terminalFontWeightOptions({ weight: font.weight, boldWeight: font.boldWeight }),
       lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar', theme: terminalTheme(),
       allowProposedApi: true, minimumContrastRatio: 1,

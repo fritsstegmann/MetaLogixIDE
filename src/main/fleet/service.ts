@@ -8,6 +8,7 @@ import { FleetDiscovery, type Presence } from './discovery';
 import {
   FleetIdentityStore,
   FleetCredentialError,
+  FleetIdentityMissingError,
   type FleetIdentity,
   type FleetKeychain,
   type FleetTrust,
@@ -101,6 +102,8 @@ const GENERIC_FAILURE =
   'Fleet network unavailable. Check the local network and credential store, then disable and re-enable fleet.';
 const CREDENTIAL_FAILURE =
   'Fleet identity in the credential store is unreadable. Reset identity to create a new one; paired devices must pair again.';
+const MISSING_IDENTITY_FAILURE =
+  'Fleet identity is missing from the credential store. Reset identity to create a new one; paired devices must pair again.';
 
 /** Raised when the TLS listener cannot bind because another process already holds the port. */
 class FleetPortInUseError extends Error {
@@ -237,10 +240,13 @@ export class FleetService {
   }
 
   private recordFailure(error: unknown, generic: string): void {
-    this.recovery = error instanceof FleetCredentialError ? 'reset-identity' : null;
-    this.networkError =
-      error instanceof FleetCredentialError
-        ? CREDENTIAL_FAILURE
+    const unreadable = error instanceof FleetCredentialError;
+    const missing = error instanceof FleetIdentityMissingError;
+    this.recovery = unreadable || missing ? 'reset-identity' : null;
+    this.networkError = unreadable
+      ? CREDENTIAL_FAILURE
+      : missing
+        ? MISSING_IDENTITY_FAILURE
         : error instanceof FleetPortInUseError
           ? error.message
           : generic;
@@ -279,7 +285,7 @@ export class FleetService {
     });
   }
 
-  /** Replaces an unreadable identity with a fresh one, clearing trusted peers but keeping revocations; only allowed in the reset-identity recovery state. */
+  /** Replaces an unreadable or missing identity with a fresh one, clearing trusted peers but keeping revocations; only allowed in the reset-identity recovery state. */
   resetIdentity(): Promise<FleetState> {
     return this.runLifecycle(async () => {
       if (this.recovery !== 'reset-identity')

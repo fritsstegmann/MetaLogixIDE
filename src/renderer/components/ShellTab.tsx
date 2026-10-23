@@ -37,6 +37,7 @@ import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
 import type { FleetState } from '@shared/fleet-contract';
+import { TERMINAL_SCROLLBACK_LINES } from '@shared/terminal-scrollback';
 import {
   createTerminalFontUpdater,
   createTerminalGeometrySynchronizer,
@@ -222,7 +223,7 @@ function LocalShellTab({
   useEffect(() => {
     if (!termHostRef.current) return;
     const term = new Terminal({
-      scrollback: 10000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       // Explicit SF Mono stack — first match wins. Falls back through
       // common developer monospace fonts. `ui-monospace` alone can pick
       // Menlo bitmap fallback on some setups and looks pixelated.

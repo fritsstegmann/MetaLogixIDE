@@ -85,6 +85,7 @@ it('starts a default-off real Fleet service before opening a window and stops it
     Menu: { setApplicationMenu: vi.fn() },
     Notification: vi.fn(),
     screen: {},
+    powerSaveBlocker: { start: vi.fn(), stop: vi.fn(), isStarted: vi.fn(() => false) },
     shell: {},
   }));
   vi.doMock('electron-log/main', () => ({

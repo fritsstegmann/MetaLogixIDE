@@ -8,6 +8,7 @@ import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-def
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
 import type { FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
+import type { KeepAwakeDarkenResult, KeepAwakeStartRequest, KeepAwakeStartResult, KeepAwakeState } from './keep-awake-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -411,6 +412,12 @@ export interface IpcContract {
   'fleet:write':       { request: { peerId: string; projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'fleet:snapshot':    { request: { peerId: string; projectId: number; shellIndex: number }; response: { output: string; alive: boolean } };
 
+  // keep-awake (macOS only; off darwin start/darken return 'unsupported')
+  'keep-awake:get':    { request: undefined; response: KeepAwakeState };
+  'keep-awake:start':  { request: KeepAwakeStartRequest; response: KeepAwakeStartResult };
+  'keep-awake:stop':   { request: undefined; response: KeepAwakeState };
+  'keep-awake:darken': { request: undefined; response: KeepAwakeDarkenResult };
+
   // health / dev
   'app:ping':    { request: undefined; response: 'pong' };
 }
@@ -448,5 +455,9 @@ export interface IpcEvents {
   'app:open-file-request':  { path: string };
   'fleet:changed':         FleetState;
   'fleet:terminal':        FleetTerminalEvent;
+  /** Keep-awake state changed (start, re-start, stop, expiry, quit); sent to every window. */
+  'keep-awake:changed':     KeepAwakeState;
+  /** Both darken actions (`pmset displaysleepnow`, ScreenSaverEngine) failed; keep-awake stays on. */
+  'keep-awake:darken-failed': Record<string, never>;
 }
 export type IpcEventName = keyof IpcEvents;

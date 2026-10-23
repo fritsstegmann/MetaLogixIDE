@@ -58,10 +58,18 @@ Both devices must allow multicast discovery and TCP connections on the
 listener's assigned port. Fleet does not discover peers across routed networks.
 
 Each device keeps its TLS private key in the OS credential store
-(`src/main/fleet/identity.ts:131-205`).
+(`src/main/fleet/identity.ts:138-296`).
+Values written through keytar are stored as `b64v1:` plus base64
+(`src/main/credential-encoding.ts`). A plaintext gnome-keyring writes a
+secret raw but unescapes `\n` and `\\` when it reads it. A stored value
+with a backslash or control character therefore changes after a login,
+and the next save can make the whole keyring file unreadable. An identity
+stored before this encoding still loads: raw control characters are
+re-escaped, the certificate and key are validated as usual, and the entry
+is rewritten encoded. The Metaproject password uses the same encoding.
 The owner-only trust file records the opt-in setting, trusted certificate
 fingerprints, and revoked fingerprints in at most 1 MiB
-(`src/main/fleet/identity.ts:73-115,207-268`).
+(`src/main/fleet/identity.ts:81-135,299-360`).
 The user requests a link on one device. Both devices then display a
 12-digit comparison code from their TLS identities and fresh session nonces.
 The user must compare and approve the code on **both** devices.
@@ -142,6 +150,10 @@ connection rather than returning a partial terminal state
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts`).
+If the stored identity is unreadable, or is missing while trusted or
+revoked peers exist, the panel offers a two-step Reset identity. Reset
+creates a new identity, clears trusted peers, keeps revocations, and leaves
+Fleet disabled. Paired devices must pair again.
 
 ### Main-process responsiveness
 
@@ -166,9 +178,13 @@ stay cheap and must never wait on a child process.
   of order, so every git poller in the renderer (`useGitStatus`,
   `usePanelStatus` in `GitPanel.tsx`, `useGitChanges`) uses
   `createRequestGate`: it applies only the latest request's reply and
-  skips a poll tick while a request is in flight. Git commands that the user
-  starts (`add`, `restore`, `commit`, `push`, `pull`, `clone`, `init`) still
-  use `spawnSync`; this is a known gap, recorded as a follow-up.
+  skips a poll tick while a request is in flight.
+- **User-started git commands are asynchronous.** `git:stage`,
+  `git:unstage`, `git:commit`, `git:push`, `git:pull` and the git steps of
+  `projects:create` and `projects:clone-git` run through the async
+  `runGitCommand` (`src/main/git/run-git-command.ts`). Unlike `runGit` it
+  adds no safety arguments, so hooks and credential helpers behave as in the
+  user's terminal. A slow hook, push or clone no longer freezes the window.
 - **mise task listing is asynchronous.** `tasks:discover` and `tasks:run`
   list mise tasks through the async `execFile` in `listMiseTasks`
   (`src/main/domain/mise-cli.ts:48`). mise is killed after 5 s. A project
@@ -1287,6 +1303,49 @@ Rules:
 - On a project switch the panel and the badge clear at once. A reply for a
   project the user has left is dropped.
 
+### Keep awake (macOS)
+
+A user-set, time-boxed keep-awake. While it is active the Mac does not
+idle-sleep, but the display is turned off. It ends at the deadline, on
+Stop, or when the app quits. It exists on macOS only: off darwin the main
+process installs nothing and the renderer shows no command or chip.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| Contract | `src/shared/keep-awake-contract.ts` | `KeepAwakeState`, the start and darken result types, `KEEP_AWAKE_PRESETS`, `KEEP_AWAKE_MAX_MS` (24 h), `KEEP_AWAKE_DARKEN_DELAY_MS` (1.5 s), `KEEP_AWAKE_COPY` (every string), test ids and the E2E env-seam names. |
+| Transport | `src/main/keep-awake/handlers.ts` | `keep-awake:get`, `:start`, `:stop`, `:darken`. Checks that `endsAt` is a safe integer. A null controller answers `unsupported` or inactive. |
+| Logic | `src/main/keep-awake/service.ts` | `createKeepAwakeService`, a state machine over injected ports. It holds one assertion, checks `now < endsAt ≤ now + 24 h`, runs a 1 s wall-clock tick only while active, and schedules the darken. |
+| IO | `src/main/keep-awake/power-assertion.ts` | Wraps `powerSaveBlocker.start('prevent-app-suspension')`. Holds at most one id. |
+| IO | `src/main/keep-awake/darken.ts` | `createDarken` runs `/usr/bin/pmset displaysleepnow`, then `/usr/bin/open /System/Library/CoreServices/ScreenSaverEngine.app` if that fails. `execFile`, absolute paths, fixed argv, no shell, 5 s timeout. Never throws. `createDarkenRecorder` is the test-mode stand-in. |
+| Composition | `src/main/keep-awake/install.ts` | `installKeepAwake` returns null off darwin, picks the real or recorder darken, and wires `onChange` and darken failure to broadcasts. Called by `attachKeepAwake` in `src/main/index.ts`; `dispose()` runs on `before-quit`. |
+| Logic | `src/renderer/keep-awake-time.ts` | `parseUntil` (HH:MM to a deadline; a time at or before now means tomorrow), `formatRemaining`, `formatEndTime`, `keepAwakeSupported`. |
+| Presentation | `src/renderer/hooks/useKeepAwake.ts` | Reads the state at mount, follows `keep-awake:changed`, toasts on `keep-awake:darken-failed`. Returns null off darwin and never calls IPC there. |
+| Presentation | `src/renderer/components/KeepAwakeChip.tsx`, `KeepAwakeUntilDialog.tsx` | Status-bar chip with remaining time and a popover (Stop, Turn screen off now, lid hint). The "Keep awake until…" dialog on `ModalFrame`. |
+| Presentation | `src/renderer/palette-commands.ts` | Rows in the `App` category: the five presets and "Keep awake until…", plus Stop and Turn screen off now while active. |
+
+Rules:
+
+- The assertion type is `prevent-app-suspension` only. On macOS it is a
+  system idle-sleep assertion, so the display may sleep while it holds.
+  `prevent-display-sleep` is never started, because it outranks the other
+  type and would keep the display on.
+- Starting while active moves the deadline. The held assertion is kept, so
+  there is never a gap or a second id.
+- The darken runs once, 1.5 s after each start. A re-start reschedules it;
+  Stop, expiry and quit cancel it. A failure of both darken commands sends
+  `keep-awake:darken-failed`, and keep-awake stays on. A `pmset` that exits
+  0 without darkening the display cannot be detected.
+- The "Keep awake ended" notification is posted only at natural expiry,
+  not on Stop or quit.
+- Nothing is persisted. A relaunch starts inactive.
+- The state is broadcast to every window, but only the main window shows
+  the chip and the commands. Pop-outs have no status bar.
+- In test mode (`METAIDE_TEST_MODE=1`) the real darken never runs. The
+  recorder appends a line to `METAIDE_KEEP_AWAKE_DARKEN_LOG` and fails when
+  `METAIDE_KEEP_AWAKE_DARKEN_FAIL=1`. The env vars are ignored outside test
+  mode.
+- A closed lid on battery still sleeps the Mac. The popover says so.
+
 ## Data Flow
 
 1. `MarkdownPreview` calls `renderMarkdown(source)`. This is synchronous.
@@ -1432,6 +1491,21 @@ The user saves the project Env tab, and a shell starts:
 6. On a click, `tasks:run` discovers again, finds the task by id, and spawns
    its argv (`mise run <name>` for a mise task) in a new shell tab.
 
+### Keep-awake start and expiry
+
+1. A palette preset computes `now + preset`. The dialog sends the deadline
+   it previewed. Both call `keep-awake:start` with `{ endsAt }`.
+2. The handler checks the shape. The service checks the range, holds the
+   assertion (or keeps the held one), stores the deadline, starts the 1 s
+   tick and schedules the darken.
+3. The service broadcasts `keep-awake:changed`. The main-window chip
+   shows the remaining time.
+4. After 1.5 s the darken runs. If both commands fail, main broadcasts
+   `keep-awake:darken-failed` and the renderer shows a warning toast.
+5. On the first tick at or after the deadline, the service releases the
+   assertion, stops the tick, broadcasts the inactive state and posts the
+   "Keep awake ended" notification.
+
 ## Authorization Model
 
 Not applicable to the preview. It reads only the local file buffer.
@@ -1509,6 +1583,9 @@ the whole side falls back to escaped plain text.
 | `katex` | 0.16.47, exact pin | Math. Also the version `mermaid` depends on, so the bundle has one copy. |
 | `mermaid` | 11.17.2, exact pin | Diagrams. Version 12 requires Node 22, and the repo uses Node 20. |
 | mise CLI | external, user-installed; developed against 2026.10.4 | Tasks panel listing and running. Only the `name`, `description`, `hide` and `global` fields of `mise tasks ls --json` are read. The JSON format is not documented by mise. |
+| Electron `powerSaveBlocker` | electron 32.3.3 | Keep-awake assertion, type `prevent-app-suspension`. On macOS it is a system idle-sleep assertion, not a display one; the E2E suite checks this against `pmset -g assertions`. |
+| `/usr/bin/pmset` | macOS, system | `pmset displaysleepnow` turns the display off for keep-awake. No root needed in practice; this is not documented. `pmset -g assertions` is read in E2E only. |
+| ScreenSaverEngine | macOS, system | Keep-awake darken fallback, launched with `/usr/bin/open`. |
 
 ## Architectural Decisions
 
