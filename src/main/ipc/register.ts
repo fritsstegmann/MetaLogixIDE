@@ -267,6 +267,12 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
   'fleet:snapshot': async (s, { peerId, projectId, shellIndex }) =>
     needFleet(s).snapshot(peerId, projectId, shellIndex),
+  'fleet:git-status': async () => {
+    throw new Error('not implemented');
+  },
+  'fleet:viewing': async () => {
+    throw new Error('not implemented');
+  },
 
 
   'roots:list':   async (s) => ({ roots: s.roots.list() }),

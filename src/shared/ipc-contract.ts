@@ -7,7 +7,7 @@ import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
-import type { FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
+import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
 import type { KeepAwakeDarkenResult, KeepAwakeStartRequest, KeepAwakeStartResult, KeepAwakeState } from './keep-awake-contract';
 
 /**
@@ -411,6 +411,10 @@ export interface IpcContract {
   'fleet:stop':        { request: { peerId: string; projectId: number; shellIndex: number }; response: { ok: true } };
   'fleet:write':       { request: { peerId: string; projectId: number; shellIndex: number; data: string }; response: { ok: true } };
   'fleet:snapshot':    { request: { peerId: string; projectId: number; shellIndex: number }; response: { output: string; alive: boolean } };
+  /** Git summary of a remote project, read on the peer that hosts it. */
+  'fleet:git-status':  { request: { peerId: string; projectId: number }; response: FleetGitStatus };
+  /** The remote shell this window shows, or null; Fleet notices for it are held back. */
+  'fleet:viewing':     { request: { shell: FleetShellRef | null }; response: { ok: true } };
 
   // keep-awake (macOS only; off darwin start/darken return 'unsupported')
   'keep-awake:get':    { request: undefined; response: KeepAwakeState };
@@ -455,6 +459,8 @@ export interface IpcEvents {
   'app:open-file-request':  { path: string };
   'fleet:changed':         FleetState;
   'fleet:terminal':        FleetTerminalEvent;
+  /** A Fleet notice was clicked: open this remote shell. */
+  'fleet:focus-remote-shell': FleetShellRef;
   /** Keep-awake state changed (start, re-start, stop, expiry, quit); sent to every window. */
   'keep-awake:changed':     KeepAwakeState;
   /** Both darken actions (`pmset displaysleepnow`, ScreenSaverEngine) failed; keep-awake stays on. */

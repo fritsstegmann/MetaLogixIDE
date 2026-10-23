@@ -61,6 +61,25 @@ export interface FleetStatus {
   readonly shells: readonly FleetShell[];
 }
 
+/** Bounded git summary of one remote project, served by the peer that hosts it; `isRepo: false` carries no other data. */
+export interface FleetGitStatus {
+  readonly isRepo: boolean;
+  /** Current branch, or null when detached or not a repository. At most 255 bytes. */
+  readonly branch: string | null;
+  readonly dirty: boolean;
+  readonly ahead: number;
+  readonly behind: number;
+  /** Number of changed paths, not the paths themselves. */
+  readonly changedCount: number;
+}
+
+/** A remote shell this window is showing; main holds back Fleet notices for it. */
+export interface FleetShellRef {
+  readonly peerId: string;
+  readonly projectId: number;
+  readonly shellIndex: number;
+}
+
 /** Ordered chunks of one remote terminal attachment; snapshot precedes ready and live data. */
 export interface FleetTerminalEvent {
   readonly peerId: string;
