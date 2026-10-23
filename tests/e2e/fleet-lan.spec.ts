@@ -149,7 +149,9 @@ async function publicBeacon(app: ElectronApplication): Promise<{ v: 1; id: strin
     const account = `tls-v1:${crypto.createHash('sha256').update(directory).digest('hex')}`;
     const saved = await keytar.getPassword('metaIDE.fleet.identity', account);
     if (!saved) return null;
-    const cert = (JSON.parse(saved) as { cert: string }).cert;
+    // Stored as `b64v1:` + base64(JSON); unprefixed values are the legacy plain-JSON form.
+    const json = saved.startsWith('b64v1:') ? Buffer.from(saved.slice('b64v1:'.length), 'base64').toString('utf8') : saved;
+    const cert = (JSON.parse(json) as { cert: string }).cert;
     const id = crypto.createHash('sha256').update(new crypto.X509Certificate(cert).raw).digest('hex');
     const handles = (process as NodeJS.Process & { _getActiveHandles: () => object[] })._getActiveHandles();
     const server = handles.find((handle): handle is import('node:tls').Server => handle instanceof tls.Server);
