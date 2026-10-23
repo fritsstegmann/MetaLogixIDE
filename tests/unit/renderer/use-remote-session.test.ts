@@ -5,7 +5,12 @@
  * under a minimal in-test hook runtime (vitest runs in node, without a DOM renderer).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus } from '@shared/fleet-contract';
+import type {
+  FleetGitStatus,
+  FleetShellRef,
+  FleetState,
+  FleetStatus,
+} from '@shared/fleet-contract';
 
 const rt = vi.hoisted(() => {
   type Effect = { deps?: unknown[]; cleanup?: () => void; run?: () => unknown };
@@ -16,7 +21,10 @@ const rt = vi.hoisted(() => {
   const changed = (a: unknown[] | undefined, b: unknown[] | undefined) =>
     !a || !b || a.length !== b.length || a.some((v, i) => !Object.is(v, b[i]));
   return {
-    reset() { slots.length = 0; effects.length = 0; },
+    reset() {
+      slots.length = 0;
+      effects.length = 0;
+    },
     render<T>(fn: () => T): T {
       cursor = 0;
       effectCursor = 0;
@@ -30,11 +38,16 @@ const rt = vi.hoisted(() => {
       }
       return out;
     },
-    unmount() { for (const e of effects) e.cleanup?.(); effects.length = 0; },
+    unmount() {
+      for (const e of effects) e.cleanup?.();
+      effects.length = 0;
+    },
     useState<S>(init: S | (() => S)) {
       const i = cursor++;
       if (!(i in slots)) slots[i] = typeof init === 'function' ? (init as () => S)() : init;
-      const set = (v: S | ((p: S) => S)) => { slots[i] = typeof v === 'function' ? (v as (p: S) => S)(slots[i] as S) : v; };
+      const set = (v: S | ((p: S) => S)) => {
+        slots[i] = typeof v === 'function' ? (v as (p: S) => S)(slots[i] as S) : v;
+      };
       return [slots[i] as S, set] as const;
     },
     useRef<R>(init: R) {
@@ -66,29 +79,45 @@ vi.mock('react', async (orig) => ({
   useEffect: rt.useEffect,
 }));
 
-type Pending = { channel: string; req: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
+type Pending = {
+  channel: string;
+  req: unknown;
+  resolve: (v: unknown) => void;
+  reject: (e: unknown) => void;
+};
 const calls: Pending[] = [];
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
 vi.mock('@renderer/api', () => ({
   api: {
-    invoke: vi.fn((channel: string, req: unknown) =>
-      new Promise((resolve, reject) => { calls.push({ channel, req, resolve, reject }); })),
+    invoke: vi.fn(
+      (channel: string, req: unknown) =>
+        new Promise((resolve, reject) => {
+          calls.push({ channel, req, resolve, reject });
+        }),
+    ),
     on: vi.fn((channel: string, fn: (payload: unknown) => void) => {
       const set = listeners.get(channel) ?? new Set();
       set.add(fn);
       listeners.set(channel, set);
-      return () => { set.delete(fn); };
+      return () => {
+        set.delete(fn);
+      };
     }),
   },
 }));
 const toast = vi.hoisted(() => vi.fn());
 vi.mock('@renderer/hooks/useToasts', () => ({ toast }));
 
-const { useFleetGitStatus, useFleetViewing, useRemoteShellFocus } = await import('@renderer/hooks/useRemoteSession');
+const { useFleetGitStatus, useFleetViewing, useRemoteShellFocus } =
+  await import('@renderer/hooks/useRemoteSession');
 
-const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+const flush = async () => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
 const of = (channel: string) => calls.filter((c) => c.channel === channel);
-const emit = (channel: string, payload: unknown) => { for (const fn of listeners.get(channel) ?? []) fn(payload); };
+const emit = (channel: string, payload: unknown) => {
+  for (const fn of listeners.get(channel) ?? []) fn(payload);
+};
 
 const visibility = { state: 'visible' as 'visible' | 'hidden', handlers: new Set<() => void>() };
 function setHidden(hidden: boolean) {
@@ -96,7 +125,14 @@ function setHidden(hidden: boolean) {
   for (const h of visibility.handlers) h();
 }
 
-const REPO: FleetGitStatus = { isRepo: true, branch: 'main', dirty: true, ahead: 2, behind: 1, changedCount: 3 };
+const REPO: FleetGitStatus = {
+  isRepo: true,
+  branch: 'main',
+  dirty: true,
+  ahead: 2,
+  behind: 1,
+  changedCount: 3,
+};
 
 beforeEach(() => {
   rt.reset();
@@ -106,9 +142,15 @@ beforeEach(() => {
   visibility.state = 'visible';
   visibility.handlers.clear();
   vi.stubGlobal('document', {
-    get visibilityState() { return visibility.state; },
-    addEventListener: (type: string, h: () => void) => { if (type === 'visibilitychange') visibility.handlers.add(h); },
-    removeEventListener: (type: string, h: () => void) => { if (type === 'visibilitychange') visibility.handlers.delete(h); },
+    get visibilityState() {
+      return visibility.state;
+    },
+    addEventListener: (type: string, h: () => void) => {
+      if (type === 'visibilitychange') visibility.handlers.add(h);
+    },
+    removeEventListener: (type: string, h: () => void) => {
+      if (type === 'visibilitychange') visibility.handlers.delete(h);
+    },
   });
   vi.stubGlobal('window', {
     setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
@@ -198,17 +240,29 @@ describe('useFleetViewing', () => {
     let current: FleetShellRef | null = null;
     const render = () => rt.render(() => useFleetViewing(current));
     render();
-    expect(sent()).toEqual([]);
+    expect(sent()).toEqual([{ shell: null }]);
     current = shell;
     render();
     current = { ...shell };
     render();
-    expect(sent()).toEqual([{ shell }]);
+    expect(sent()).toEqual([{ shell: null }, { shell }]);
     current = { ...shell, shellIndex: 3 };
     render();
     current = null;
     render();
-    expect(sent()).toEqual([{ shell }, { shell: { ...shell, shellIndex: 3 } }, { shell: null }]);
+    expect(sent()).toEqual([
+      { shell: null },
+      { shell },
+      { shell: { ...shell, shellIndex: 3 } },
+      { shell: null },
+    ]);
+  });
+
+  it('reports null on a fresh mount so main forgets a shell a reloaded window no longer shows', () => {
+    rt.render(() => useFleetViewing(null));
+    expect(sent()).toEqual([{ shell: null }]);
+    rt.render(() => useFleetViewing(null));
+    expect(sent()).toHaveLength(1);
   });
 
   it('reports null while the window is hidden and the shell again when it returns', () => {
@@ -236,8 +290,20 @@ describe('useFleetViewing', () => {
 });
 
 describe('useRemoteShellFocus', () => {
-  const linked: FleetState = { enabled: true, port: 1, controls: [], peers: [{ id: 'peer-b', name: 'Build Mac', status: 'linked' }, { id: 'peer-c', name: 'Old Box', status: 'offline' }] };
-  const status: FleetStatus = { roots: [], projects: [{ id: 7, rootId: 1, name: 'Service' }], shells: [] };
+  const linked: FleetState = {
+    enabled: true,
+    port: 1,
+    controls: [],
+    peers: [
+      { id: 'peer-b', name: 'Build Mac', status: 'linked' },
+      { id: 'peer-c', name: 'Old Box', status: 'offline' },
+    ],
+  };
+  const status: FleetStatus = {
+    roots: [],
+    projects: [{ id: 7, rootId: 1, name: 'Service' }],
+    shells: [],
+  };
   const good: FleetShellRef = { peerId: 'peer-b', projectId: 7, shellIndex: 2 };
 
   function mount(state: FleetState | null = linked) {
@@ -245,7 +311,14 @@ describe('useRemoteShellFocus', () => {
     let current = state;
     const render = () => rt.render(() => useRemoteShellFocus(current, onFocus));
     render();
-    return { onFocus, render, setState(next: FleetState | null) { current = next; render(); } };
+    return {
+      onFocus,
+      render,
+      setState(next: FleetState | null) {
+        current = next;
+        render();
+      },
+    };
   }
 
   it.each([
@@ -275,7 +348,10 @@ describe('useRemoteShellFocus', () => {
     expect(of('fleet:status').map((c) => c.req)).toEqual([{ peerId: 'peer-b' }]);
     of('fleet:status')[0]!.resolve(status);
     await flush();
-    expect(onFocus).toHaveBeenCalledWith({ peerId: 'peer-b', peerName: 'Build Mac', projectId: 7, projectName: 'Service' }, 2);
+    expect(onFocus).toHaveBeenCalledWith(
+      { peerId: 'peer-b', peerName: 'Build Mac', projectId: 7, projectName: 'Service' },
+      2,
+    );
     expect(toast).not.toHaveBeenCalled();
   });
 
@@ -288,7 +364,10 @@ describe('useRemoteShellFocus', () => {
     await flush();
     expect(of('fleet:status')).toHaveLength(0);
     expect(onFocus).not.toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith('Could not open the remote shell', expect.objectContaining({ kind: 'error' }));
+    expect(toast).toHaveBeenCalledWith(
+      'Could not open the remote shell',
+      expect.objectContaining({ kind: 'error' }),
+    );
   });
 
   it('tells the user and opens nothing when Fleet state is not loaded', async () => {
@@ -305,7 +384,10 @@ describe('useRemoteShellFocus', () => {
     of('fleet:status')[0]!.resolve(status);
     await flush();
     expect(onFocus).not.toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith('Could not open the remote shell', expect.objectContaining({ kind: 'error' }));
+    expect(toast).toHaveBeenCalledWith(
+      'Could not open the remote shell',
+      expect.objectContaining({ kind: 'error' }),
+    );
   });
 
   it('tells the user and opens nothing when the peer status request rejects', async () => {

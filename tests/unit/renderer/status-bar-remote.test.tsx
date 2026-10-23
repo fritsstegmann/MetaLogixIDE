@@ -20,7 +20,10 @@ const rt = vi.hoisted(() => {
   const changed = (a: unknown[] | undefined, b: unknown[] | undefined) =>
     !a || !b || a.length !== b.length || a.some((v, i) => !Object.is(v, b[i]));
   return {
-    reset() { slots.length = 0; effects.length = 0; },
+    reset() {
+      slots.length = 0;
+      effects.length = 0;
+    },
     render<T>(fn: () => T): T {
       cursor = 0;
       effectCursor = 0;
@@ -34,11 +37,16 @@ const rt = vi.hoisted(() => {
       }
       return out;
     },
-    unmount() { for (const e of effects) e.cleanup?.(); effects.length = 0; },
+    unmount() {
+      for (const e of effects) e.cleanup?.();
+      effects.length = 0;
+    },
     useState<S>(init: S | (() => S)) {
       const i = cursor++;
       if (!(i in slots)) slots[i] = typeof init === 'function' ? (init as () => S)() : init;
-      const set = (v: S | ((p: S) => S)) => { slots[i] = typeof v === 'function' ? (v as (p: S) => S)(slots[i] as S) : v; };
+      const set = (v: S | ((p: S) => S)) => {
+        slots[i] = typeof v === 'function' ? (v as (p: S) => S)(slots[i] as S) : v;
+      };
       return [slots[i] as S, set] as const;
     },
     useRef<R>(init: R) {
@@ -89,7 +97,15 @@ vi.mock('@renderer/api', () => ({
     invoke: (channel: string, req: unknown) => {
       invoke(channel, req);
       if (channel === 'fleet:git-status') return net.git?.() ?? new Promise(() => undefined);
-      if (channel === 'git:status') return Promise.resolve({ isRepo: true, branch: 'local-branch', ahead: 0, behind: 0, files: {}, dirty: false });
+      if (channel === 'git:status')
+        return Promise.resolve({
+          isRepo: true,
+          branch: 'local-branch',
+          ahead: 0,
+          behind: 0,
+          files: {},
+          dirty: false,
+        });
       if (channel === 'shells:ports') return Promise.resolve({ entries: net.ports });
       if (channel === 'app:get-version') return Promise.resolve({ version: '9.9.9' });
       return Promise.resolve({});
@@ -97,12 +113,17 @@ vi.mock('@renderer/api', () => ({
     on: () => () => undefined,
   },
 }));
-vi.mock('@renderer/shortcut-platform', () => ({ useShortcutPlatform: () => 'mac', RUNTIME_SHORTCUT_PLATFORM: 'mac' }));
+vi.mock('@renderer/shortcut-platform', () => ({
+  useShortcutPlatform: () => 'mac',
+  RUNTIME_SHORTCUT_PLATFORM: 'mac',
+}));
 
 const { StatusBar, PaletteHint } = await import('@renderer/components/StatusBar');
 const { KeepAwakeChip } = await import('@renderer/components/KeepAwakeChip');
 
-const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+const flush = async () => {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+};
 const channels = () => invoke.mock.calls.map((c) => c[0] as string);
 
 function nodes(node: ReactNode): ReactElement[] {
@@ -117,20 +138,60 @@ function text(node: ReactNode): string {
   if (!isValidElement(node)) return '';
   return text((node.props as { children?: ReactNode }).children);
 }
-const byTestId = (tree: ReactNode, id: string) => nodes(tree).filter((n) => (n.props as { 'data-testid'?: string })['data-testid'] === id);
-const portChips = (tree: ReactNode) => nodes(tree).filter((n) => String((n.props as { 'data-testid'?: string })['data-testid'] ?? '').startsWith('port-chip-'));
+const byTestId = (tree: ReactNode, id: string) =>
+  nodes(tree).filter((n) => (n.props as { 'data-testid'?: string })['data-testid'] === id);
+const portChips = (tree: ReactNode) =>
+  nodes(tree).filter((n) =>
+    String((n.props as { 'data-testid'?: string })['data-testid'] ?? '').startsWith('port-chip-'),
+  );
 
 const project: Project = {
-  id: 7, rootId: 1, name: 'local-demo', path: '/p/demo', config: {},
-  metaprojectProjectId: null, linkedChatChannelId: null, lastOpenedAt: null,
-  pinned: false, hidden: false, firstLaunchedAt: null,
+  id: 7,
+  rootId: 1,
+  name: 'local-demo',
+  path: '/p/demo',
+  config: {},
+  metaprojectProjectId: null,
+  linkedChatChannelId: null,
+  lastOpenedAt: null,
+  pinned: false,
+  hidden: false,
+  firstLaunchedAt: null,
 };
-const remote: RemoteProjectSelection = { peerId: 'peer-b', peerName: 'Build Mac', projectId: 7, projectName: 'Service' };
-const REPO: FleetGitStatus = { isRepo: true, branch: 'feature/x', dirty: true, ahead: 2, behind: 1, changedCount: 3 };
-const keepAwake: KeepAwakeControls = { state: { kind: 'off' }, stop: vi.fn(), darkenNow: vi.fn() } as unknown as KeepAwakeControls;
+const remote: RemoteProjectSelection = {
+  peerId: 'peer-b',
+  peerName: 'Build Mac',
+  projectId: 7,
+  projectName: 'Service',
+};
+const REPO: FleetGitStatus = {
+  isRepo: true,
+  branch: 'feature/x',
+  dirty: true,
+  ahead: 2,
+  behind: 1,
+  changedCount: 3,
+};
+const keepAwake: KeepAwakeControls = {
+  state: { kind: 'off' },
+  stop: vi.fn(),
+  darkenNow: vi.fn(),
+} as unknown as KeepAwakeControls;
 
-function mount(props: { project: Project | null; remote?: RemoteProjectSelection | null; aliveCount?: number }) {
-  return () => rt.render(() => StatusBar({ aliveCount: props.aliveCount ?? 1, onOpenPalette: () => undefined, keepAwake, ...props }));
+function mount(props: {
+  project: Project | null;
+  remote?: RemoteProjectSelection | null;
+  aliveCount?: number;
+}) {
+  return () =>
+    rt.render(() =>
+      StatusBar({
+        aliveCount: props.aliveCount ?? 1,
+        onOpenPalette: () => undefined,
+        keepAwake,
+        ...props,
+      }),
+    );
 }
 
 beforeEach(() => {
@@ -138,13 +199,20 @@ beforeEach(() => {
   invoke.mockReset();
   net.git = null;
   net.ports = [{ projectId: 7, shellIndex: 0, ports: [5173] }];
-  vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: () => undefined, removeEventListener: () => undefined });
+  vi.stubGlobal('document', {
+    visibilityState: 'visible',
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  });
   vi.stubGlobal('window', {
     setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
     clearInterval: (id: ReturnType<typeof setInterval>) => clearInterval(id),
   });
 });
-afterEach(() => { rt.unmount(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  rt.unmount();
+  vi.unstubAllGlobals();
+});
 
 describe('StatusBar for a remote session', () => {
   it('is the same status bar, labelled "<project> · <peer>"', () => {
@@ -177,8 +245,12 @@ describe('StatusBar for a remote session', () => {
     expect(plain).toContain('●');
     expect(plain).toContain('↑2');
     expect(plain).toContain('↓1');
-    const titled = nodes(tree).find((n) => String((n.props as { title?: string }).title ?? '').startsWith('feature/x'));
-    expect((titled?.props as { title?: string } | undefined)?.title).toBe('feature/x · ahead 2 · behind 1 · 3 changed');
+    const titled = nodes(tree).find((n) =>
+      String((n.props as { title?: string }).title ?? '').startsWith('feature/x'),
+    );
+    expect((titled?.props as { title?: string } | undefined)?.title).toBe(
+      'feature/x · ahead 2 · behind 1 · 3 changed',
+    );
   });
 
   it('hides the git chip without crashing when fleet:git-status rejects, keeping the label', async () => {
@@ -189,7 +261,11 @@ describe('StatusBar for a remote session', () => {
     const tree = render();
     expect(text(tree)).toContain('Service · Build Mac');
     expect(text(tree)).not.toContain('↑');
-    expect(nodes(tree).some((n) => String((n.props as { title?: string }).title ?? '').includes('changed'))).toBe(false);
+    expect(
+      nodes(tree).some((n) =>
+        String((n.props as { title?: string }).title ?? '').includes('changed'),
+      ),
+    ).toBe(false);
   });
 
   it('shows no port chips for a remote session even when a local project with that id has ports', async () => {
@@ -202,7 +278,9 @@ describe('StatusBar for a remote session', () => {
     const localRender = mount({ project });
     localRender();
     await flush();
-    expect(portChips(localRender()).map((n) => (n.props as { 'data-testid': string })['data-testid'])).toEqual(['port-chip-5173']);
+    expect(
+      portChips(localRender()).map((n) => (n.props as { 'data-testid': string })['data-testid']),
+    ).toEqual(['port-chip-5173']);
   });
 
   it('shows the remote shell count in the shells chip', () => {
@@ -210,7 +288,9 @@ describe('StatusBar for a remote session', () => {
     const chip = byTestId(tree, 'shells-chip');
     expect(chip).toHaveLength(1);
     expect(text(chip[0])).toBe('3 shells');
-    expect(text(byTestId(mount({ project: null, remote, aliveCount: 1 })(), 'shells-chip')[0])).toBe('1 shell');
+    expect(
+      text(byTestId(mount({ project: null, remote, aliveCount: 1 })(), 'shells-chip')[0]),
+    ).toBe('1 shell');
   });
 
   it('keeps the palette hint, version and keep-awake chip', async () => {

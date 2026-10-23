@@ -242,9 +242,9 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await machine.getByTestId('remote-project-row').click();
     await expect(driver.win.locator('main .xterm')).toBeVisible();
     const workspace = driver.win.getByTestId('remote-workspace');
-    await expect(workspace.getByRole('button', { name: 'Shell', exact: true })).toHaveAttribute('aria-current', 'page');
     const tabs = workspace.getByTestId('shell-tab-button');
     await expect(tabs).toHaveCount(1);
+    await expect(workspace.getByRole('button', { name: 'Shell', exact: true })).toHaveCount(0);
     await expect(tabs.first()).toContainText('Claude');
     await workspace.getByTestId('tabbar-new-shell').click();
     const addShell = workspace.locator('[data-new-shell-menu="1"]');
