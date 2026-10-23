@@ -1129,4 +1129,70 @@ describe('fleet identity recovery', () => {
     expect(new Map(vault)).toEqual(after);
     await fleet.stop();
   });
+
+  const MISSING =
+    'Fleet identity is missing from the credential store. Reset identity to create a new one; paired devices must pair again.';
+
+  async function missingWithTrust() {
+    const { fleet, storageDir } = portedService(() => 0);
+    await fleet.start();
+    await fleet.setEnabled(true);
+    await fleet.stop();
+    const store = new FleetIdentityStore(storageDir, keychain);
+    const revoked = 'b'.repeat(64);
+    await store.save({
+      enabled: true,
+      trusted: [{ id: 'a'.repeat(64), name: 'Peer' }],
+      revoked: [revoked],
+    });
+    vault.clear();
+    const restarted = new FleetService({
+      name: 'Local',
+      storageDir,
+      operations: operations(),
+      keychain,
+      getPort: () => 0,
+    });
+    return { restarted, store, revoked };
+  }
+
+  it('flags recovery with a missing-identity message when trust exists but the identity is gone', async () => {
+    const { restarted } = await missingWithTrust();
+    await restarted.start();
+    const state = restarted.state();
+    expect(state.recovery).toBe('reset-identity');
+    expect(state.error).toBe(MISSING);
+    expect(vault.size).toBe(0);
+    await restarted.stop();
+  });
+
+  it('flags missing-identity recovery when enabling with only revocations on record', async () => {
+    const { fleet, storageDir } = portedService(() => 0);
+    await fleet.start();
+    await new FleetIdentityStore(storageDir, keychain).save({
+      enabled: false,
+      trusted: [],
+      revoked: ['c'.repeat(64)],
+    });
+    Reflect.set(fleet, 'trust', { enabled: false, trusted: [], revoked: ['c'.repeat(64)] });
+    await expect(fleet.setEnabled(true)).rejects.toThrow();
+    expect(fleet.state().recovery).toBe('reset-identity');
+    expect(fleet.state().error).toBe(MISSING);
+    expect(vault.size).toBe(0);
+    await fleet.stop();
+  });
+
+  it('resets from a missing identity: new encoded identity, trusted cleared, revoked kept, enable works', async () => {
+    const { restarted, store, revoked } = await missingWithTrust();
+    await restarted.start();
+    const state = await restarted.resetIdentity();
+    expect(state.recovery).toBeUndefined();
+    expect(state.error).toBeUndefined();
+    expect(state.enabled).toBe(false);
+    expect(await store.load()).toEqual({ enabled: false, trusted: [], revoked: [revoked] });
+    expect([...vault.values()]).toEqual([expect.stringMatching(/^b64v1:[A-Za-z0-9+/=]+$/)]);
+    await expect(store.loadIdentity(true)).resolves.toMatchObject({ id: expect.any(String) });
+    await expect(restarted.setEnabled(true)).resolves.toMatchObject({ enabled: true });
+    await restarted.stop();
+  });
 });

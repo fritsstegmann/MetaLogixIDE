@@ -44,6 +44,7 @@ import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
 import { keepAwakeHandlers } from '@main/keep-awake/handlers';
 import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
+import { decodeStoredSecret, encodeStoredSecret } from '@main/credential-encoding';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
@@ -885,7 +886,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (remember) {
       try {
         const keytar = await loadKeytar();
-        await keytar.setPassword(KEYTAR_SERVICE, username, password);
+        await keytar.setPassword(KEYTAR_SERVICE, username, encodeStoredSecret(password));
       } catch (err) {
         console.warn('[metaproject] failed to persist credential', err);
       }
@@ -898,8 +899,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!username) return { username: null, hasPassword: false };
     try {
       const keytar = await loadKeytar();
-      const pw = await keytar.getPassword(KEYTAR_SERVICE, username);
-      return { username, hasPassword: !!pw };
+      const stored = await keytar.getPassword(KEYTAR_SERVICE, username);
+      return { username, hasPassword: stored !== null && decodeStoredSecret(stored).text !== '' };
     } catch {
       return { username, hasPassword: false };
     }
@@ -924,7 +925,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     let password: string | null = null;
     try {
       const keytar = await loadKeytar();
-      password = await keytar.getPassword(KEYTAR_SERVICE, username);
+      const stored = await keytar.getPassword(KEYTAR_SERVICE, username);
+      password = stored === null ? null : decodeStoredSecret(stored).text;
     } catch (err) {
       log.warn('[metaproject] auto-login: keychain read failed', err);
       return { ok: false, reason: `keychain-error: ${err instanceof Error ? err.message : String(err)}` };

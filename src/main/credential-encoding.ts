@@ -16,14 +16,25 @@ export interface DecodedStoredSecret {
   readonly legacy: boolean;
 }
 
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
 /** Encodes text into a form containing only the prefix and base64 characters. */
 export function encodeStoredSecret(text: string): string {
-  void text;
-  throw new Error('not implemented');
+  return `${STORED_SECRET_PREFIX}${Buffer.from(text, 'utf8').toString('base64')}`;
 }
 
-/** Decodes a stored value; unprefixed values pass through as legacy, malformed prefixed values throw. */
+/**
+ * Decodes a stored value; unprefixed values pass through as legacy. A prefixed value
+ * whose payload is not canonical base64 of valid UTF-8 throws, without echoing the payload.
+ */
 export function decodeStoredSecret(stored: string): DecodedStoredSecret {
-  void stored;
-  throw new Error('not implemented');
+  if (!stored.startsWith(STORED_SECRET_PREFIX)) return { text: stored, legacy: true };
+  const payload = stored.slice(STORED_SECRET_PREFIX.length);
+  const bytes = Buffer.from(payload, 'base64');
+  if (bytes.toString('base64') !== payload) throw new Error('Stored secret is not valid base64');
+  try {
+    return { text: UTF8.decode(bytes), legacy: false };
+  } catch (cause) {
+    throw new Error('Stored secret is not valid UTF-8', { cause });
+  }
 }
