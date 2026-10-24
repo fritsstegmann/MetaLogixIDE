@@ -99,9 +99,9 @@ describe('rendererQuery (AC5, AC6)', () => {
       .toBe('frostChrome=1&chromeFrost=strong&terminalFrost=medium');
   });
 
-  it('linux: passes stored values through, off/subtle/off (AC1)', () => {
-    expect(rendererQuery({ platform: 'linux', frostChrome: false, chromeFrost: 'subtle', terminalFrost: 'off' }))
-      .toBe('frostChrome=0&chromeFrost=subtle&terminalFrost=off');
+  it('linux: passes stored values through, off/medium/strong (AC1)', () => {
+    expect(rendererQuery({ platform: 'linux', frostChrome: false, chromeFrost: 'medium', terminalFrost: 'strong' }))
+      .toBe('frostChrome=0&chromeFrost=medium&terminalFrost=strong');
   });
 
   it('popout params come first, ahead of the frosted-glass flags', () => {

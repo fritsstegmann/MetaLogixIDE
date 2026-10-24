@@ -30,6 +30,7 @@ export function platformChrome(platform: NodeJS.Platform, material: unknown): Pa
   if (frost === 'mac') {
     return {
       titleBarStyle: 'hiddenInset',
+      // y centres the lights on the 44px title bar shared by the main and popout windows.
       trafficLightPosition: { x: 12, y: 14 },
       vibrancy: resolveMaterial(material),
       visualEffectState: 'followWindow',

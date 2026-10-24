@@ -598,9 +598,9 @@ blurs what is behind the window. The app never blurs anything itself.
 - **Wayland and XWayland.** The app sets no Ozone switch. Chromium runs as a
   native Wayland client only if the environment sets
   `ELECTRON_OZONE_PLATFORM_HINT=wayland` (or `auto`). Without it the window runs
-  under XWayland. The window is translucent in both cases. Whether the
-  compositor blurs the XWayland window is recorded by the manual check in the
-  build report, not by a code path.
+  under XWayland. The window is translucent as a native Wayland client.
+  Whether the XWayland window is translucent, and whether the compositor blurs
+  it, is recorded by the manual check in the build report, not by a code path.
 - **No blur available.** On a compositor that does not blur, the translucent
   chrome shows the desktop unblurred. The user can turn Frosted chrome off.
 
@@ -628,9 +628,10 @@ hl.window_rule({
 ```
 
 Before 0.55, the hyprlang `hyprland.conf` equivalent is
-`decoration { blur { enabled = true } }` and, optionally,
-`windowrule = noblur off, class:^(metaide)$`. Check your Hyprland version for
-the exact rule syntax. `size` and `passes` are taste, not requirements. The
+`decoration { blur { enabled = true } }`. No window rule is needed. If you have
+a rule that sets `no_blur on`, `opaque` or `force_rgbx` for
+`match:class ^(metaide)$`, remove it. Check your Hyprland version for the exact
+rule syntax. `size` and `passes` are taste, not requirements. The
 window class `metaide` was read from `hyprctl clients` on Hyprland 0.56.2 with a
 native Wayland window open. A rule that sets `no_blur`, `opaque` or
 `force_rgbx` for this class removes the blur.
