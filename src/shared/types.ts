@@ -125,11 +125,11 @@ export type SettingsMap = {
   'notify_claude_needs_input':     boolean;
   /** Show an OS notification when a Claude shell finishes its turn and waits for the next prompt. */
   'notify_claude_finished':        boolean;
-  /** macOS only: frosted chrome on/off. Write via settings:set-frost-chrome only. */
+  /** macOS and Linux: frosted chrome on/off. Write via settings:set-frost-chrome only. */
   'frost_chrome':                  boolean;
-  /** macOS only: chrome frost strength. Write via settings:set-chrome-frost-level only. */
+  /** macOS and Linux: chrome frost strength. Write via settings:set-chrome-frost-level only. */
   'chrome_frost_level':            ChromeFrostLevel;
-  /** macOS only: terminal frost strength. Write via settings:set-terminal-frost-level only. */
+  /** macOS and Linux: terminal frost strength. Write via settings:set-terminal-frost-level only. */
   'terminal_frost_level':          TerminalFrostLevel;
   /** macOS only: native vibrancy material. Write via settings:set-vibrancy-material only. */
   'vibrancy_material':             VibrancyMaterial;

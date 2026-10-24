@@ -11,6 +11,12 @@ export const FROST_ATTR = {
   overlay: 'data-overlay',
   chromeFrost: 'data-chrome-frost',
   terminalFrost: 'data-terminal-frost',
+  /**
+   * Present whenever the window itself is transparent (Linux, whatever Frosted chrome says). With
+   * Frosted chrome off it lets the CSS paint an opaque underlay, so the window still looks as it
+   * did before Linux windows became transparent (AC7).
+   */
+  transparentWindow: 'data-transparent-window',
 } as const;
 export const MAC_PLATFORM = 'mac' as const;
 export type SheetContent = 'shell' | 'other';
