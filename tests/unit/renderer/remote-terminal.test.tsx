@@ -124,13 +124,15 @@ function text(node: ReactNode): string {
   if (!isValidElement(node)) return '';
   return text((node.props as { children?: ReactNode }).children);
 }
-function mount() {
+type ExtraProps = Pick<ReactModule.ComponentProps<typeof RemoteTerminal>, 'focusShell' | 'onShellsChange'>;
+function mount(initial: ExtraProps = {}) {
   let available = true;
+  let extra = initial;
   const host = { clientWidth: 500, clientHeight: 300 };
   const observers: Array<() => void> = [];
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { observers.push(callback); } observe() {} disconnect() {} });
   const refresh = vi.fn();
-  const draw = () => runtime.render(() => RemoteTerminal({ project, available, onRefreshAvailability: refresh }), (tree) => {
+  const draw = () => runtime.render(() => RemoteTerminal({ project, available, onRefreshAvailability: refresh, ...extra }), (tree) => {
     const region = nodes(tree).find((node) => node.type === 'div' && (node.props as { role?: string }).role === 'region');
     if (region && 'ref' in region) {
       const ref: unknown = region.ref;
@@ -153,6 +155,7 @@ function mount() {
       return node.props as { disabled?: boolean; onClick: () => void };
     },
     offline() { available = false; return draw(); },
+    props(next: ExtraProps) { extra = { ...extra, ...next }; return draw(); },
     online() { available = true; return draw(); },
     emit(next: FleetTerminalEvent) { for (const listener of listeners) listener(next); },
     resizeHost(cols: number, rows: number) {
@@ -588,5 +591,75 @@ describe('RemoteTerminal', () => {
       { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'remote paste\r' }));
     expect(key.preventDefault).toHaveBeenCalledOnce();
     expect(invoke).not.toHaveBeenCalledWith('shells:write', expect.anything());
+  });
+
+  it('has no inert Shell button in the header, while the shell tabs and header controls stay', async () => {
+    remote.shells = [shellRow(0, 'Claude')];
+    const app = mount();
+    await flush();
+    const tree = app.draw();
+    const buttons = nodes(tree).filter((node) => node.type === 'button');
+    expect(buttons.map((node) => text((node.props as { children?: ReactNode }).children))).not.toContain('Shell');
+    expect(buttons.some((node) => (node.props as { 'aria-current'?: string })['aria-current'] === 'page')).toBe(false);
+    expect(app.bar().shells).toHaveLength(1);
+    expect(app.control('Reconnect terminal')).toBeDefined();
+    expect(app.control('Paste')).toBeDefined();
+    expect(app.control('Stop remote shell')).toBeDefined();
+  });
+
+  it('reports the live shell count and the shown shell, and null while offline', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const onShellsChange = vi.fn();
+    const app = mount({ onShellsChange });
+    await flush();
+    app.draw();
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 0 });
+    app.bar().onSelect(2);
+    app.draw();
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
+    const calls = onShellsChange.mock.calls.length;
+    app.draw();
+    expect(onShellsChange).toHaveBeenCalledTimes(calls);
+    app.offline();
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
+  });
+
+  it('opens on the requested shell instead of shell 0 when mounted for a notice', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const app = mount({ focusShell: { shellIndex: 2, seq: 1 } });
+    await flush();
+    app.draw();
+    await flush();
+    expect(app.bar().active).toBe(2);
+    expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 2 });
+    expect(invoke).not.toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 0 });
+  });
+
+  it('falls back to shell 0 when the requested shell is not on the peer', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const app = mount({ focusShell: { shellIndex: 5, seq: 1 } });
+    await flush();
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:launch-claude', expect.anything());
+  });
+
+  it('switches an open project to a newly requested shell once, leaving later manual picks alone', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const app = mount();
+    await flush();
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    app.props({ focusShell: { shellIndex: 2, seq: 1 } });
+    app.draw();
+    expect(app.bar().active).toBe(2);
+    app.bar().onSelect(0);
+    app.draw();
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    app.props({ focusShell: { shellIndex: 2, seq: 2 } });
+    app.draw();
+    expect(app.bar().active).toBe(2);
   });
 });

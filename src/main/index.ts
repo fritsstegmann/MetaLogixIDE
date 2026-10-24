@@ -11,6 +11,7 @@ import { installKeepAwake } from './keep-awake/install';
 import { createFleetOperations, registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
+import { installFleetNotices } from './notifications/fleet-notices';
 import { installAgentStatus } from './agent-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { rescanRootsAtBoot } from './startup/boot-rescan';
@@ -402,9 +403,18 @@ function registerMainIpc(services: Services): void {
   });
 }
 
-/** Wires Claude hook events to OS notifications, resolving target windows from this module's state. */
+/** Wires Claude hook events to OS notifications or controlling Fleet peers, and Fleet notices to OS notifications. */
 function installNotifications(services: Services): void {
+  const fleet = services.fleet;
+  if (fleet) installFleetNotices({
+    fleet,
+    settings: services.settings,
+    notificationClass: Notification,
+    windows: { main: () => mainWindow, focused: () => BrowserWindow.getFocusedWindow() },
+    broadcast,
+  });
   installClaudeNotifications({
+    forwardToFleet: (shell, notice) => (fleet?.sendNotice({ ...shell, ...notice }) ?? 0) > 0,
     hooks: createHookFanout(services.hookReceiver),
     history: services.hookHistory,
     sessions: services.hookSessions,

@@ -1,6 +1,6 @@
 /** Strict fleet wire validation keeps discovery public and control frames bounded. */
 import { createHash } from 'node:crypto';
-import type { FleetStatus } from '../../shared/fleet-contract';
+import type { FleetGitStatus, FleetStatus } from '../../shared/fleet-contract';
 
 export const MAX_FRAME = 16_384;
 export const STATUS_PAGE_SIZE = 12;
@@ -11,7 +11,9 @@ export interface Beacon {
   readonly name: string;
   readonly port: number;
 }
-export type Operation = 'status' | 'launch' | 'launch-claude' | 'profiles' | 'launch-cli' | 'set-default-cli' | 'remove-cli-profile' | 'stop' | 'write' | 'snapshot' | 'subscribe' | 'unsubscribe' | 'resize';
+export type Operation = 'status' | 'launch' | 'launch-claude' | 'profiles' | 'launch-cli' | 'set-default-cli' | 'remove-cli-profile' | 'stop' | 'write' | 'snapshot' | 'subscribe' | 'unsubscribe' | 'resize' | 'git-status';
+/** Claude notification classes a host forwards to the peer controlling the shell. */
+export type NoticeKind = 'needs-input' | 'finished';
 export type WireMessage =
   | { readonly type: 'hello'; readonly id: string; readonly nonce: string }
   | { readonly type: 'approve'; readonly id: string; readonly nonce: string }
@@ -28,7 +30,8 @@ export type WireMessage =
       readonly value?: unknown;
       readonly error?: 'permission-mode' | 'claude-missing' | 'shell-cap' | 'project-unavailable';
     }
-  | { readonly type: 'terminal'; readonly id: string; readonly projectId: number; readonly shellIndex: number; readonly kind: 'snapshot' | 'ready' | 'data' | 'exit'; readonly data: string };
+  | { readonly type: 'terminal'; readonly id: string; readonly projectId: number; readonly shellIndex: number; readonly kind: 'snapshot' | 'ready' | 'data' | 'exit'; readonly data: string }
+  | { readonly type: 'notice'; readonly id: string; readonly projectId: number; readonly shellIndex: number; readonly kind: NoticeKind; readonly body: string };
 
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -46,6 +49,12 @@ const text = (value: unknown, max: number): value is string =>
 const profileName = (value: unknown): value is string =>
   text(value, 80) && value.trim().length > 0 &&
   !/[\/\\\p{Cc}]/u.test(value);
+const CONTROL = /\p{Cc}/u;
+const branchName = (value: unknown): value is string => text(value, 255) && !CONTROL.test(value);
+const GIT_STATUS_KEYS = ['isRepo', 'branch', 'dirty', 'ahead', 'behind', 'changedCount'];
+const NOTICE_KEYS = ['type', 'id', 'projectId', 'shellIndex', 'kind', 'body'];
+/** Upper bound, in code points, of a forwarded Claude notification body. */
+export const NOTICE_BODY_MAX = 200;
 const timestamp = (value: unknown): value is string | null =>
   value === null || (typeof value === 'string' && value.length <= 40 &&
     /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])[ T](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?$/.test(value));
@@ -148,7 +157,7 @@ export function validArgs(op: Operation, args: unknown): args is Record<string, 
   if (!index(args.projectId) || args.projectId < 1) return false;
   if (op === 'launch' || op === 'launch-claude')
     return keys(args, ['projectId']) && Object.keys(args).length === 1;
-  if (op === 'profiles')
+  if (op === 'profiles' || op === 'git-status')
     return keys(args, ['projectId']) && Object.keys(args).length === 1;
   if (op === 'set-default-cli')
     return keys(args, ['projectId', 'name']) && Object.keys(args).length === 2 &&
@@ -208,13 +217,15 @@ export function decodeMessage(frame: string): WireMessage | null {
       return null;
     return { type: 'terminal', id: value.id, projectId: value.projectId, shellIndex: value.shellIndex, kind: value.kind, data: value.data };
   }
+  if (value.type === 'notice') return decodeNotice(value, value.id);
   if (value.type === 'request') {
     if (!keys(value, ['type', 'id', 'op', 'args']) || Object.keys(value).length !== 4) return null;
     if (value.op !== 'status' && value.op !== 'launch' && value.op !== 'launch-claude' &&
       value.op !== 'profiles' && value.op !== 'launch-cli' &&
       value.op !== 'set-default-cli' && value.op !== 'remove-cli-profile' &&
       value.op !== 'stop' && value.op !== 'write' && value.op !== 'snapshot' &&
-      value.op !== 'subscribe' && value.op !== 'unsubscribe' && value.op !== 'resize')
+      value.op !== 'subscribe' && value.op !== 'unsubscribe' && value.op !== 'resize' &&
+      value.op !== 'git-status')
       return null;
     if (!validArgs(value.op, value.args)) return null;
     return { type: 'request', id: value.id, op: value.op, args: value.args };
@@ -232,6 +243,13 @@ export function decodeMessage(frame: string): WireMessage | null {
     return { type: 'response', id: value.id, ok: false };
   }
   return null;
+}
+
+function decodeNotice(value: Record<string, unknown>, id: string): WireMessage | null {
+  if (!keys(value, NOTICE_KEYS) || Object.keys(value).length !== NOTICE_KEYS.length ||
+    !index(value.projectId) || value.projectId < 1 || !index(value.shellIndex) ||
+    (value.kind !== 'needs-input' && value.kind !== 'finished') || !validNoticeBody(value.body)) return null;
+  return { type: 'notice', id, projectId: value.projectId, shellIndex: value.shellIndex, kind: value.kind, body: value.body };
 }
 
 /** Accepts only bounded status fields and complete, unambiguous hierarchy. */
@@ -346,4 +364,22 @@ export function validateSnapshot(value: unknown): { output: string; alive: boole
   )
     return null;
   return { output: value.output, alive: value.alive };
+}
+
+/** Accepts only the exact bounded git summary; a non-repository carries no data. */
+export function validateGitStatus(value: unknown): FleetGitStatus | null {
+  if (!record(value) || !keys(value, GIT_STATUS_KEYS) || Object.keys(value).length !== GIT_STATUS_KEYS.length ||
+    typeof value.isRepo !== 'boolean' || typeof value.dirty !== 'boolean' ||
+    !index(value.ahead) || !index(value.behind) || !index(value.changedCount) ||
+    (value.branch !== null && !branchName(value.branch))) return null;
+  if (!value.isRepo && (value.branch !== null || value.dirty ||
+    value.ahead !== 0 || value.behind !== 0 || value.changedCount !== 0)) return null;
+  return { isRepo: value.isRepo, branch: value.branch, dirty: value.dirty,
+    ahead: value.ahead, behind: value.behind, changedCount: value.changedCount };
+}
+
+/** True for a notice body the controller may display: 1-200 code points without control characters. */
+export function validNoticeBody(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && !CONTROL.test(value) &&
+    Array.from(value).length <= NOTICE_BODY_MAX;
 }
