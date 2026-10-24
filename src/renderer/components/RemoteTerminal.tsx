@@ -87,7 +87,10 @@ function useRemoteSplit({ peerId, peerName, projectId, available, shells, refres
     pending.current = true;
     try {
       const result = await api.invoke('fleet:launch', { peerId, projectId });
-      if (!alive.current) return;
+      if (!alive.current) {
+        void api.invoke('fleet:stop', { peerId, projectId, shellIndex: result.shellIndex }).catch(() => undefined);
+        return;
+      }
       setError(null);
       setSplit({ shellIndex: result.shellIndex, listed: false });
       void refreshShells().catch(() => undefined);
@@ -187,6 +190,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   const split = useRemoteSplit({ peerId, peerName, projectId, available, shells, refreshShells });
   const splitIndexRef = useRef(split.shellIndex);
   splitIndexRef.current = split.shellIndex;
+  const releaseSplitRef = useRef(split.release);
+  releaseSplitRef.current = split.release;
   const { dragging, startDrag } = useDividerDrag(rowRef, split.setRatio);
 
   const launch = useCallback(async (kind: 'claude' | 'plain' | 'cli', request?: { profileName?: string; argv?: string[]; save?: boolean }) => {
@@ -232,6 +237,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           if (wanted) handledFocus.current = wanted.seq;
           const candidates = existing.filter((shell) => shell.shellIndex !== splitIndexRef.current);
           const index = wanted?.shellIndex ?? candidates.find((shell) => shell.shellIndex === 0)?.shellIndex ?? candidates[0]?.shellIndex ?? existing[0]!.shellIndex;
+          if (index === splitIndexRef.current) releaseSplitRef.current();
           setShellIndex(index);
           setSession({ kind: 'connecting', shellIndex: index });
         } else void launch('claude');

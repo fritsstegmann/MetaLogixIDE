@@ -906,6 +906,7 @@ describe('RemoteTerminal split', () => {
     app.draw();
     expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:launch')).toHaveLength(1);
     expect(app.paneShells()).toEqual([0, 3]);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', expect.anything());
   });
 
   it('the header Paste button pastes into the left pane only', async () => {
@@ -973,6 +974,60 @@ describe('RemoteTerminal split', () => {
     expect(gutter()?.ratio).toBe(SPLIT_RATIO_DEFAULT);
     gutter()?.onRatioChange(0.3);
     expect(gutter()?.ratio).toBe(0.3);
+  });
+
+  it('promotes the right shell to the left on reconnect when the left shell has gone', async () => {
+    const app = await opened();
+    expect(app.paneShells()).toEqual([0, 3]);
+    app.offline();
+    remote.shells = [shellRow(3, 'Terminal')];
+    app.online();
+    await flush();
+    app.draw();
+    app.draw();
+    expect(app.paneShells()).toEqual([3]);
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.bar().active).toBe(3);
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([3]);
+  });
+
+  it('keeps the split on reconnect while another shell can take the left pane', async () => {
+    const app = await opened();
+    app.offline();
+    remote.shells = [shellRow(2, 'Pi'), shellRow(3, 'Terminal')];
+    app.online();
+    await flush();
+    app.draw();
+    app.draw();
+    expect(app.paneShells()).toEqual([2, 3]);
+    expect(app.bar().splitOn).toBe(true);
+  });
+
+  it('promotes the right shell when a reconnect focus request targets it', async () => {
+    const app = await opened();
+    app.offline();
+    app.props({ focusShell: { shellIndex: 3, seq: 1 } });
+    app.online();
+    await flush();
+    app.draw();
+    app.draw();
+    expect(app.paneShells()).toEqual([3]);
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.bar().active).toBe(3);
+  });
+
+  it('stops a split shell whose launch resolves after the terminal unmounted', async () => {
+    let finish!: (value: { shellIndex: number }) => void;
+    launches.push(() => new Promise((resolve) => { finish = resolve; }));
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onToggleSplit?.();
+    runtime.unmount();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', expect.anything());
+    finish({ shellIndex: 3 });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:stop', { peerId: 'machine-b', projectId: 12, shellIndex: 3 });
   });
 
   it('promotes the right shell to the left when the last other shell is stopped', async () => {
