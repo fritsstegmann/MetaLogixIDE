@@ -4,12 +4,11 @@ import { menuMotion } from '../menu-motion';
 import { toast } from '../hooks/useToasts';
 import { api } from '../api';
 import { Tooltip } from './Tooltip';
-import { SHELL_TAB_TEST_ID } from '@shared/agent-state';
+import { SHELL_TAB_TEST_ID, type AgentKind, type AgentState } from '@shared/agent-state';
 import { ShellTabDot } from './ShellTabDot';
 import { shellChipLabel } from '../shell-label';
 import { SplitPill } from './SplitPill';
 import { PlusIcon, StarFilledIcon, StarIcon, XIcon } from './shell-icons';
-import type { ScopedCliProfile } from '@shared/project-default-agent';
 import type { Project } from '@shared/types';
 import { PROJECT_SETTINGS_COPY } from '@renderer/project-settings-contract';
 import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
@@ -19,10 +18,24 @@ import { ICON_SIZE } from './icon-size';
 const piIconUrl = new URL('../assets/cli-icons/pi.svg', import.meta.url).href;
 const ompIconUrl = new URL('../assets/cli-icons/omp.svg', import.meta.url).href;
 
+/** A remote peer exposes profile labels and icons, but never its command or environment. */
+export interface ShellMenuProfile {
+  readonly name: string;
+  readonly scope: 'project' | 'global';
+  readonly icon?: string;
+  readonly argv?: readonly string[];
+}
+
+export interface RemoteShellMenu {
+  readonly profiles: () => Promise<readonly ShellMenuProfile[]>;
+  readonly remove: (name: string) => Promise<void>;
+  readonly setDefault: (name: string | null) => Promise<void>;
+}
+
 
 /** The add-shell menu: saved CLI profiles with a default-star toggle, a custom-command form and the plain terminal row. */
 export function NewShellMenu({
-  projectId,
+  projectId, remoteMenu,
   defaultCliName,
   onLaunchProfile,
   onLaunchPlainTab,
@@ -31,17 +44,19 @@ export function NewShellMenu({
   onClose,
 }: {
   projectId: number;
+  remoteMenu?: RemoteShellMenu;
   /** Current per-project auto-launch CLI (drives the star toggle). */
   defaultCliName: string | null;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
-  /** Called when the star toggle sets/clears the folder-level default. */
-  onDefaultChanged: (project: Project) => void;
+  /** Called for local project defaults; remote defaults update through remoteMenu. */
+  onDefaultChanged?: (project: Project) => void;
   onClose: () => void;
 }) {
   const platform = useShortcutPlatform();
-  const [profiles, setProfiles] = useState<ScopedCliProfile[]>([]);
+  const [profiles, setProfiles] = useState<readonly ShellMenuProfile[]>([]);
+  const [profilesError, setProfilesError] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customCmd, setCustomCmd] = useState('');
@@ -51,11 +66,16 @@ export function NewShellMenu({
   useEffect(() => {
     (async () => {
       try {
-        const { profiles } = await api.invoke('shells:cli-profiles-list', { projectId });
+        const profiles = remoteMenu
+          ? await remoteMenu.profiles()
+          : (await api.invoke('shells:cli-profiles-list', { projectId })).profiles;
         setProfiles(profiles);
-      } catch { /* ignore */ }
+        setProfilesError(false);
+      } catch {
+        if (remoteMenu) setProfilesError(true);
+      }
     })();
-  }, [projectId]);
+  }, [projectId, remoteMenu]);
 
   const present = useIsPresent();
   const motionProps = menuMotion(useReducedMotion() ?? false);
@@ -86,7 +106,8 @@ export function NewShellMenu({
 
   async function removeProfile(name: string) {
     try {
-      await api.invoke('shells:cli-profiles-remove', { projectId, name });
+      if (remoteMenu) await remoteMenu.remove(name);
+      else await api.invoke('shells:cli-profiles-remove', { projectId, name });
       setProfiles(prev => prev.filter(p => p.name !== name));
     } catch { /* ignore */ }
   }
@@ -126,7 +147,7 @@ export function NewShellMenu({
           <button className="px-3 py-1.5 rounded border border-[--border] hover:bg-[--panel] text-[--text-muted]" onClick={() => setCustomOpen(false)}>Back</button>
         </div>
         <div className="text-[10px] text-[--text-muted]">
-          Adds this as a new tab. To move it to a separate window afterwards, click the popout icon in the top bar.
+          {remoteMenu ? 'Runs on the remote machine in a new tab.' : 'Adds this as a new tab. To move it to a separate window afterwards, click the popout icon in the top bar.'}
         </div>
       </m.div>
     );
@@ -142,11 +163,12 @@ export function NewShellMenu({
           Add a shell
         </div>
         <div className="text-[10px] text-[--text-muted] mt-0.5">
-          Opens as a new tab. Use the popout icon to move it to its own window.
+          {remoteMenu ? 'Opens a tab on the linked machine.' : 'Opens as a new tab. Use the popout icon to move it to its own window.'}
         </div>
         <p className="mt-2 text-xs leading-relaxed text-[--hue-orange-text]">{PROJECT_SETTINGS_COPY.menuDefaultNotice}</p>
       </div>
-      {profiles.length === 0 && (
+      {profilesError && <p role="alert" className="px-3 py-4 text-xs text-[--danger]">Could not load remote CLIs. Reconnect and open this menu again.</p>}
+      {profiles.length === 0 && !profilesError && (
         <div className="px-3 py-4 text-xs text-[--text-muted] text-center">
           No CLIs configured yet. Add one below.
         </div>
@@ -158,7 +180,7 @@ export function NewShellMenu({
             <button
               className="flex-1 text-left px-3 py-2 text-xs flex items-center gap-2"
               onClick={() => onLaunchProfile(p.name)}
-              title={p.argv.join(' ')}
+              title={p.argv?.join(' ') ?? p.name}
             >
               <span aria-hidden="true" className="w-5 h-5 shrink-0 flex items-center justify-center text-base leading-none">
                 {p.icon === 'builtin:pi' ? (
@@ -192,12 +214,14 @@ export function NewShellMenu({
                 : 'opacity-0 group-hover:opacity-60 focus:opacity-100 hover:opacity-100 text-[--text-muted] hover:text-[color:var(--accent)]'}`}
               onClick={async () => {
                 if (savingDefault) return;
-                const capturedProjectId = projectId;
                 setSavingDefault(true);
                 try {
-                  const { project } = await api.invoke('shells:set-default-cli', { projectId: capturedProjectId, name: isDefault ? null : p.name });
-                  if (project.id !== capturedProjectId) return;
-                  onDefaultChanged(project);
+                  if (remoteMenu) await remoteMenu.setDefault(isDefault ? null : p.name);
+                  else {
+                    const { project } = await api.invoke('shells:set-default-cli', { projectId, name: isDefault ? null : p.name });
+                    if (project.id !== projectId) return;
+                    onDefaultChanged?.(project);
+                  }
                   toast(isDefault ? `Cleared folder default` : `${p.name} will auto-launch in this folder`, { kind: 'success', timeoutMs: 1400 });
                 } catch (e) {
                   toast('Could not set default', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') });
@@ -235,7 +259,7 @@ export function NewShellMenu({
         <button
           onClick={onLaunchPlainTab}
           className="w-full text-left px-3 py-2 text-xs hover:bg-[--panel] flex items-center justify-between"
-          title="Opens your login shell ($SHELL) at the project's directory"
+          title={remoteMenu ? "Opens the linked machine's login shell in this project's directory" : "Opens your login shell ($SHELL) at the project's directory"}
         >
           <span className="flex items-center gap-2">
             <span className="w-5 text-center text-base leading-none">⌨️</span>
@@ -255,28 +279,32 @@ export interface ShellTabsBarItem {
   startedAt: string | null;
   lastActiveAt: string | null;
   launchName: string;
+  agent?: AgentKind | null;
+  state?: AgentState;
 }
 
 export function ShellTabsBar({
   projectId, shells, active, onSelect, onClose,
-  defaultCliName, onDefaultCliChanged,
+  defaultCliName, onDefaultCliChanged, remoteMenu, renderDot,
   onLaunchProfile, onLaunchPlainTab, onLaunchCustom,
   splitOn, onToggleSplit,
 }: {
   projectId: number;
-  shells: ShellTabsBarItem[];
+  shells: readonly ShellTabsBarItem[];
   active: number;
   onSelect: (idx: number) => void;
   onClose: (idx: number) => void;
   /** Current per-folder auto-launch CLI, forwarded to NewShellMenu's star toggle. */
   defaultCliName: string | null;
-  onDefaultCliChanged: (project: Project) => void;
+  onDefaultCliChanged?: (project: Project) => void;
+  remoteMenu?: RemoteShellMenu;
+  renderDot?: (shell: ShellTabsBarItem, active: boolean) => React.ReactNode;
   onLaunchProfile: (name: string) => void;
   onLaunchPlainTab: () => void;
   onLaunchCustom: (name: string, cmdLine: string, save: boolean) => void;
   /** True when the split view is active — the toggle icon reflects it. */
-  splitOn: boolean;
-  onToggleSplit: () => void;
+  splitOn?: boolean;
+  onToggleSplit?: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const platform = useShortcutPlatform();
@@ -296,7 +324,7 @@ export function ShellTabsBar({
                 ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}
               onClick={() => onSelect(s.shellIndex)}
             >
-              <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />
+              {renderDot ? renderDot(s, isActive) : <ShellTabDot projectId={projectId} shellIndex={s.shellIndex} isActive={isActive} />}
               <span className={`${isActive ? 'text-[--text] font-medium' : 'text-[--text-muted]'}`}>{label}</span>
               {s.shellIndex !== 0 && (
                 <button
@@ -331,6 +359,7 @@ export function ShellTabsBar({
             key={`new-shell-menu-${projectId}`}
             projectId={projectId}
             defaultCliName={defaultCliName}
+            remoteMenu={remoteMenu}
             onDefaultChanged={onDefaultCliChanged}
             onLaunchProfile={(name) => { setMenuOpen(false); onLaunchProfile(name); }}
             onLaunchPlainTab={() => { setMenuOpen(false); onLaunchPlainTab(); }}
@@ -344,7 +373,7 @@ export function ShellTabsBar({
         </AnimatePresence>
       </div>
       <div className="flex-1" />
-      <SplitPill on={splitOn} onToggle={onToggleSplit} />
+      {onToggleSplit && <SplitPill on={splitOn ?? false} onToggle={onToggleSplit} />}
     </div>
   );
 }

@@ -26,6 +26,7 @@ import { listMiseTasks, type MiseLister } from './domain/mise-cli';
 import type { KeepAwakeController } from './keep-awake/port';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { FleetService } from './fleet/service';
 
 export interface Services {
   db: Database;
@@ -55,6 +56,8 @@ export interface Services {
   /** macOS keep-awake timer; installed after startup, null off darwin. */
   keepAwake: KeepAwakeController | null;
   homeDir: string;
+  /** Opt-in LAN fleet runtime, constructed before IPC and started before the first window. */
+  fleet: FleetService | null;
   migrationsDir: string;
 }
 
@@ -134,5 +137,6 @@ export function buildServices(opts: { dbPath?: string; migrationsDir?: string; h
     db, roots, projects, shells, settings, prompts, ptyManager, watcher, metaproject,
     hookSessions, hookReceiver, hookRuntime, hookHistory, ompReceiver, agentStatus: null,
     viewedShells: new ViewedShells(), dropStaging, clipboardImage: createClipboardImage(), listMise: listMiseTasks, keepAwake: null, homeDir: home, migrationsDir,
+    fleet: null,
   };
 }

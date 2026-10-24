@@ -3,14 +3,15 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import log from 'electron-log/main';
 import { buildServices, type Services } from './services';
 import { DROP_MAX_AGE_MS, testModeDropDir } from './drops/staging';
 import { installKeepAwake } from './keep-awake/install';
-import { registerIpc } from './ipc/register';
+import { createFleetOperations, registerIpc } from './ipc/register';
 import { buildAppMenu } from './menu';
 import { installClaudeNotifications } from './notifications/install';
+import { installFleetNotices } from './notifications/fleet-notices';
 import { installAgentStatus } from './agent-status/install';
 import { createHookFanout } from './claude-hooks/hook-fanout';
 import { rescanRootsAtBoot } from './startup/boot-rescan';
@@ -20,6 +21,7 @@ import { installCrashObservability } from './startup/crash-observability';
 import { withoutHookConfirmed } from './notifications/claude-notifier';
 import { resolveLoginShellPath } from './domain/login-shell-path';
 import { computeTileLayout } from './window-tiling';
+import { FleetService } from './fleet/service';
 import {
   FROSTED_GLASS_FALLBACK,
   applyVibrancy,
@@ -383,6 +385,15 @@ function attachKeepAwake(services: Services): void {
 
 /** Registers the renderer IPC surface, with window operations bound to this module's windows. */
 function registerMainIpc(services: Services): void {
+  services.fleet = new FleetService({
+    name: hostname(),
+    storageDir: join(services.homeDir, '.metaide', 'fleet'),
+    operations: createFleetOperations(services),
+    getPort: () => services.settings.get('fleet_port'),
+    savePort: (port) => services.settings.set('fleet_port', port),
+  });
+  services.fleet.onChanged((state) => broadcast('fleet:changed', state));
+  services.fleet.onTerminal((event) => broadcast('fleet:terminal', event));
   registerIpc(ipcMain, services, broadcast, {
     createPopoutWindow: async (projectId, shellIndex) => (await createPopoutWindow(projectId, shellIndex)).id,
     returnPopoutWindow: (projectId, shellIndex) => returnPopoutWindow(projectId, shellIndex),
@@ -392,9 +403,18 @@ function registerMainIpc(services: Services): void {
   });
 }
 
-/** Wires Claude hook events to OS notifications, resolving target windows from this module's state. */
+/** Wires Claude hook events to OS notifications or controlling Fleet peers, and Fleet notices to OS notifications. */
 function installNotifications(services: Services): void {
+  const fleet = services.fleet;
+  if (fleet) installFleetNotices({
+    fleet,
+    settings: services.settings,
+    notificationClass: Notification,
+    windows: { main: () => mainWindow, focused: () => BrowserWindow.getFocusedWindow() },
+    broadcast,
+  });
   installClaudeNotifications({
+    forwardToFleet: (shell, notice) => (fleet?.sendNotice({ ...shell, ...notice }) ?? 0) > 0,
     hooks: createHookFanout(services.hookReceiver),
     history: services.hookHistory,
     sessions: services.hookSessions,
@@ -451,14 +471,15 @@ function stopOnQuit(services: Services, donePoll: NodeJS.Timeout, agentStatus: R
     services.keepAwake?.dispose();
     services.ompReceiver.stop();
     void services.hookRuntime.stop();
+    void services.fleet?.stop();
   });
 }
 
 /**
  * App startup once Electron is ready, in a fixed order: login-shell PATH, cold-launch argv scan
  * (after ready so `existsSync` sees the app-relative CWD), Windows app id, services, receivers,
- * agent status, boot rescan, window settings, IPC, Claude notifications, main window, done
- * notifier, ports fan-out, quit teardown.
+ * agent status, boot rescan, window settings, Fleet registration, IPC, Fleet startup,
+ * Claude notifications, main window, done notifier, ports fan-out, quit teardown.
  */
 async function startApp(): Promise<void> {
   await adoptLoginShellPath();
@@ -471,6 +492,7 @@ async function startApp(): Promise<void> {
   bindWindowSettings(services);
   attachKeepAwake(services);
   registerMainIpc(services);
+  await services.fleet?.start();
   installNotifications(services);
   await openMainWindow(services);
   const donePoll = startCommandDoneNotifier(services);
