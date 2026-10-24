@@ -345,7 +345,15 @@ function LocalShellTab({
     pendingLive.current = '';
     let cachedSnapshot: string | null = null;
     const snapshotPromise = api.invoke('shells:snapshot', { projectId, shellIndex })
-      .then(({ output }) => { cachedSnapshot = output; })
+      .then(({ output }) => {
+        cachedSnapshot = output;
+        // Existing output means the process already started — an idle Claude
+        // prompt emits nothing, so don't wait for live data to drop the overlay.
+        if (output && !disposed) {
+          if (startingTimerRef.current) { clearTimeout(startingTimerRef.current); startingTimerRef.current = null; }
+          setShowStarting(false);
+        }
+      })
       .catch(() => { cachedSnapshot = ''; });
 
     function writeSnapshotAndFlush() {
