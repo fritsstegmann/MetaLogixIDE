@@ -38,6 +38,7 @@ it('starts a default-off real Fleet service before opening a window and stops it
     ptyManager: { on: vi.fn() },
     hookReceiver: { onHook: vi.fn() },
     ompReceiver: { stop: vi.fn() },
+    hookRuntime: { stop: vi.fn(async () => {}) },
     dropStaging: { pruneOlderThan: async () => ({ removed: 0 }) },
   };
   const built = vi.fn(() => services);
@@ -151,6 +152,7 @@ it('starts a default-off real Fleet service before opening a window and stops it
     await vi.waitFor(() => expect(Reflect.get(fleet, 'started')).toBe(false));
     expect(stopAgent).toHaveBeenCalledOnce();
     expect(services.ompReceiver.stop).toHaveBeenCalledOnce();
+    expect(services.hookRuntime.stop).toHaveBeenCalledOnce();
     expect(clearPoll).toHaveBeenCalledWith(1);
   } finally {
     clearPoll.mockRestore();

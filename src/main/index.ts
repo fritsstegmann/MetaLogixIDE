@@ -470,6 +470,7 @@ function stopOnQuit(services: Services, donePoll: NodeJS.Timeout, agentStatus: R
     agentStatus.stop();
     services.keepAwake?.dispose();
     services.ompReceiver.stop();
+    void services.hookRuntime.stop();
     void services.fleet?.stop();
   });
 }
