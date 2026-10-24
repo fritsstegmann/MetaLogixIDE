@@ -404,6 +404,23 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // forceFirst bypasses --continue and starts a brand-new Claude session —
     // used when the saved session is corrupted (e.g. invalid thinking signature).
     const project = forceFirst ? { ...projectRow, firstLaunchedAt: null } : projectRow;
+    // Claude Code auto-resumes the active project session (writes to the same
+    // .jsonl) regardless of --continue, so forceFirst alone can't rescue a
+    // bad session. Move the existing session files aside first — they stay
+    // on disk as .pre-fresh-<ts> backups so nothing is lost.
+    if (forceFirst) {
+      const encoded = project.path.replace(/[/ ]/g, '-');
+      const sessionDir = join(s.homeDir, '.claude', 'projects', encoded);
+      if (existsSync(sessionDir)) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        for (const n of readdirSync(sessionDir)) {
+          if (n.endsWith('.jsonl')) {
+            try { renameSync(join(sessionDir, n), join(sessionDir, `${n}.pre-fresh-${ts}`)); }
+            catch { /* best-effort */ }
+          }
+        }
+      }
+    }
     // Idempotent: clicking an already-open project (or a tab the sidebar
     // thinks might not be alive) used to re-enter here and throw "already
     // spawned". Just return the index — the renderer re-attaches the stream.
@@ -592,6 +609,67 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
+  /**
+   * Repair a corrupted Claude session: find the project's session dir
+   * (`~/.claude/projects/<encoded-path>/`), locate the most recently
+   * modified .jsonl file (the one `--continue` would resume), back it up,
+   * then stream-rewrite it with every `type: "thinking"` content block
+   * removed. Fixes the "invalid signature in thinking block" API error.
+   */
+  'claude:repair-session': async (s, { projectId }) => {
+    const project = s.projects.get(projectId);
+    if (!project) throw new Error(`no project ${projectId}`);
+    // Claude encodes paths by replacing `/` and ` ` with `-`.
+    const encoded = project.path.replace(/[/ ]/g, '-');
+    const sessionDir = join(s.homeDir, '.claude', 'projects', encoded);
+    if (!existsSync(sessionDir)) {
+      return { repaired: 0, blocksStripped: 0, backup: null, reason: `no Claude session dir at ${sessionDir}` } as const;
+    }
+    const files = readdirSync(sessionDir)
+      .filter((n) => n.endsWith('.jsonl'))
+      .map((n) => ({ name: n, mtime: statSync(join(sessionDir, n)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    if (files.length === 0) {
+      return { repaired: 0, blocksStripped: 0, backup: null, reason: 'no .jsonl session files found' } as const;
+    }
+    // Repair all session files whose most-recent content is from the same
+    // day as the newest one. Claude's --continue picks the newest, but a
+    // bad message can live in any of them if the user switched sessions.
+    // We play it safe: only touch the single newest file by default.
+    const target = files[0]!;
+    const targetPath = join(sessionDir, target.name);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `${targetPath}.corrupted-${timestamp}`;
+    const raw = readFileSync(targetPath, 'utf8');
+    const lines = raw.split('\n');
+    let blocksStripped = 0;
+    const repaired = lines.map((ln) => {
+      if (!ln.trim()) return ln;
+      try {
+        const d = JSON.parse(ln);
+        const content = d?.message?.content;
+        if (Array.isArray(content)) {
+          const kept = content.filter((b: { type?: string }) => {
+            if (b?.type === 'thinking') { blocksStripped++; return false; }
+            return true;
+          });
+          if (kept.length !== content.length) {
+            d.message.content = kept;
+            return JSON.stringify(d);
+          }
+        }
+        return ln;
+      } catch {
+        // Non-JSON or malformed line — leave untouched.
+        return ln;
+      }
+    });
+    // Write backup first, THEN overwrite the original — if the backup
+    // write fails we haven't corrupted the user's data.
+    writeFileSync(backupPath, raw, 'utf8');
+    writeFileSync(targetPath, repaired.join('\n'), 'utf8');
+    return { repaired: 1, blocksStripped, backup: backupPath } as const;
+  },
   'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
   'agent-state:list': async (s) => {
