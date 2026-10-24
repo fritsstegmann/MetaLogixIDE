@@ -8,19 +8,37 @@ import type { RemoteProjectSelection } from '@renderer/components/Sidebar';
 import type { TerminalKeyEvent, TerminalKeyHandler } from '@renderer/shortcut-contract';
 
 const runtime = vi.hoisted(() => {
-  const slots: unknown[] = [];
-  const effects: Array<{ deps?: readonly unknown[]; cleanup?: () => void; run?: () => unknown }> = [];
-  let cursor = 0;
-  let effectCursor = 0;
+  type Effect = { deps?: readonly unknown[]; cleanup?: () => void; run?: () => unknown };
+  type Scope = { slots: unknown[]; effects: Effect[]; cursor: number; effectCursor: number };
+  const fresh = (): Scope => ({ slots: [], effects: [], cursor: 0, effectCursor: 0 });
+  let root = fresh();
+  const children = new Map<string, Scope>();
+  let visited = new Set<string>();
+  let scope = root;
   const changed = (a?: readonly unknown[], b?: readonly unknown[]) => !a || !b || a.length !== b.length || a.some((value, i) => !Object.is(value, b[i]));
+  const unmountScope = (target: Scope) => { for (const effect of target.effects) effect.cleanup?.(); };
   return {
-    reset() { slots.length = 0; effects.length = 0; },
+    reset() { root = fresh(); scope = root; children.clear(); },
+    /** Renders a keyed child component in its own hook scope, so it mounts, updates and unmounts like a React child. */
+    child<T>(key: string, fn: () => T): T {
+      const parent = scope;
+      const target = children.get(key) ?? fresh();
+      children.set(key, target);
+      visited.add(key);
+      target.cursor = 0;
+      target.effectCursor = 0;
+      scope = target;
+      try { return fn(); } finally { scope = parent; }
+    },
     render<T>(fn: () => T, attach: (tree: T) => void): T {
-      cursor = 0;
-      effectCursor = 0;
+      root.cursor = 0;
+      root.effectCursor = 0;
+      visited = new Set();
+      scope = root;
       const tree = fn();
       attach(tree);
-      const due = effects.filter((effect) => effect.run);
+      for (const [key, target] of [...children]) if (!visited.has(key)) { unmountScope(target); children.delete(key); }
+      const due = [...children.values(), root].flatMap((target) => target.effects.filter((effect) => effect.run));
       for (const effect of due) effect.cleanup?.();
       for (const effect of due) {
         const cleanup = effect.run?.();
@@ -29,23 +47,26 @@ const runtime = vi.hoisted(() => {
       }
       return tree;
     },
-    unmount() { for (const effect of effects) effect.cleanup?.(); },
+    unmount() { for (const target of children.values()) unmountScope(target); unmountScope(root); },
     useState<S>(initial: S | (() => S)) {
-      const index = cursor++;
+      const { slots } = scope;
+      const index = scope.cursor++;
       if (!(index in slots)) slots[index] = typeof initial === 'function' ? (initial as () => S)() : initial;
       const set = (next: S | ((value: S) => S)) => { slots[index] = typeof next === 'function' ? (next as (value: S) => S)(slots[index] as S) : next; };
       return [slots[index] as S, set] as const;
     },
-    useRef<R>(initial: R) { const index = cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index] as { current: R }; },
+    useRef<R>(initial: R) { const { slots } = scope; const index = scope.cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index] as { current: R }; },
     useCallback<F>(fn: F, deps: readonly unknown[]): F {
-      const index = cursor++;
+      const { slots } = scope;
+      const index = scope.cursor++;
       const previous = slots[index] as { fn: F; deps: readonly unknown[] } | undefined;
       if (previous && !changed(previous.deps, deps)) return previous.fn;
       slots[index] = { fn, deps };
       return fn;
     },
     useMemo<F>(fn: () => F, deps: readonly unknown[]): F {
-      const index = cursor++;
+      const { slots } = scope;
+      const index = scope.cursor++;
       const previous = slots[index] as { value: F; deps: readonly unknown[] } | undefined;
       if (previous && !changed(previous.deps, deps)) return previous.value;
       const value = fn();
@@ -53,7 +74,8 @@ const runtime = vi.hoisted(() => {
       return value;
     },
     useEffect(run: () => unknown, deps?: readonly unknown[]) {
-      const index = effectCursor++;
+      const { effects } = scope;
+      const index = scope.effectCursor++;
       const previous = effects[index];
       if (previous && !changed(previous.deps, deps)) return;
       effects[index] = { deps, cleanup: previous?.cleanup, run };
@@ -61,7 +83,8 @@ const runtime = vi.hoisted(() => {
   };
 });
 vi.mock('react', async (original) => ({ ...(await original<typeof ReactModule>()), useState: runtime.useState, useRef: runtime.useRef, useCallback: runtime.useCallback, useMemo: runtime.useMemo, useEffect: runtime.useEffect }));
-const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; disposed: boolean; cols: number; rows: number }> }));
+type OscHandler = (data: string) => boolean | Promise<boolean>;
+const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; osc: Map<number, OscHandler>; oscDisposed: number; disposed: boolean; cols: number; rows: number }> }));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {};
@@ -71,6 +94,9 @@ vi.mock('@xterm/xterm', () => ({
     writes: string[] = [];
     data: (value: string) => void = () => undefined;
     keyHandler: TerminalKeyHandler | null = null;
+    osc = new Map<number, OscHandler>();
+    oscDisposed = 0;
+    parser = { registerOscHandler: (ident: number, handler: OscHandler) => { this.osc.set(ident, handler); return { dispose: () => { this.oscDisposed++; } }; } };
     focus = vi.fn();
     paste = vi.fn((value: string) => this.data(value));
     disposed = false;
@@ -93,6 +119,8 @@ const font = vi.hoisted(() => ({ size: 13 }));
 vi.mock('@renderer/fonts/terminal-font-size-context', () => ({ useTerminalFontSize: () => ({ size: font.size }) }));
 vi.mock('@renderer/fonts/terminal-font-weight-context', () => ({ useTerminalFontWeight: () => ({ weight: 400, boldWeight: 700 }) }));
 vi.mock('@renderer/shortcut-platform', () => ({ useShortcutPlatform: () => 'other' }));
+const toast = vi.hoisted(() => vi.fn());
+vi.mock('@renderer/hooks/useToasts', () => ({ toast }));
 const invoke = vi.hoisted(() => vi.fn());
 const listeners = vi.hoisted(() => new Set<(event: FleetTerminalEvent) => void>());
 const remote = vi.hoisted(() => ({
@@ -106,6 +134,11 @@ vi.mock('@renderer/api', () => ({ api: { invoke: (channel: string, ...args: unkn
     : invoke(channel, ...args), on: vi.fn((_channel: string, listener: (event: FleetTerminalEvent) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; }) } }));
 const { RemoteTerminal } = await import('@renderer/components/RemoteTerminal');
 const { ShellTabsBar } = await import('@renderer/components/ShellTabsBar');
+const { RemoteTerminalPane } = await import('@renderer/components/RemoteTerminalPane');
+const { SplitGutter } = await import('@renderer/components/SplitGutter');
+const { SplitPaneHeader } = await import('@renderer/components/SplitPaneHeader');
+const { SPLIT_RATIO_DEFAULT } = await import('@renderer/split-ratio');
+type PaneProps = ReactModule.ComponentProps<typeof RemoteTerminalPane>;
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 const project: RemoteProjectSelection = { peerId: 'machine-b', peerName: 'Build Mac', projectId: 12, projectName: 'Service' };
 const event = (kind: FleetTerminalEvent['kind'], data: string, subscriptionId = 'sub-1'): FleetTerminalEvent => ({ peerId: 'machine-b', projectId: 12, shellIndex: 2, subscriptionId, kind, data });
@@ -132,12 +165,20 @@ function mount(initial: ExtraProps = {}) {
   const observers: Array<() => void> = [];
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { observers.push(callback); } observe() {} disconnect() {} });
   const refresh = vi.fn();
-  const draw = () => runtime.render(() => RemoteTerminal({ project, available, onRefreshAvailability: refresh, ...extra }), (tree) => {
-    const region = nodes(tree).find((node) => node.type === 'div' && (node.props as { role?: string }).role === 'region');
-    if (region && 'ref' in region) {
-      const ref: unknown = region.ref;
-      if (ref && typeof ref === 'object' && 'current' in ref) Reflect.set(ref, 'current', host);
-    }
+  const hosts = [host];
+  let panes: ReactElement[] = [];
+  const draw = () => runtime.render(() => {
+    const tree = RemoteTerminal({ project, available, onRefreshAvailability: refresh, ...extra });
+    panes = nodes(tree).filter((node) => node.type === RemoteTerminalPane)
+      .map((node) => runtime.child(`pane:${String(node.key)}`, () => RemoteTerminalPane(node.props as PaneProps)));
+    return tree;
+  }, (tree) => {
+    const regions = [tree, ...panes].flatMap(nodes).filter((node) => node.type === 'div' && (node.props as { role?: string }).role === 'region');
+    regions.forEach((region, index) => {
+      const ref: unknown = 'ref' in region ? region.ref : null;
+      hosts[index] ??= { clientWidth: 500, clientHeight: 300 };
+      if (ref && typeof ref === 'object' && 'current' in ref) Reflect.set(ref, 'current', hosts[index]);
+    });
   });
   draw();
   return {
@@ -154,6 +195,9 @@ function mount(initial: ExtraProps = {}) {
       if (!node) throw new Error(`Missing button ${label}`);
       return node.props as { disabled?: boolean; onClick: () => void };
     },
+    panes() { draw(); return panes.length; },
+    paneShells() { return nodes(draw()).filter((node) => node.type === RemoteTerminalPane).map((node) => (node.props as PaneProps).shellIndex); },
+    find<P>(type: unknown): P[] { return nodes(draw()).filter((node) => node.type === type).map((node) => node.props as P); },
     offline() { available = false; return draw(); },
     props(next: ExtraProps) { extra = { ...extra, ...next }; return draw(); },
     online() { available = true; return draw(); },
@@ -175,6 +219,7 @@ beforeEach(() => {
   remote.shells = [];
   remote.status = null;
   invoke.mockReset();
+  toast.mockReset();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
@@ -223,6 +268,17 @@ describe('RemoteTerminal', () => {
     expect(terminal.instances[0]?.writes).toEqual(['one', 'two']);
     expect(app.control('Paste').disabled).toBe(false);
     expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 80, rows: 24 });
+  });
+
+  it('buffers only its own shell while subscribing, so a busy sibling shell cannot overflow it', async () => {
+    invoke.mockImplementation((channel: string) => channel === 'fleet:subscribe' ? new Promise(() => undefined) : channel === 'fleet:launch-claude' ? Promise.resolve({ shellIndex: 2 }) : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    for (let index = 0; index < 2100; index++) app.emit({ ...event('data', 'x'), shellIndex: 3 });
+    expect(app.visible()).not.toContain('exceeded the attachment buffer');
+    for (let index = 0; index < 2100; index++) app.emit(event('data', 'x'));
+    expect(app.visible()).toContain('exceeded the attachment buffer');
   });
 
   it('unsubscribes and disables input on offline/revoke, and ignores late events', async () => {
@@ -661,5 +717,272 @@ describe('RemoteTerminal', () => {
     app.props({ focusShell: { shellIndex: 2, seq: 2 } });
     app.draw();
     expect(app.bar().active).toBe(2);
+  });
+  it('puts an OSC 52 write from the remote PTY on the local clipboard, write-only', async () => {
+    const clipboard = { readText: vi.fn(async () => 'never read'), writeText: vi.fn(async () => undefined) };
+    vi.stubGlobal('navigator', { clipboard });
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit(event('ready', ''));
+    const handler = terminal.instances[0]?.osc.get(52);
+    expect(handler).toBeDefined();
+    expect(handler?.('c;?')).toBe(true);
+    expect(handler?.('x;cmVtb3Rl')).toBe(true);
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(handler?.(`c;${Buffer.from('remote copy').toString('base64')}`)).toBe(true);
+    expect(clipboard.writeText).toHaveBeenCalledWith('remote copy');
+    await flush();
+    await flush();
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.anything());
+  });
+
+  it('shows the remote clipboard toast when an OSC 52 write fails', async () => {
+    vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(), writeText: vi.fn(() => Promise.reject(new Error('denied'))) } });
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    expect(toast).not.toHaveBeenCalled();
+    terminal.instances[0]?.osc.get(52)?.(`c;${Buffer.from('x').toString('base64')}`);
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith('Remote terminal clipboard failed', expect.objectContaining({ kind: 'error' })));
+  });
+
+  it('disposes the OSC 52 handler with its terminal', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    const instance = terminal.instances[0];
+    expect(instance?.oscDisposed).toBe(0);
+    app.offline();
+    expect(instance?.disposed).toBe(true);
+    expect(instance?.oscDisposed).toBe(1);
+  });
+});
+
+describe('RemoteTerminal split', () => {
+  const shellEvent = (shellIndex: number, kind: FleetTerminalEvent['kind'], data: string): FleetTerminalEvent => ({ peerId: 'machine-b', projectId: 12, shellIndex, subscriptionId: `sub-${shellIndex}`, kind, data });
+  let launches: Array<() => Promise<{ shellIndex: number }>>;
+  beforeEach(() => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Pi')];
+    launches = [];
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) => {
+      if (channel === 'fleet:launch') {
+        const next = launches.shift();
+        if (next) return next();
+        remote.shells = [...remote.shells, shellRow(3, 'Terminal')];
+        return Promise.resolve({ shellIndex: 3 });
+      }
+      if (channel === 'fleet:subscribe') return Promise.resolve({ subscriptionId: `sub-${request?.shellIndex}` });
+      if (channel === 'fleet:stop') remote.shells = remote.shells.filter((shell) => shell.shellIndex !== request?.shellIndex);
+      return Promise.resolve({ ok: true });
+    });
+  });
+  async function opened() {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.paneShells()).toEqual([0]);
+    app.bar().onToggleSplit?.();
+    await flush();
+    app.draw();
+    await flush();
+    app.draw();
+    return app;
+  }
+  const rightHeader = (app: ReturnType<typeof mount>) => {
+    const header = app.find<ReactModule.ComponentProps<typeof SplitPaneHeader>>(SplitPaneHeader).find((props) => props.actions);
+    if (!header?.actions) throw new Error('Missing right pane header');
+    return header.actions;
+  };
+
+  it('offers the split toggle and, when turned on, launches a plain shell shown beside the current one', async () => {
+    const app = await opened();
+    expect(invoke).toHaveBeenCalledWith('fleet:launch', { peerId: 'machine-b', projectId: 12 });
+    expect(app.bar().splitOn).toBe(true);
+    expect(app.paneShells()).toEqual([0, 3]);
+    expect(app.bar().active).toBe(0);
+    expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 3 });
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    expect(terminal.instances).toHaveLength(2);
+  });
+
+  it('keeps the right shell out of the tab strip so it is never the active left tab', async () => {
+    const app = await opened();
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([0, 2]);
+    expect(app.bar().active).not.toBe(3);
+    app.props({ focusShell: { shellIndex: 3, seq: 1 } });
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    expect(app.paneShells()).toEqual([0, 3]);
+  });
+
+  it('attaches each pane independently for output, input, resize and copy', async () => {
+    vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(async () => ''), writeText: vi.fn(async () => undefined) } });
+    const app = await opened();
+    const [left, right] = terminal.instances;
+    app.emit(shellEvent(0, 'ready', ''));
+    app.emit(shellEvent(3, 'ready', ''));
+    app.emit(shellEvent(3, 'data', 'right only'));
+    app.emit(shellEvent(0, 'data', 'left only'));
+    expect(right?.writes).toEqual(['right only']);
+    expect(left?.writes).toEqual(['left only']);
+    right?.data('ls\r');
+    left?.data('pwd\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 3, data: 'ls\r' });
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'pwd\r' });
+    expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 3, cols: 80, rows: 24 });
+    expect(right?.osc.get(52)).toBeDefined();
+    expect(right?.osc.get(52)).not.toBe(left?.osc.get(52));
+  });
+
+  it('turning the split off stops the right shell and keeps the left attachment', async () => {
+    const app = await opened();
+    const [left, right] = terminal.instances;
+    app.bar().onToggleSplit?.();
+    await flush();
+    app.draw();
+    expect(invoke).toHaveBeenCalledWith('fleet:stop', { peerId: 'machine-b', projectId: 12, shellIndex: 3 });
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', expect.objectContaining({ shellIndex: 0 }));
+    expect(right?.disposed).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-3' });
+    expect(left?.disposed).toBe(false);
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.paneShells()).toEqual([0]);
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([0, 2]);
+  });
+
+  it('the right pane close button stops its shell too', async () => {
+    const app = await opened();
+    rightHeader(app).onClose();
+    await flush();
+    app.draw();
+    expect(invoke).toHaveBeenCalledWith('fleet:stop', { peerId: 'machine-b', projectId: 12, shellIndex: 3 });
+    expect(app.bar().splitOn).toBe(false);
+  });
+
+  it('moves the right shell to its own tab without stopping it', async () => {
+    const app = await opened();
+    rightHeader(app).onToTab();
+    await flush();
+    app.draw();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', expect.anything());
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.bar().shells.map(({ shellIndex }) => shellIndex)).toEqual([0, 2, 3]);
+    expect(app.bar().active).toBe(3);
+  });
+
+  it('shows a toast and no split when the launch fails', async () => {
+    launches.push(() => Promise.reject(new Error('private launch failure')));
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onToggleSplit?.();
+    await flush();
+    app.draw();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('split'), expect.objectContaining({ kind: 'error' }));
+    expect(JSON.stringify(toast.mock.calls)).not.toContain('private launch failure');
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.paneShells()).toEqual([0]);
+    expect(app.visible()).not.toContain('Could not open');
+  });
+
+  it('launches once when the toggle is pressed again while the split is opening', async () => {
+    let finish!: (value: { shellIndex: number }) => void;
+    launches.push(() => new Promise((resolve) => { finish = resolve; }));
+    const app = mount();
+    await flush();
+    app.draw();
+    app.bar().onToggleSplit?.();
+    app.bar().onToggleSplit?.();
+    finish({ shellIndex: 3 });
+    await flush();
+    app.draw();
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:launch')).toHaveLength(1);
+    expect(app.paneShells()).toEqual([0, 3]);
+  });
+
+  it('the header Paste button pastes into the left pane only', async () => {
+    const clipboard = { readText: vi.fn(async () => 'header paste'), writeText: vi.fn(async () => undefined) };
+    vi.stubGlobal('navigator', { clipboard });
+    const app = await opened();
+    app.emit(shellEvent(0, 'ready', ''));
+    app.emit(shellEvent(3, 'ready', ''));
+    app.draw();
+    app.control('Paste').onClick();
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'header paste' }));
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.objectContaining({ shellIndex: 3 }));
+  });
+
+  it('keeps the right pane while the left tab switches', async () => {
+    const app = await opened();
+    const right = terminal.instances[1];
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    expect(app.paneShells()).toEqual([2, 3]);
+    expect(right?.disposed).toBe(false);
+    expect(terminal.instances[0]?.disposed).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-3' });
+  });
+
+  it('closes the split when the right shell exits', async () => {
+    const app = await opened();
+    app.emit(shellEvent(3, 'ready', ''));
+    app.draw();
+    expect(app.bar().splitOn).toBe(true);
+    app.emit(shellEvent(3, 'exit', '0'));
+    app.draw();
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.paneShells()).toEqual([0]);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+  });
+
+  it('closes the split when its shell is stopped elsewhere, but not before the peer first lists it', async () => {
+    let poll!: () => void;
+    vi.stubGlobal('setInterval', (callback: () => void) => { poll = callback; return 1; });
+    vi.stubGlobal('clearInterval', vi.fn());
+    const listed = remote.shells;
+    remote.status = () => Promise.resolve({ roots: [], projects: [], shells: listed });
+    const app = await opened();
+    expect(app.paneShells()).toEqual([0, 3]);
+    remote.status = null;
+    poll();
+    await flush();
+    app.draw();
+    expect(app.paneShells()).toEqual([0, 3]);
+    remote.shells = remote.shells.filter((shell) => shell.shellIndex !== 3);
+    poll();
+    await flush();
+    app.draw();
+    app.draw();
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.paneShells()).toEqual([0]);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:stop', expect.anything());
+  });
+
+  it('uses the shared gutter at the local default ratio and follows its changes', async () => {
+    const app = await opened();
+    const gutter = () => app.find<ReactModule.ComponentProps<typeof SplitGutter>>(SplitGutter)[0];
+    expect(gutter()?.ratio).toBe(SPLIT_RATIO_DEFAULT);
+    gutter()?.onRatioChange(0.3);
+    expect(gutter()?.ratio).toBe(0.3);
+  });
+
+  it('promotes the right shell to the left when the last other shell is stopped', async () => {
+    remote.shells = [shellRow(0, 'Claude')];
+    const app = await opened();
+    app.control('Stop remote shell').onClick();
+    await flush();
+    app.draw();
+    expect(app.paneShells()).toEqual([3]);
+    expect(app.bar().splitOn).toBe(false);
+    expect(app.bar().active).toBe(3);
   });
 });

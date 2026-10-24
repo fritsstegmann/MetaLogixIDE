@@ -1,37 +1,27 @@
 /** Fleet terminals share local shell chrome while PTY control stays on the linked machine. */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Terminal, type ITheme } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { Unicode11Addon } from '@xterm/addon-unicode11';
-import '@xterm/xterm/css/xterm.css';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { api } from '@renderer/api';
 import { toast } from '@renderer/hooks/useToasts';
-import { createTerminalKeyHandler } from '@renderer/terminal-keys';
-import { useShortcutPlatform } from '@renderer/shortcut-platform';
-import { buildFontFamilyStack } from '@renderer/fonts/font-family';
-import { useFontSettings } from '@renderer/fonts/font-settings-context';
-import { useTerminalFontSize } from '@renderer/fonts/terminal-font-size-context';
-import { useTerminalFontWeight } from '@renderer/fonts/terminal-font-weight-context';
-import { terminalFontWeightOptions } from '@renderer/terminal-font-weight-apply';
-import { FROST_ATTR } from '@renderer/frosted-chrome-contract';
-import { TERMINAL_FONT_FALLBACK } from '@shared/font-settings';
-import { TERMINAL_SCROLLBACK_LINES } from '@shared/terminal-scrollback';
-import type { FleetTerminalEvent } from '@shared/fleet-contract';
+import { clampRatio, SPLIT_RATIO_DEFAULT } from '@renderer/split-ratio';
+import { SPLIT_TESTIDS } from '@renderer/split-copy';
+import { shellChipLabel, stripShells } from '@renderer/shell-label';
 import type { FleetShell } from '@shared/fleet-contract';
+import { RemoteTerminalPane, type RemotePaneStatus, type RemoteTerminalPaneControl } from './RemoteTerminalPane';
 import { StatusDot } from './StatusDot';
 import { ShellTabsBar, type RemoteShellMenu, type ShellTabsBarItem } from './ShellTabsBar';
+import { SplitGutter } from './SplitGutter';
+import { SplitPaneHeader } from './SplitPaneHeader';
 import { XIcon } from './shell-icons';
 import type { RemoteProjectSelection } from './Sidebar';
 
 const BUTTON = 'h-7 rounded-md px-2 text-xs text-[--text-muted] hover:bg-[--panel-strong] hover:text-[--text] focus-visible:ring-2 focus-visible:ring-[--accent] disabled:opacity-40';
-const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 const REMOTE_LAUNCH_ERRORS = [
   'Choose a Claude permission mode on the remote machine first',
   'Claude is unavailable on the remote machine',
   'Remote shell limit reached; unpin a shell or raise the cap',
   'Remote project folder is unavailable',
 ] as const;
-const MAX_PENDING_EVENTS = 2048;
+const PANE_CARD = 'rounded-[10px] bg-[--surface-pane]';
 type Session = { kind: 'starting' } | { kind: 'connecting'; shellIndex: number } | { kind: 'running'; shellIndex: number } | { kind: 'exited'; shellIndex: number } | { kind: 'error'; message: string };
 
 /** A request to show one shell; a new `seq` asks again for the same index. */
@@ -56,35 +46,118 @@ interface Props {
   readonly onShellsChange?: (state: RemoteShellsState) => void;
 }
 
-function terminalTheme(): ITheme {
-  const css = getComputedStyle(document.documentElement);
-  const color = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+interface SplitDeps {
+  readonly peerId: string;
+  readonly peerName: string;
+  readonly projectId: number;
+  readonly available: boolean;
+  readonly shells: readonly FleetShell[];
+  readonly refreshShells: () => Promise<readonly FleetShell[] | null>;
+}
+
+/**
+ * The remote split: a plain shell launched on the peer for the right pane, the pane ratio, and the
+ * shells hidden from the tab strip while their stop is in flight. `listed` records that a status
+ * poll has shown the shell, so a later poll without it means it was stopped elsewhere and the split
+ * closes. `close` stops the shell; `release` hands it back as an ordinary tab and returns its index.
+ */
+function useRemoteSplit({ peerId, peerName, projectId, available, shells, refreshShells }: SplitDeps) {
+  const [split, setSplit] = useState<{ readonly shellIndex: number; readonly listed: boolean } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<readonly number[]>([]);
+  const [ratio, setRatio] = useState(SPLIT_RATIO_DEFAULT);
+  const [epoch, setEpoch] = useState(0);
+  const pending = useRef(false);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!split) return;
+    const listed = shells.some((shell) => shell.shellIndex === split.shellIndex);
+    if (listed && !split.listed) setSplit({ shellIndex: split.shellIndex, listed: true });
+    if (!listed && split.listed) setSplit(null);
+  }, [shells, split]);
+
+  async function open() {
+    if (!available || pending.current) return;
+    pending.current = true;
+    try {
+      const result = await api.invoke('fleet:launch', { peerId, projectId });
+      if (!alive.current) return;
+      setError(null);
+      setSplit({ shellIndex: result.shellIndex, listed: false });
+      void refreshShells().catch(() => undefined);
+    } catch {
+      if (alive.current) toast('Could not open the split shell', { kind: 'error', detail: `Check the connection to ${peerName} and retry.` });
+    } finally {
+      pending.current = false;
+    }
+  }
+
+  function close() {
+    if (!split) return;
+    const index = split.shellIndex;
+    setSplit(null);
+    setHidden((current) => [...current, index]);
+    void api.invoke('fleet:stop', { peerId, projectId, shellIndex: index })
+      .then(() => refreshShells())
+      .catch(() => {
+        if (alive.current) toast('Could not stop the split shell', { kind: 'error', detail: 'It stays open as a tab; close it there to retry.' });
+      })
+      .finally(() => {
+        if (alive.current) setHidden((current) => current.filter((item) => item !== index));
+      });
+  }
+
+  function release(): number | null {
+    setSplit(null);
+    return split?.shellIndex ?? null;
+  }
+
+  function onStatus(status: RemotePaneStatus) {
+    if (status.kind === 'exited') {
+      setSplit(null);
+      void refreshShells().catch(() => undefined);
+    } else setError(status.kind === 'error' ? status.message : null);
+  }
+
   return {
-    background: 'rgba(0,0,0,0)', foreground: color('--term-fg', '#e6edf3'),
-    cursor: color('--term-cursor', '#e6edf3'), selectionBackground: color('--term-selection', 'rgba(255,255,255,0.2)'),
-    black: color('--term-black', '#000000'), red: color('--term-red', '#cd0000'),
-    green: color('--term-green', '#00cd00'), yellow: color('--term-yellow', '#cdcd00'),
-    blue: color('--term-blue', '#0000ee'), magenta: color('--term-magenta', '#cd00cd'),
-    cyan: color('--term-cyan', '#00cdcd'), white: color('--term-white', '#e5e5e5'),
-    brightBlack: color('--term-bright-black', '#7f7f7f'), brightRed: color('--term-bright-red', '#ff0000'),
-    brightGreen: color('--term-bright-green', '#00ff00'), brightYellow: color('--term-bright-yellow', '#ffff00'),
-    brightBlue: color('--term-bright-blue', '#5c5cff'), brightMagenta: color('--term-bright-magenta', '#ff00ff'),
-    brightCyan: color('--term-bright-cyan', '#00ffff'), brightWhite: color('--term-bright-white', '#ffffff'),
+    shellIndex: split?.shellIndex ?? null, error, hidden, ratio, epoch,
+    setRatio, open, close, release, onStatus, reconnect: () => setEpoch((value) => value + 1),
   };
 }
 
-function* terminalChunks(data: string): Generator<string> {
-  const bytes = new TextEncoder().encode(data);
-  const decoder = new TextDecoder();
-  for (let start = 0; start < bytes.length;) {
-    let end = Math.min(start + 4096, bytes.length);
-    while (end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
-    yield decoder.decode(bytes.subarray(start, end));
-    start = end;
-  }
+/** Left share of the row's content box at a pointer x, as the local split computes it. */
+function ratioAt(row: HTMLElement, clientX: number): number {
+  const rect = row.getBoundingClientRect();
+  const css = getComputedStyle(row);
+  const padLeft = parseFloat(css.paddingLeft) || 0;
+  const padRight = parseFloat(css.paddingRight) || 0;
+  return clampRatio((clientX - rect.left - padLeft) / (rect.width - padLeft - padRight));
 }
 
-/** Attaches only the active remote PTY; its other shells stay alive on the peer. */
+/** Window-level pointer tracking for a gutter drag; returns the dragging flag and its starter. */
+function useDividerDrag(rowRef: RefObject<HTMLDivElement | null>, onRatioChange: (ratio: number) => void) {
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (event: MouseEvent) => { if (rowRef.current) onRatioChange(ratioAt(rowRef.current, event.clientX)); };
+    const onUp = () => setDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging, onRatioChange, rowRef]);
+  return { dragging, startDrag: () => setDragging(true) };
+}
+
+/** Attaches only the shown remote PTYs (the left tab, plus the split's right shell); other shells stay alive on the peer. */
 export function RemoteTerminal({ project, available, onRefreshAvailability, focusShell = null, onShellsChange }: Props) {
   const { peerId, peerName, projectId, projectName } = project;
   const [session, setSession] = useState<Session>({ kind: 'starting' });
@@ -93,24 +166,14 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   const [defaultCliName, setDefaultCliName] = useState<string | null>(null);
   const [attachmentEpoch, setAttachmentEpoch] = useState(0);
   const [stopping, setStopping] = useState(false);
-  const hostRef = useRef<HTMLDivElement>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const resizeRef = useRef<(() => void) | null>(null);
-  const runningRef = useRef(false);
+  const paneControl = useRef<RemoteTerminalPaneControl | null>(null);
   const generation = useRef(0);
   const statusRequest = useRef(0);
   const mounted = useRef(true);
   const focusRef = useRef(focusShell);
   focusRef.current = focusShell;
   const handledFocus = useRef<number | null>(null);
-  const platform = useShortcutPlatform();
-  const platformRef = useRef(platform);
-  platformRef.current = platform;
-  const { terminalFontFamily } = useFontSettings();
-  const { size: fontSize } = useTerminalFontSize();
-  const { weight, boldWeight } = useTerminalFontWeight();
-  const fontRef = useRef({ terminalFontFamily, fontSize, weight, boldWeight });
-  fontRef.current = { terminalFontFamily, fontSize, weight, boldWeight };
+  const rowRef = useRef<HTMLDivElement>(null);
 
   const refreshShells = useCallback(async () => {
     const request = ++statusRequest.current;
@@ -120,6 +183,11 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     setShells(projectShells);
     return projectShells;
   }, [peerId, projectId]);
+
+  const split = useRemoteSplit({ peerId, peerName, projectId, available, shells, refreshShells });
+  const splitIndexRef = useRef(split.shellIndex);
+  splitIndexRef.current = split.shellIndex;
+  const { dragging, startDrag } = useDividerDrag(rowRef, split.setRatio);
 
   const launch = useCallback(async (kind: 'claude' | 'plain' | 'cli', request?: { profileName?: string; argv?: string[]; save?: boolean }) => {
     if (!available) return;
@@ -133,7 +201,6 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           ? await api.invoke('fleet:launch', { peerId, projectId })
           : await api.invoke('fleet:launch-cli', { peerId, projectId, ...request });
       if (mounted.current && generation.current === attempt) {
-        runningRef.current = false;
         setSession({ kind: 'connecting', shellIndex: result.shellIndex });
         setAttachmentEpoch((epoch) => epoch + 1);
         setShellIndex(result.shellIndex);
@@ -163,7 +230,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           const requested = focusRef.current;
           const wanted = requested && existing.some((shell) => shell.shellIndex === requested.shellIndex) ? requested : null;
           if (wanted) handledFocus.current = wanted.seq;
-          const index = wanted?.shellIndex ?? existing.find((shell) => shell.shellIndex === 0)?.shellIndex ?? existing[0]!.shellIndex;
+          const candidates = existing.filter((shell) => shell.shellIndex !== splitIndexRef.current);
+          const index = wanted?.shellIndex ?? candidates.find((shell) => shell.shellIndex === 0)?.shellIndex ?? candidates[0]?.shellIndex ?? existing[0]!.shellIndex;
           setShellIndex(index);
           setSession({ kind: 'connecting', shellIndex: index });
         } else void launch('claude');
@@ -174,11 +242,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
       void api.invoke('fleet:profiles', { peerId, projectId }).then(({ defaultCliName }) => {
         if (active) setDefaultCliName(defaultCliName);
       }).catch(() => undefined);
-    } else {
-      runningRef.current = false;
-      setShellIndex(null);
-    }
-    return () => { active = false; currentStatusRequest.current++; mounted.current = false; currentGeneration.current++; runningRef.current = false; };
+    } else setShellIndex(null);
+    return () => { active = false; currentStatusRequest.current++; mounted.current = false; currentGeneration.current++; };
   }, [available, launch, peerId, peerName, projectId, refreshShells]);
 
   useEffect(() => {
@@ -188,175 +253,17 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   }, [available, refreshShells]);
 
   useEffect(() => {
-    if (!available || shellIndex === null || !hostRef.current) return;
-    const host = hostRef.current;
-    const font = fontRef.current;
-    const term = new Terminal({
-      scrollback: TERMINAL_SCROLLBACK_LINES, fontFamily: buildFontFamilyStack(font.terminalFontFamily, TERMINAL_FONT_FALLBACK),
-      fontSize: font.fontSize, ...terminalFontWeightOptions({ weight: font.weight, boldWeight: font.boldWeight }),
-      lineHeight: 1.25, cursorBlink: true, cursorStyle: 'bar', theme: terminalTheme(),
-      allowProposedApi: true, minimumContrastRatio: 1,
-    });
-    terminalRef.current = term;
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.loadAddon(new Unicode11Addon());
-    term.unicode.activeVersion = '11';
-    let active = true;
-    let opened = false;
-    let exited = false;
-    let subscriptionId: string | null = null;
-    let pending: FleetTerminalEvent[] = [];
-    let pendingBytes = 0;
-    let writeQueue = Promise.resolve();
-    let lastSize: { cols: number; rows: number } | null = null;
-    const detach = () => {
-      active = false;
-      runningRef.current = false;
-      if (subscriptionId) {
-        void api.invoke('fleet:unsubscribe', { peerId, subscriptionId }).catch(() => undefined);
-        subscriptionId = null;
-      }
-    };
-    const resize = () => {
-      if (!active || !opened || exited || host.clientWidth < 20 || host.clientHeight < 20) return;
-      fit.fit();
-      if (!subscriptionId || (lastSize !== null && lastSize.cols === term.cols && lastSize.rows === term.rows)) return;
-      lastSize = { cols: term.cols, rows: term.rows };
-      void api.invoke('fleet:resize', { peerId, projectId, shellIndex, cols: term.cols, rows: term.rows }).catch(() => {
-        if (active && !exited) {
-          detach();
-          setSession({ kind: 'error', message: 'Could not resize remote terminal. Check the connection and retry.' });
-        }
-      });
-    };
-    resizeRef.current = resize;
-    const applyEvent = (event: FleetTerminalEvent) => {
-      if (!active || exited || event.subscriptionId !== subscriptionId) return;
-      if (event.kind === 'snapshot' || event.kind === 'data') term.write(event.data);
-      if (event.kind === 'ready') {
-        runningRef.current = true;
-        setSession({ kind: 'running', shellIndex });
-        term.focus();
-      }
-      if (event.kind === 'exit') {
-        exited = true;
-        detach();
-        setSession({ kind: 'exited', shellIndex });
-      }
-    };
-    const off = api.on('fleet:terminal', (event) => {
-      if (!active || event.peerId !== peerId || event.projectId !== projectId || event.shellIndex !== shellIndex) return;
-      if (subscriptionId) { applyEvent(event); return; }
-      pendingBytes += event.data.length;
-      if (pendingBytes > MAX_PENDING_BYTES || pending.length >= MAX_PENDING_EVENTS) {
-        pending = [];
-        detach();
-        setSession({ kind: 'error', message: 'Remote terminal output exceeded the attachment buffer. Retry to reconnect.' });
-        return;
-      }
-      pending.push(event);
-    });
-    const dataListener = term.onData((data) => {
-      if (!active || !runningRef.current) return;
-      for (const chunk of terminalChunks(data)) {
-        writeQueue = writeQueue.then(async () => {
-          if (active && runningRef.current) await api.invoke('fleet:write', { peerId, projectId, shellIndex, data: chunk });
-        }).catch(() => {
-          if (active) {
-            detach();
-            setSession({ kind: 'error', message: 'Could not send input to the remote machine. Check the connection and retry.' });
-          }
-        });
-      }
-    });
-    term.attachCustomKeyEventHandler(createTerminalKeyHandler({
-      platform: platformRef.current,
-      hasSelection: () => term.hasSelection(),
-      getSelection: () => term.getSelection(),
-      writeClipboard: (text) => navigator.clipboard.writeText(text),
-      readClipboard: () => navigator.clipboard.readText(),
-      paste: (text) => { if (active && runningRef.current) term.paste(text); },
-      onClipboardError: () => {
-        if (active) toast('Remote terminal clipboard failed', { kind: 'error', detail: 'Check clipboard access and retry.' });
-      },
-    }));
-    const subscribe = () => {
-      void api.invoke('fleet:subscribe', { peerId, projectId, shellIndex }).then((result) => {
-        subscriptionId = result.subscriptionId;
-        if (!active) {
-          detach();
-          return;
-        }
-        resize();
-        for (const event of pending) applyEvent(event);
-        pending = [];
-        pendingBytes = 0;
-      }).catch(() => {
-        if (active) {
-          detach();
-          setSession({ kind: 'error', message: 'Could not attach remote terminal. Check the connection and retry.' });
-        }
-      });
-    };
-    let fontsReady = false;
-    const open = () => {
-      if (!active || opened || !fontsReady || host.clientWidth < 20 || host.clientHeight < 20) return;
-      term.open(host);
-      opened = true;
-      resize();
-      subscribe();
-    };
-    const observer = new ResizeObserver(() => { open(); resize(); });
-    observer.observe(host);
-    const themeObserver = new MutationObserver(() => { term.options.theme = terminalTheme(); });
-    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette', FROST_ATTR.platform, FROST_ATTR.chromeFrost, FROST_ATTR.terminalFrost] });
-    const markFontsReady = () => {
-      fontsReady = true;
-      clearTimeout(fontTimeout);
-      open();
-    };
-    const fontTimeout = setTimeout(markFontsReady, 1500);
-    if (document.fonts) void document.fonts.ready.then(markFontsReady, markFontsReady);
-    else markFontsReady();
-    return () => {
-      detach();
-      clearTimeout(fontTimeout);
-      pending = [];
-      off();
-      observer.disconnect();
-      themeObserver.disconnect();
-      dataListener.dispose();
-      term.dispose();
-      if (resizeRef.current === resize) resizeRef.current = null;
-      if (terminalRef.current === term) terminalRef.current = null;
-    };
-  }, [available, peerId, projectId, shellIndex, attachmentEpoch]);
-
-  useEffect(() => {
     if (!focusShell || handledFocus.current === focusShell.seq || !shells.some((shell) => shell.shellIndex === focusShell.shellIndex)) return;
     handledFocus.current = focusShell.seq;
-    if (focusShell.shellIndex === shellIndex) return;
-    runningRef.current = false;
+    if (focusShell.shellIndex === shellIndex || focusShell.shellIndex === split.shellIndex) return;
     setSession({ kind: 'connecting', shellIndex: focusShell.shellIndex });
     setShellIndex(focusShell.shellIndex);
-  }, [focusShell, shells, shellIndex]);
+  }, [focusShell, shells, shellIndex, split.shellIndex]);
 
   const shownShellIndex = available ? shellIndex : null;
   useEffect(() => {
     onShellsChange?.({ count: shells.length, shownShellIndex });
   }, [onShellsChange, shells.length, shownShellIndex]);
-
-  useEffect(() => {
-    const term = terminalRef.current;
-    if (!term) return;
-    term.options.fontFamily = buildFontFamilyStack(terminalFontFamily, TERMINAL_FONT_FALLBACK);
-    term.options.fontSize = fontSize;
-    const options = terminalFontWeightOptions({ weight, boldWeight });
-    term.options.fontWeight = options.fontWeight;
-    term.options.fontWeightBold = options.fontWeightBold;
-    resizeRef.current?.();
-  }, [terminalFontFamily, fontSize, weight, boldWeight]);
 
   async function stop(index = shellIndex) {
     if (index === null || !available || stopping) return;
@@ -368,10 +275,10 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
         const remaining = shells.filter((shell) => shell.shellIndex !== index);
         setShells(remaining);
         if (shellIndex === index) {
-          runningRef.current = false;
-          const next = remaining.find((shell) => shell.shellIndex === 0) ?? remaining[0];
-          setShellIndex(next?.shellIndex ?? null);
-          setSession(next ? { kind: 'connecting', shellIndex: next.shellIndex } : { kind: 'exited', shellIndex: index });
+          const others = remaining.filter((shell) => shell.shellIndex !== split.shellIndex);
+          const nextIndex = (others.find((shell) => shell.shellIndex === 0) ?? others[0])?.shellIndex ?? split.release();
+          setShellIndex(nextIndex);
+          setSession(nextIndex !== null ? { kind: 'connecting', shellIndex: nextIndex } : { kind: 'exited', shellIndex: index });
         }
       }
     } catch {
@@ -382,20 +289,29 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   }
 
   async function paste() {
-    if (!runningRef.current) return;
+    const isRunning = () => paneControl.current?.isRunning() ?? false;
+    if (!isRunning()) return;
     try {
       const text = await navigator.clipboard.readText();
-      if (runningRef.current) terminalRef.current?.paste(text);
+      paneControl.current?.paste(text);
     } catch {
-      if (runningRef.current) setSession({ kind: 'error', message: 'Could not read clipboard. Allow clipboard access and retry.' });
+      if (isRunning()) setSession({ kind: 'error', message: 'Could not read clipboard. Allow clipboard access and retry.' });
     }
+  }
+
+  function onLeftStatus(status: RemotePaneStatus, index: number) {
+    setSession(status.kind === 'error' ? status : { kind: status.kind, shellIndex: index });
   }
 
   function select(index: number) {
     if (index === shellIndex) return;
-    runningRef.current = false;
     setSession({ kind: 'connecting', shellIndex: index });
     setShellIndex(index);
+  }
+
+  function moveSplitToTab() {
+    const index = split.release();
+    if (index !== null) select(index);
   }
 
   function launchCustom(name: string, cmdLine: string, save: boolean) {
@@ -416,6 +332,10 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     },
   }), [peerId, projectId]);
 
+  const right = split.shellIndex;
+  const location = `${projectName} · ${peerName}`;
+  const dot = (index: number) => <StatusDot state={shells.find((shell) => shell.shellIndex === index)?.state ?? 'idle'} />;
+
   return (
     <section aria-label={`Remote project ${projectName} on ${peerName}`} data-testid="remote-workspace" className="flex h-full min-h-0 min-w-0 flex-col text-[--text]">
       <header className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0">
@@ -432,7 +352,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           {!available && <button type="button" className={BUTTON} onClick={onRefreshAvailability}>Refresh connection</button>}
           <button type="button" className={BUTTON} disabled={!available || session.kind === 'starting'} onClick={() => {
             if (shellIndex === null) void launch('claude');
-            else { setSession({ kind: 'connecting', shellIndex }); setAttachmentEpoch((epoch) => epoch + 1); }
+            else { setSession({ kind: 'connecting', shellIndex }); setAttachmentEpoch((epoch) => epoch + 1); split.reconnect(); }
           }}>Reconnect terminal</button>
           <button type="button" className={BUTTON} disabled={!available || session.kind !== 'running'} onClick={() => void paste()}>Paste</button>
         </div>
@@ -440,7 +360,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
       {available && (
         <ShellTabsBar
           projectId={projectId}
-          shells={shells}
+          shells={stripShells(shells, split.shellIndex, split.hidden)}
           active={shellIndex ?? -1}
           onSelect={select}
           onClose={(index) => void stop(index)}
@@ -451,6 +371,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           onLaunchProfile={(name) => void launch('cli', { profileName: name })}
           onLaunchPlainTab={() => void launch('plain')}
           onLaunchCustom={launchCustom}
+          splitOn={split.shellIndex !== null}
+          onToggleSplit={() => (split.shellIndex !== null ? split.close() : void split.open())}
         />
       )}
       {!available && <p role="alert" className="p-4 text-base text-[--danger]">{peerName} is offline or unlinked. Reconnect or relink it to resume the terminal.</p>}
@@ -459,8 +381,25 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
       {available && session.kind === 'error' && <p role="alert" className="p-4 text-base text-[--danger]">{session.message}</p>}
       {available && session.kind === 'exited' && <p role="status" className="p-4 text-base">Remote terminal ended. Choose a CLI or reconnect to start a session.</p>}
       {available && shellIndex !== null && (
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-3">
-          <div ref={hostRef} role="region" aria-label={`Terminal for ${projectName} on ${peerName}`} className="h-full w-full min-w-0 isolate" />
+        <div ref={rowRef} className={`flex min-h-0 min-w-0 flex-1 ${right !== null ? 'p-2' : ''}`}>
+          <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${right !== null ? PANE_CARD : ''}`}>
+            {right !== null && <SplitPaneHeader label={shellChipLabel(shells, shellIndex)} path={location} focused={false} dot={dot(shellIndex)} />}
+            <RemoteTerminalPane key="left" peerId={peerId} projectId={projectId} shellIndex={shellIndex} epoch={attachmentEpoch}
+              label={`Terminal for ${projectName} on ${peerName}`} onStatus={onLeftStatus} control={paneControl} />
+          </div>
+          {right !== null && (
+            <>
+              <SplitGutter ratio={split.ratio} dragging={dragging} onDragStart={startDrag} onRatioChange={split.setRatio} />
+              <section data-testid={SPLIT_TESTIDS.right} aria-label={`Split terminal ${shellChipLabel(shells, right)}`}
+                className={`flex min-h-0 min-w-0 shrink-0 grow-0 flex-col ${PANE_CARD}`} style={{ flexBasis: `${(1 - split.ratio) * 100}%` }}>
+                <SplitPaneHeader label={shellChipLabel(shells, right)} path={location} focused={false} dot={dot(right)}
+                  actions={{ onToTab: moveSplitToTab, onClose: split.close }} />
+                {split.error !== null && <p role="alert" className="px-4 py-2 text-base text-[--danger]">{split.error}</p>}
+                <RemoteTerminalPane key={`right:${right}`} peerId={peerId} projectId={projectId} shellIndex={right} epoch={split.epoch}
+                  label={`Split terminal for ${projectName} on ${peerName}`} onStatus={split.onStatus} />
+              </section>
+            </>
+          )}
         </div>
       )}
     </section>
