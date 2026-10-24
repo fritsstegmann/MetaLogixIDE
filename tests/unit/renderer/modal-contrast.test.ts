@@ -7,11 +7,12 @@
  * and the D1T parameters (lift, alpha, scrim darken factor) are parsed straight out of
  * `styles.css`, using the composite model in `helpers/modal-composite.ts` (the same model the
  * design record's contrast table was built from), so a regression in either file fails this test.
- * AC30 (macos-frosted-chrome): on macOS a modal composites over the translucent chrome (`--chrome-solid`
- * at `--chrome-glass-alpha` over a grey sweep of the black-to-white material envelope), the opaque
- * `--sheet-solid`, or the frosted Shell sheet and split card, read from `frosted-chrome.css` (Subtle) and
- * `frosted-glass-levels.css` (Medium, Strong) at every chrome level and terminal level (glass-settings
- * AC12, AC17); the same floors hold there with unchanged `--modal-*`.
+ * AC30 (macos-frosted-chrome): with frosted chrome on (macOS and Linux share one cascade) a modal
+ * composites over the translucent chrome (`--chrome-solid` at `--chrome-glass-alpha` over a grey
+ * sweep of the black-to-white material envelope), the opaque `--sheet-solid`, or the frosted Shell
+ * sheet and split card, read from `frosted-chrome.css` (Subtle) and `frosted-glass-levels.css`
+ * (Medium, Strong) at every chrome level and terminal level (glass-settings AC12, AC17); the same
+ * floors hold there with unchanged `--modal-*`.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -265,16 +266,16 @@ describe.each(CASES)('$label AC23 contrast', (c) => {
 const frostedCss = readFileSync(resolve(__dirname, '../../../src/renderer/frosted-chrome.css'), 'utf8');
 const MAC_BLOCKS: Record<string, { dark: string; light: string }> = {
   default: {
-    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\],\s*:root\[data-platform="mac"\]\[data-theme="dark"\]\s*\{/),
-    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-theme="light"\]\s*\{/),
+    dark: extractBlock(frostedCss, /:root\[data-platform\],\s*:root\[data-platform\]\[data-theme="dark"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform\]\[data-theme="light"\]\s*\{/),
   },
   catppuccin: {
-    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="catppuccin"\]\s*\{/),
-    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="catppuccin"\]\[data-theme="light"\]\s*\{/),
+    dark: extractBlock(frostedCss, /:root\[data-platform\]\[data-palette="catppuccin"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform\]\[data-palette="catppuccin"\]\[data-theme="light"\]\s*\{/),
   },
   'rose-pine': {
-    dark: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="rose-pine"\]\s*\{/),
-    light: extractBlock(frostedCss, /:root\[data-platform="mac"\]\[data-palette="rose-pine"\]\[data-theme="light"\]\s*\{/),
+    dark: extractBlock(frostedCss, /:root\[data-platform\]\[data-palette="rose-pine"\]\s*\{/),
+    light: extractBlock(frostedCss, /:root\[data-platform\]\[data-palette="rose-pine"\]\[data-theme="light"\]\s*\{/),
   },
 };
 
@@ -288,13 +289,13 @@ const escape = (s: string): string => s.replace(/[[\]().*+?^$|]/g, '\\$&');
 /** The level block for a palette block at Medium or Strong: its selector with `[data-chrome-frost]` added to each compound. */
 function levelBlock(c: Case, level: Exclude<ChromeLevel, 'subtle'>): string {
   const cf = `[data-chrome-frost="${level}"]`;
-  const mac = ':root[data-platform="mac"]';
+  const gate = ':root[data-platform]';
   const pal = c.palette === 'default' ? '' : `[data-palette="${c.palette}"]`;
   const selectors = c.dark
     ? c.palette === 'default'
-      ? [`${mac}${cf}`, `${mac}[data-theme="dark"]${cf}`]
-      : [`${mac}${pal}${cf}`]
-    : [`${mac}${pal}[data-theme="light"]${cf}`];
+      ? [`${gate}${cf}`, `${gate}[data-theme="dark"]${cf}`]
+      : [`${gate}${pal}${cf}`]
+    : [`${gate}${pal}[data-theme="light"]${cf}`];
   return extractBlock(levelsCss, new RegExp(`${selectors.map(escape).join(',\\s*')}\\s*\\{`));
 }
 

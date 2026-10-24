@@ -6,7 +6,7 @@ import {
   type FontFamilyPreference,
 } from '@shared/font-settings';
 import { api } from '@renderer/api';
-import { useShortcutPlatform } from '@renderer/shortcut-platform';
+import { useFrostPlatform } from '@renderer/frost-platform';
 import { useTheme, type ThemeMode, type ThemePalette } from '@renderer/hooks/useTheme';
 import { FrostedGlassGroup } from '@renderer/components/settings/FrostedGlassGroup';
 import {
@@ -36,7 +36,7 @@ export function GeneralPanel({
   readonly onLoadInstalledFonts: () => Promise<void>;
 }) {
   const { mode, palette, effective, setMode, setPalette } = useTheme();
-  const platform = useShortcutPlatform();
+  const frostPlatform = useFrostPlatform();
   const board = useBoardSettings();
 
   return (
@@ -48,7 +48,7 @@ export function GeneralPanel({
         onPalette={setPalette}
         onOpacity={(v) => void board.applyOpacity(v)}
       >
-        {platform === 'mac' && <FrostedGlassGroup />}
+        {frostPlatform !== null && <FrostedGlassGroup platform={frostPlatform} />}
       </AppearanceSection>
       <FontSettingsControls discovery={fontDiscovery} onLoadInstalledFonts={onLoadInstalledFonts} />
       <WorkspaceSection
@@ -151,7 +151,7 @@ export interface AppearanceSectionProps {
   readonly children?: ReactNode;
 }
 
-/** Settings > General > Appearance section: Theme, Mode, Window opacity, then `children` (the Frosted glass group on mac, D21/AC26). */
+/** Settings > General > Appearance section: Theme, Mode, Window opacity, then `children` (the Frosted glass group on mac and Linux, D21/AC26). */
 export function AppearanceSection({ theme, opacity, onMode, onPalette, onOpacity, children }: AppearanceSectionProps) {
   return (
     <SettingsSection title="Appearance">

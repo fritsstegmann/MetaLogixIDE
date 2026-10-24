@@ -11,7 +11,7 @@ import { AGENT_DOT } from '../../src/shared/agent-state';
 import { PALETTE_COPY } from '../../src/renderer/command-palette-contract';
 import type { EffectiveTheme } from '../../src/renderer/markdown/contract';
 import { commitAll, git, GIT_ENV, initRepo, porcelain } from './helpers/git-repo';
-import { badgeContrast, colourDistance, elementColour, fmtColour, isMacPlatform, resolveToken } from './helpers/chrome-colour';
+import { badgeContrast, colourDistance, elementColour, fmtColour, isFrostedChrome, resolveToken } from './helpers/chrome-colour';
 import { closeApp, guardedLaunch } from './helpers/claude-harness';
 
 /**
@@ -333,7 +333,10 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
   await expect(taskBadge).toHaveText('3');
 
   const look = await currentLook(win);
-  const mac = await isMacPlatform(win);
+  // Frosted chrome on, macOS or Linux (presence-gated cascade, shared by both;
+  // docs/specs/linux-wayland-frosted-glass.md AC21). Every frosted branch in
+  // this file is CSS-only, so none is darwin-guarded.
+  const frosted = await isFrostedChrome(win);
   try {
     for (const palette of PALETTES) {
       for (const theme of THEMES) {
@@ -396,7 +399,7 @@ test('AC1/AC3/AC10–AC13/AC15/AC25–AC28: chrome dimensions, badges and branch
         const branchColour = await elementColour(win, titleBranch(), 'color');
         const pink = await resolveToken(win, '--hue-pink', titleBranch().locator('xpath=..'));
         expect(colourDistance(branchColour, pink), `${at} branch ${fmtColour(branchColour)} is --hue-pink ${fmtColour(pink)}`).toBeLessThanOrEqual(1);
-        if (mac) {
+        if (frosted) {
           // Positive control: on mac the chrome pink is lifted away from the root (working-area) pink.
           const rootPink = await resolveToken(win, '--hue-pink');
           expect(colourDistance(pink, rootPink), `${at} control: chrome --hue-pink ${fmtColour(pink)} is lifted from root ${fmtColour(rootPink)}`).toBeGreaterThan(1);
@@ -481,7 +484,7 @@ test('AC24a: the projects, chat and git panels paint no section tint in any pale
   expect(await tints('projects'), 'positive control: an injected ::before tint is detected').toHaveLength(1);
   await win.evaluate(() => document.getElementById('e2e-tint-control')?.remove());
 
-  const mac = await isMacPlatform(win);
+  const frosted = await isFrostedChrome(win);
   /**
    * The chat panel's own `<tag>.<classPrefix> <resolved --sheet-solid>`
    * entry, in the exact shape `tints()` emits for a painted element in its
@@ -510,7 +513,7 @@ test('AC24a: the projects, chat and git panels paint no section tint in any pale
           await setLook(win, palette, theme);
           const at = `${palette}/${theme} ${view}`;
           const signedOut = view === 'chat' && (await win.locator('[data-view="chat"] > .chat-signin').count()) > 0;
-          if (mac && view === 'chat' && !signedOut) {
+          if (frosted && view === 'chat' && !signedOut) {
             // D10/AC10 (docs/specs/macos-frosted-chrome.md): on macOS the
             // signed-in chat column gets its own solid surface, painted
             // directly on the panel element itself (not a pseudo or ancestor

@@ -14,7 +14,7 @@ import {
   TEXTCONV_OUTPUT, XSS_IMG, XSS_SCRIPT, commitAll, git, porcelain, programRuns, seedConflictRepo, seedRepo,
   seedRepoProgramsRepo, stagedEntries, uniquePathCount, type ScenarioName,
 } from './helpers/git-repo';
-import { isMacPlatform } from './helpers/chrome-colour';
+import { isFrostedChrome } from './helpers/chrome-colour';
 
 /**
  * Diff tab (docs/specs/2026-10-02-1809-diff-tab.md, AC1–AC43; plan §9).
@@ -432,7 +432,10 @@ test('list: groups in order with counts, status letters in Git panel colours, b.
   }
   await win.getByTestId('ab-git').click();
   const gitView = win.locator('[data-view="git"]');
-  const mac = await isMacPlatform(win);
+  // Frosted chrome on, macOS or Linux: the lifts are pure cascade under the
+  // presence-gated `:root[data-platform]`, so the Linux branch is the mac one
+  // (docs/specs/linux-wayland-frosted-glass.md AC21).
+  const frosted = await isFrostedChrome(win);
   // On mac, each row's colour token as the Git panel resolves it (a probe
   // inside the panel inherits the chrome root's lifts through the cascade, so
   // this is the real painted value, not a literal), and the -400 hue the
@@ -445,7 +448,7 @@ test('list: groups in order with counts, status letters in Git panel colours, b.
     [RENAME_NEW]: { token: '--text-muted', tab: null },
   };
   const gitLifted: Record<string, string> = {};
-  if (mac) {
+  if (frosted) {
     for (const [path, { token }] of Object.entries(rowTokens)) {
       gitLifted[path] = await gitView.evaluate((el, t) => {
         const probe = document.createElement('span');
@@ -460,10 +463,10 @@ test('list: groups in order with counts, status letters in Git panel colours, b.
   for (const [path, colour] of Object.entries(tabColours)) {
     const letter = gitView.locator(`button[title=${JSON.stringify(`Toggle diff for ${path}`)}]`).first().locator('xpath=preceding-sibling::span[1]');
     await expect(letter, `Git panel row for ${path}`).toBeVisible();
-    const expected = mac ? gitLifted[path]! : colour;
+    const expected = frosted ? gitLifted[path]! : colour;
     expect(await letter.evaluate((el) => getComputedStyle(el).color), `${path} letter colour`).toBe(expected);
   }
-  if (mac) {
+  if (frosted) {
     for (const [path, { tab }] of Object.entries(rowTokens))
       if (tab !== null) expect(tabColours[path], `${path} Diff tab letter keeps its Tailwind -400 hue`).toBe(tab);
     // Positive control: the mac branch above is only meaningful if the lifted

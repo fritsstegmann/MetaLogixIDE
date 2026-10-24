@@ -400,14 +400,15 @@ path.
 On macOS the window sits on a native vibrancy material (`sidebar` by default),
 and the chrome lets that material show through. The working area stays solid
 unless the user sets a Terminal frost level. The user controls all of this in
-the Frosted glass settings (see "Frosted glass settings" below). Windows and
-Linux are unchanged.
+the Frosted glass settings (see "Frosted glass settings" below). Linux shares
+the same cascade (see "Linux frosted chrome" below). Windows is unchanged.
 
-**Layers.** All mac styling lives in `src/renderer/frosted-chrome.css`,
-imported after `styles.css`. Every selector starts with
-`:root[data-platform="mac"]`, so no rule can match off macOS;
-`frosted-chrome-css.test.ts` enforces this. `styles.css` is not changed by
-this layer. On macOS:
+**Layers.** All frosted styling lives in `src/renderer/frosted-chrome.css`,
+imported after `styles.css`. Every selector gates on the presence of
+`:root[data-platform]` (value `mac` or `linux`), never on its value, so no rule
+can match on Windows or with Frosted chrome off; `frosted-chrome-css.test.ts`
+enforces this. The one exception is the Linux underlay rule (see "Linux frosted
+chrome"). `styles.css` is not changed by this layer. On macOS:
 
 | Layer | Paint |
 |---|---|
@@ -488,16 +489,19 @@ Two groups are pinned in the test as known debt:
 The test fails if a pin starts to pass. ANSI colours are not tested.
 
 **Root flags.** `src/renderer/root-flags.ts` sets three attributes on `<html>`:
-`data-platform="mac"` (darwin with Frosted chrome on), `data-chrome-frost`
-(`medium` or `strong`; absent at Subtle) and `data-terminal-frost` (`subtle`,
-`medium` or `strong`; absent at Off). In every other case it removes all three.
-Only the mac stylesheets read `data-platform`, so Frosted chrome off renders
-the pre-frost stack by construction. `main.tsx` calls it before React renders,
+`data-platform` (`mac` on darwin or `linux` on Linux, with Frosted chrome on;
+the value comes from `toFrostPlatform` in `src/shared/frosted-glass.ts`),
+`data-chrome-frost` (`medium` or `strong`; absent at Subtle) and
+`data-terminal-frost` (`subtle`, `medium` or `strong`; absent at Off). In every
+other case (Windows, or Frosted chrome off) it removes all three. It also sets
+`data-transparent-window` on Linux whatever Frosted chrome says, and removes it
+elsewhere. Only the frosted stylesheets read these attributes, so Frosted
+chrome off renders the pre-frost stack by construction. `main.tsx` calls it before React renders,
 because the CSP forbids an inline script. Attribute names live in
 `src/renderer/frosted-chrome-contract.ts`.
 
 **Frosted glass settings.** Settings > General > Appearance shows a Frosted
-glass group after Window opacity, on macOS only
+glass group after Window opacity, on macOS and Linux
 (`src/renderer/components/settings/FrostedGlassGroup.tsx`, with
 `FrostLevelRow.tsx` and `MaterialRow.tsx`). It holds four
 settings, declared in `src/shared/frosted-glass.ts`:
@@ -517,19 +521,21 @@ settings, declared in `src/shared/frosted-glass.ts`:
 - `useFrostedGlassAttributes` re-reads the values in every window on
   `settings:changed`. For the first paint, main adds `frostChrome`,
   `chromeFrost` and `terminalFrost` to the renderer URL (`rendererQuery` in
-  `src/main/window-chrome.ts`). Off darwin it always sends the no-effect
-  defaults. Main reads the stored values through `readStoredFrostedGlass`,
+  `src/main/window-chrome.ts`). On Windows and unknown platforms it always sends
+  the no-effect defaults. Main reads the stored values through `readStoredFrostedGlass`,
   which falls back to the default for any value outside its list.
 - The material reaches new windows through `platformChrome(platform, material)`
   and open ones through `applyVibrancy`, which calls `setVibrancy` on every
   window that is not destroyed. Any value outside the list falls back to
-  `sidebar`. Off darwin nothing is applied.
+  `sidebar`. Off darwin nothing is applied, and the Material row is hidden on
+  Linux.
 - With Frosted chrome off, the two level controls are disabled but keep their
   values, and the material still applies.
 - `seedDefaults` migrates the legacy `frost_terminal` boolean once: `true`
   becomes Terminal frost Subtle, anything else Off. The legacy row is kept for
   downgrade and is never written again.
-- `win.setOpacity` (window opacity) multiplies on top of all of this.
+- `win.setOpacity` (window opacity) multiplies on top of all of this on macOS.
+  On Linux it has no effect.
 
 Level values live in `src/renderer/frosted-glass-levels.css`, keyed on the two
 level attributes. Chrome alphas (Subtle / Medium / Strong) are 0.85 / 0.805 /
@@ -559,6 +565,76 @@ colour, and the luminance of a composite rises with each backdrop channel. So
 the black and white composites the test already samples bound every material,
 and no per-material contrast test is needed. Whether a material visibly frosts
 is a manual check.
+
+
+### Linux frosted chrome
+
+On Linux the chrome uses the same CSS as macOS. The compositor, not the app,
+blurs what is behind the window. The app never blurs anything itself.
+
+- **Transparent window.** `platformChrome` creates every Linux window (main and
+  popout) with `transparent: true` and `backgroundColor: '#00000000'`
+  (`src/main/window-chrome.ts`). These options are constructor-only, so the
+  window is always transparent. The Frosted chrome toggle changes CSS only and
+  applies live, with no window restart.
+- **Platform resolver.** `toFrostPlatform` maps `darwin` to `mac`, `linux` to
+  `linux` and anything else to `null` (frost does not apply). Main and the
+  renderer both use it. `data-platform` carries its result.
+- **Settings.** The Frosted glass group shows Frosted chrome, Chrome frost and
+  Terminal frost. The Material row is hidden, because vibrancy is a macOS API
+  and Linux never calls `setVibrancy`. Window opacity (`setOpacity`) has no
+  effect on Linux.
+- **Frost off.** `data-transparent-window` stays set on Linux. With Frosted
+  chrome off, the rule `:root[data-transparent-window]:not([data-platform])`
+  paints an opaque `#000` underlay under `--bg`. The window stays solid, as it
+  was before Linux windows became transparent.
+- **Blur is the compositor's.** The app does not request the
+  `ext-background-effect-v1` Wayland protocol. Electron 32.3.3 (Chromium 128)
+  binds no blur protocol, and a native addon cannot reach Chromium's
+  `wl_surface`. A compositor that blurs translucent surfaces by its own policy
+  blurs the window with no help from the app. Hyprland 0.56 or later does this
+  through its `decoration:blur` settings, for a translucent surface that has no
+  blur effect object.
+- **Wayland and XWayland.** The app sets no Ozone switch. Chromium runs as a
+  native Wayland client only if the environment sets
+  `ELECTRON_OZONE_PLATFORM_HINT=wayland` (or `auto`). Without it the window runs
+  under XWayland. The window is translucent as a native Wayland client.
+  Whether the XWayland window is translucent, and whether the compositor blurs
+  it, is recorded by the manual check in the build report, not by a code path.
+- **No blur available.** On a compositor that does not blur, the translucent
+  chrome shows the desktop unblurred. The user can turn Frosted chrome off.
+
+**Hyprland example.** This is user config. The app does not ship or write it.
+Hyprland 0.55 or later reads the Lua config (`~/.config/hypr/hyprland.lua`):
+
+```lua
+hl.config({
+    decoration = {
+        blur = {
+            enabled = true,
+            size = 7,
+            passes = 4,
+        },
+    },
+})
+
+-- Optional. Only needed if another rule of yours sets no_blur, opaque
+-- or force_rgbx on this window. The window class is `metaide`.
+hl.window_rule({
+    match = { class = "^metaide$" },
+    no_blur = false,
+    opaque = false,
+})
+```
+
+Before 0.55, the hyprlang `hyprland.conf` equivalent is
+`decoration { blur { enabled = true } }`. No window rule is needed. If you have
+a rule that sets `no_blur on`, `opaque` or `force_rgbx` for
+`match:class ^(metaide)$`, remove it. Check your Hyprland version for the exact
+rule syntax. `size` and `passes` are taste, not requirements. The
+window class `metaide` was read from `hyprctl clients` on Hyprland 0.56.2 with a
+native Wayland window open. A rule that sets `no_blur`, `opaque` or
+`force_rgbx` for this class removes the blur.
 
 ### Command palette
 
