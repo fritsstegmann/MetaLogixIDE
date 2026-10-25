@@ -1,10 +1,10 @@
 /**
  * One remote terminal attachment: an xterm bound to a single shell on a linked peer. It subscribes
  * once fonts are loaded and the host has a measurable size, buffers events until the subscription
- * is acknowledged, forwards input as ordered UTF-8-safe chunks, resizes the PTY only when the
- * fitted geometry changes, routes copy/paste keys and write-only OSC 52 to the local clipboard,
- * and reports `running`, `exited` and `error` to its owner. Each pane is independent, so a split
- * shows two of them side by side.
+ * is acknowledged, and settles at the latest parsed snapshot only when the user has not scrolled
+ * away. It forwards input as ordered UTF-8-safe chunks, resizes the PTY only when geometry changes,
+ * routes copy/paste keys and write-only OSC 52 to the local clipboard, and reports status to its
+ * owner. Each split pane has an independent attachment.
  */
 import { useEffect, useRef } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
@@ -142,11 +142,17 @@ export function RemoteTerminalPane({
     let active = true;
     let opened = false;
     let exited = false;
+    let readyReceived = false;
+    let initialSettled = false;
+    let userScrolled = false;
     let subscriptionId: string | null = null;
     let pending: FleetTerminalEvent[] = [];
     let pendingBytes = 0;
     let writeQueue = Promise.resolve();
     let lastSize: { cols: number; rows: number } | null = null;
+    const scrollListener = term.onScroll((viewportY) => {
+      if (!initialSettled && viewportY < term.buffer.active.baseY) userScrolled = true;
+    });
     runningRef.current = false;
     const detach = () => {
       active = false;
@@ -180,7 +186,13 @@ export function RemoteTerminalPane({
     const applyEvent = (event: FleetTerminalEvent) => {
       if (!active || exited || event.subscriptionId !== subscriptionId) return;
       if (event.kind === 'snapshot' || event.kind === 'data') term.write(event.data);
-      if (event.kind === 'ready') {
+      if (event.kind === 'ready' && !readyReceived) {
+        readyReceived = true;
+        term.write('', () => {
+          if (!active || exited) return;
+          initialSettled = true;
+          if (!userScrolled) term.scrollToBottom();
+        });
         runningRef.current = true;
         report({ kind: 'running' });
         term.focus();
@@ -318,6 +330,7 @@ export function RemoteTerminalPane({
       observer.disconnect();
       themeObserver.disconnect();
       dataListener.dispose();
+      scrollListener.dispose();
       osc52.dispose();
       term.dispose();
       if (owner?.current === handle) owner.current = null;

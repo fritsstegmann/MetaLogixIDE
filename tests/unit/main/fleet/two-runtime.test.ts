@@ -10,6 +10,7 @@ import { FleetDiscovery } from '@main/fleet/discovery';
 import { FleetIdentityStore } from '@main/fleet/identity';
 import { FleetChannel } from '@main/fleet/channel';
 import { validateStatusPage } from '@main/fleet/protocol';
+import log from 'electron-log/main';
 
 const roots: string[] = [];
 const secrets = new Map<string, string>();
@@ -520,6 +521,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Listener unavailable');
   const slow: Socket[] = [];
+  const transitionLog = vi.spyOn(log, 'info').mockImplementation(() => {});
   try {
     for (let i = 0; i < 16; i++) {
       const socket = connectTcp(address.port, '127.0.0.1');
@@ -545,6 +547,11 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
       { timeout: 10_000 },
     );
     expect(await a.status(idB)).toEqual(remoteStatus);
+    const transitions = transitionLog.mock.calls.flat().join(' ');
+    expect(transitions).toContain('channel-closed reason=local');
+    expect(transitions).toContain('dial-connected reason=tls-verified');
+    expect(transitions).toContain(`peer=${idB}`);
+    expect(transitions).not.toContain('<terminal text>');
     const stalled = connectTcp(address.port, '127.0.0.1');
     slow.push(stalled);
     await new Promise<void>((resolve, reject) => {
@@ -555,6 +562,7 @@ it('links two distinct IDE runtimes over real TLS after local discovery; control
     await vi.waitFor(() => expect(stalled.destroyed).toBe(true), { timeout: 5_000 });
   } finally {
     for (const socket of slow) socket.destroy();
+    transitionLog.mockRestore();
   }
   await a.revoke(idB);
   await expect(a.status(idB)).rejects.toThrow();

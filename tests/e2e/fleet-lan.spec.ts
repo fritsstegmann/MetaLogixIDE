@@ -68,8 +68,9 @@ test('Fleet management returns to local project terminal on a narrow window', as
   const { app, win, cleanup } = await launch(['Local Fleet Project']);
   try {
     await app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]!.setSize(390, 844);
+      BrowserWindow.getAllWindows()[0]!.setContentSize(390, 844);
     });
+    await expect.poll(() => win.evaluate(() => window.innerWidth)).toBe(390);
     await win.getByRole('button', { name: 'Fleet', exact: true }).click();
     await expect(win.getByTestId('fleet-panel')).toBeVisible();
     await win.getByTestId('ab-projects').click();

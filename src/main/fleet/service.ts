@@ -2,8 +2,9 @@
 import type { Socket } from 'node:net';
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { connect, createServer, type Server, type TLSSocket } from 'node:tls';
+import log from 'electron-log/main';
 import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus, FleetTerminalEvent } from '../../shared/fleet-contract';
-import { FleetChannel } from './channel';
+import { FleetChannel, type FleetCloseReason } from './channel';
 import { FleetDiscovery, type Presence } from './discovery';
 import {
   FleetIdentityStore,
@@ -161,6 +162,10 @@ export class FleetService {
   private lifecycle: Promise<void> = Promise.resolve();
   private readonly lastStatus = new Map<string, FleetStatus>();
   private viewed: FleetShellRef | null = null;
+  private fleetLog(event: string, reason: string, peerId?: string): void {
+    const peer = peerId && ID.test(peerId) ? peerId : 'anonymous';
+    log.info(`[fleet] ${event} reason=${reason} peer=${peer}`);
+  }
 
   constructor(private readonly options: FleetOptions) {
     if (!options.name.trim() || Buffer.byteLength(options.name, 'utf8') > 80)
@@ -190,7 +195,7 @@ export class FleetService {
   stop(): Promise<void> {
     return this.runLifecycle(async () => {
       this.started = false;
-      await this.closeNetwork();
+      await this.closeNetwork('stop');
       this.notify();
     });
   }
@@ -273,6 +278,8 @@ export class FleetService {
         : error instanceof FleetPortInUseError
           ? error.message
           : generic;
+    this.fleetLog('network-failed', unreadable || missing ? 'credential-store' :
+      error instanceof FleetPortInUseError ? 'listen' : 'unknown');
   }
 
   private clearFailure(): void {
@@ -287,7 +294,7 @@ export class FleetService {
       const prior = this.options.getPort?.() ?? 0;
       this.options.savePort?.(port);
       if (this.server) {
-        await this.closeNetwork();
+        await this.closeNetwork('port-change');
         try {
           await this.open();
         } catch (error) {
@@ -313,7 +320,7 @@ export class FleetService {
     return this.runLifecycle(async () => {
       if (this.recovery !== 'reset-identity')
         throw new Error('Fleet identity reset is not available');
-      await this.closeNetwork();
+      await this.closeNetwork('identity-reset');
       await this.store.deleteIdentity();
       this.identity = await this.store.loadIdentity(false);
       const fresh: FleetTrust = { enabled: false, trusted: [], revoked: this.trust.revoked };
@@ -380,7 +387,9 @@ export class FleetService {
           this.notify();
           throw error;
         }
-      } else await this.closeNetwork();
+      } else await this.closeNetwork('disable');
+      this.fleetLog(enabled ? 'network-enabled' : 'network-disabled',
+        enabled ? 'enable' : 'disable');
       this.clearFailure();
       this.notify();
       return this.state();
@@ -392,7 +401,7 @@ export class FleetService {
     this.trust = safe;
     this.networkError =
       'Fleet trust unavailable. The network is closed; check fleet storage before enabling it again.';
-    await this.closeNetwork();
+    await this.closeNetwork('trust-failure');
     try {
       await this.store.save(safe);
     } catch (saveError) {
@@ -410,7 +419,8 @@ export class FleetService {
     throw error;
   }
 
-  private async closeNetwork(): Promise<void> {
+  private async closeNetwork(reason: 'stop' | 'disable' | 'port-change' | 'identity-reset' |
+    'trust-failure' | 'network-failure' = 'network-failure'): Promise<void> {
     clearInterval(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.discovery?.stop();
@@ -426,6 +436,7 @@ export class FleetService {
         });
       });
     this.presence = [];
+    if (server) this.fleetLog('network-closed', reason);
   }
 
   private networkFailed(): void {
@@ -467,6 +478,7 @@ export class FleetService {
     );
     this.guardPreAuth(server);
     server.maxConnections = 25;
+    this.fleetLog('listener-opening', 'listen');
     this.server = server;
     server.on('error', () => {
       if (this.server === server) this.networkFailed();
@@ -484,6 +496,7 @@ export class FleetService {
           resolve();
         });
       });
+      this.fleetLog('listener-ready', 'listen');
       await this.startDiscovery(server, identity);
     } catch (error) {
       await this.closeNetwork();
@@ -539,11 +552,15 @@ export class FleetService {
         this.reconnect();
       },
       () => {
-        if (this.discovery === discovery) this.networkFailed();
+        if (this.discovery === discovery) {
+          this.fleetLog('discovery-failed', 'discovery');
+          this.networkFailed();
+        }
       },
     );
     this.discovery = discovery;
     await discovery.start(address.port);
+    this.fleetLog('discovery-ready', 'discovery');
     this.reconnectTimer = setInterval(() => {
       this.reconnect();
     }, 5000);
@@ -558,7 +575,11 @@ export class FleetService {
         this.sessions.has(peer.id)
       )
         continue;
-      void this.dial(peer).catch(() => {
+      this.fleetLog('reconnect-attempt', 'scheduled', peer.id);
+      void this.dial(peer).then(() => {
+        this.fleetLog('reconnect-outcome', 'connected', peer.id);
+      }, () => {
+        this.fleetLog('reconnect-outcome', 'connect-failure', peer.id);
         this.notify();
       });
     }
@@ -610,6 +631,13 @@ export class FleetService {
     this.starting = connection;
     try {
       await connection;
+      this.fleetLog('dial-connected', 'tls-verified', peer.id);
+    } catch (error) {
+      this.fleetLog('dial-failed', error instanceof Error &&
+        error.message === 'Peer TLS identity does not match discovery' ? 'tls-mismatch' :
+          error instanceof Error && error.message === 'Fleet connection timeout' ? 'deadline' : 'connect-failure',
+      peer.id);
+      throw error;
     } finally {
       this.starting = null;
     }
@@ -649,6 +677,8 @@ export class FleetService {
       this.trust.revoked.includes(id) ||
       id === this.identity.id
     ) {
+      if (expected) this.fleetLog('dial-rejected', !id || id !== expected ? 'tls-mismatch' :
+        this.trust.revoked.includes(id) ? 'revoked' : 'self', expected);
       socket.destroy();
       return false;
     }
@@ -703,7 +733,10 @@ export class FleetService {
     };
     this.sessions.set(id, session);
     replaced?.channel.close();
-    channel.onClose(() => {
+    if (replaced) this.fleetLog('session-replaced', 'replacement', id);
+    channel.onDeadline(() => this.fleetLog('request-expired', 'deadline', id));
+    channel.onClose((reason: FleetCloseReason) => {
+      this.fleetLog('channel-closed', reason, id);
       this.clearSessionStreams(session);
       clearTimeout(session.deadline);
       if (this.sessions.get(id) === session) {
@@ -713,11 +746,12 @@ export class FleetService {
     });
     channel.onMessage((message) => {
       void this.handle(session, message).catch(() => {
-        channel.close();
+        channel.close('local');
       });
     });
     session.deadline = setTimeout(() => {
-      if (session.code || !this.trust.trusted.some((peer) => peer.id === id)) channel.close();
+      if (session.code || !this.trust.trusted.some((peer) => peer.id === id))
+        channel.close('deadline');
     }, 90_000);
     channel.send({ type: 'hello', id: session.helloId, nonce: session.localNonce });
   }
@@ -740,12 +774,12 @@ export class FleetService {
       this.trust.revoked.includes(session.id) ||
       !this.trust.enabled
     ) {
-      session.channel.close();
+      session.channel.close('local');
       return;
     }
     if (message.type === 'hello') {
       if (session.remoteNonce || message.nonce === session.localNonce) {
-        session.channel.close();
+        session.channel.close('protocol');
         return;
       }
       session.remoteNonce = message.nonce;
@@ -757,11 +791,13 @@ export class FleetService {
           session.localNonce,
           message.nonce,
         );
+      if (session.code) this.fleetLog('pairing-pending', 'two-sided-consent', session.id);
+      else this.fleetLog('peer-linked', 'trusted', session.id);
       this.notify();
       return;
     }
     if (!session.remoteNonce) {
-      session.channel.close();
+      session.channel.close('protocol');
       return;
     }
     if (message.type === 'approve') {
@@ -771,7 +807,7 @@ export class FleetService {
         message.nonce !== session.localNonce ||
         session.approvedRemote
       ) {
-        session.channel.close();
+        session.channel.close('protocol');
         return;
       }
       session.approvedRemote = true;
@@ -787,14 +823,14 @@ export class FleetService {
       return;
     }
     if (message.type !== 'request') {
-      session.channel.close();
+      session.channel.close('protocol');
       return;
     }
     if (session.pairSaving) {
       try {
         await session.pairSaving;
       } catch {
-        session.channel.close();
+        session.channel.close('local');
         return;
       }
     }
@@ -804,7 +840,7 @@ export class FleetService {
       this.trust.revoked.includes(session.id) ||
       !this.trust.trusted.some((peer) => peer.id === session.id)
     ) {
-      session.channel.close();
+      session.channel.close('protocol');
       return;
     }
     await this.dispatch(session, message);
@@ -834,13 +870,15 @@ export class FleetService {
       await session.pairSaving;
     } catch (error) {
       if (this.trust === next) this.trust = prior;
-      session.channel.close();
+      session.channel.close('local');
+      this.fleetLog('pairing-failed', 'trust-save', session.id);
       throw error;
     }
     session.pairSaving = undefined;
     if (this.trust !== next || this.sessions.get(session.id) !== session) return;
     session.code = undefined;
     clearTimeout(session.deadline);
+    this.fleetLog('pairing-approved', 'trust-saved', session.id);
     this.notify();
   }
 
@@ -981,7 +1019,7 @@ export class FleetService {
   private queueOutput(session: Session, subscription: TerminalSubscription, kind: 'data' | 'exit', data: string): void {
     if (session.incoming.get(subscription.id) !== subscription) return;
     if (subscription.pendingBytes + Buffer.byteLength(data, 'utf8') > 262_144) {
-      session.channel.close();
+      session.channel.close('pressure');
       return;
     }
     for (let offset = 0; offset < data.length;) {
@@ -1233,6 +1271,7 @@ export class FleetService {
     return this.runLifecycle(async () => {
       if (!ID.test(peerId)) throw new Error('Invalid peer identity');
       if (this.sessions.has(peerId) && !this.trust.trusted.some((peer) => peer.id === peerId)) {
+        this.fleetLog('pairing-cancelled', 'revoke', peerId);
         this.sessions.get(peerId)?.channel.close();
         this.notify();
         return;
@@ -1244,6 +1283,7 @@ export class FleetService {
         revoked: old.revoked.includes(peerId) ? old.revoked : [...old.revoked, peerId],
       };
       this.trust = next;
+      this.fleetLog('peer-unlinked', 'revoke', peerId);
       this.sessions.get(peerId)?.channel.close();
       try {
         await this.store.save(next);
@@ -1402,13 +1442,19 @@ export class FleetService {
     }
   }
 
+  private confirmAck(value: unknown): void {
+    if (value === null || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== 1 || !('ok' in value) || value.ok !== true)
+      throw new Error('Invalid peer acknowledgement');
+  }
+
   /** Stops all renderer delivery for one session-scoped remote attachment. */
   async unsubscribe(peerId: string, subscriptionId: string): Promise<void> {
     const channel = this.linked(peerId);
     const session = this.sessions.get(peerId);
     if (!session || session.channel !== channel || !/^[a-f0-9]{32}$/.test(subscriptionId) ||
       !session.outgoing.delete(subscriptionId)) throw new Error('Unknown fleet subscription');
-    await channel.request('unsubscribe', { subscriptionId });
+    this.confirmAck(await channel.request('unsubscribe', { subscriptionId }));
   }
 
   /** Resizes only an existing remote shell within terminal dimension bounds. */
@@ -1417,13 +1463,13 @@ export class FleetService {
     if (!Number.isSafeInteger(cols) || cols < 2 || cols > 500 ||
       !Number.isSafeInteger(rows) || rows < 2 || rows > 200)
       throw new Error('Invalid terminal dimensions');
-    await this.linked(peerId).request('resize', { projectId, shellIndex, cols, rows });
+    this.confirmAck(await this.linked(peerId).request('resize', { projectId, shellIndex, cols, rows }));
   }
 
   /** Stops an authorized live peer shell. */
   async stopShell(peerId: string, projectId: number, shellIndex: number): Promise<void> {
     this.validateShell(projectId, shellIndex);
-    await this.linked(peerId).request('stop', { projectId, shellIndex });
+    this.confirmAck(await this.linked(peerId).request('stop', { projectId, shellIndex }));
   }
 
   /** Sends bounded terminal input only to an authorized live peer shell. */
@@ -1431,7 +1477,7 @@ export class FleetService {
     this.validateShell(projectId, shellIndex);
     if (typeof data !== 'string' || !data || Buffer.byteLength(data) > 8192)
       throw new Error('Invalid shell input');
-    await this.linked(peerId).request('write', { projectId, shellIndex, data });
+    this.confirmAck(await this.linked(peerId).request('write', { projectId, shellIndex, data }));
   }
 
   /** Returns bounded recent output from an authorized live peer shell. */

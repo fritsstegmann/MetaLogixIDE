@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
   lstatSync,
@@ -17,6 +17,7 @@ import {
   type FleetKeychain,
 } from '@main/fleet/identity';
 import { decodeStoredSecret, encodeStoredSecret } from '@main/credential-encoding';
+import log from 'electron-log/main';
 
 const roots: string[] = [];
 function fixture() {
@@ -306,11 +307,15 @@ describe('fleet trust persistence', () => {
     const readOnly: FleetKeychain = {
       ...keychain,
       setPassword: async () => {
-        throw new Error('locked');
+        throw new Error('PRIVATE-KEY-REWRITE-FAILURE-SENTINEL');
       },
     };
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     expect(await new FleetIdentityStore(dir, readOnly).loadIdentity(true)).toEqual(identity);
     expect(values.get(account)).toBe(mangled);
+    expect(warn.mock.calls.flat().join(' ')).toContain('credential-rewrite-failed');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('PRIVATE-KEY-REWRITE-FAILURE-SENTINEL');
+    warn.mockRestore();
   });
 
   it('rejects hostile encoded or mangled content with a credential error and never rewrites it', async () => {

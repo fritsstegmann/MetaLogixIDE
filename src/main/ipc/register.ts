@@ -213,6 +213,44 @@ function needFleet(services: Services): NonNullable<Services['fleet']> {
   return services.fleet;
 }
 
+const SAFE_FLEET_ERRORS: readonly string[] = [
+  'Fleet port must be an integer between 1024 and 65535',
+  'Fleet identity reset is not available',
+  'Fleet service not started',
+  'Peer is not linked and online',
+  'Peer refused fleet operation',
+  'Peer disconnected',
+  'Fleet request timed out',
+  'Fleet channel backpressure limit',
+  'Invalid project ID',
+  'Invalid shell identity',
+  'Invalid shell input',
+  'Invalid terminal dimensions',
+  'Invalid CLI launch',
+  'Invalid peer acknowledgement',
+  'Invalid peer shell',
+  'Invalid peer output',
+  'Invalid peer subscription',
+  'Invalid peer status',
+  'Invalid peer status page',
+  'Invalid peer profiles',
+  'Invalid peer git status',
+  'No active pairing',
+  'Verification code mismatch',
+  'Peer not available for pairing',
+  'Peer not discovered',
+  'Invalid peer identity',
+];
+/** Returns only known fixed Fleet diagnostics to the renderer, not adapter or peer exception text. */
+function fleetIpcFailure(error: unknown): Error {
+  if (error instanceof Error && /^Fleet port (?:[1-9]\d{3,4}) is already in use$/.test(error.message))
+    return new Error('Fleet port is already in use');
+  if (error instanceof Error && error.message.startsWith('invalid fleet:viewing:'))
+    return new Error('invalid fleet:viewing');
+  return new Error(error instanceof Error && SAFE_FLEET_ERRORS.includes(error.message)
+    ? error.message : 'Fleet operation unavailable');
+}
+
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'dialogs:pick-directory': async (_s, _req, event) => {
     if (process.env.METAIDE_TEST_MODE === '1') {
@@ -1699,9 +1737,14 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS[channel]) continue; // wired below
     ipcMain.handle(channel, async (event, req) => {
       const fn = handlers[channel] as (s: Services, req: unknown, e?: Electron.IpcMainInvokeEvent) => Promise<unknown>;
-      const result = await fn(services, req, event);
-      for (const evt of CHANNEL_EMITS[channel] ?? []) sendEvent(evt, eventPayload(evt));
-      return result;
+      try {
+        const result = await fn(services, req, event);
+        for (const evt of CHANNEL_EMITS[channel] ?? []) sendEvent(evt, eventPayload(evt));
+        return result;
+      } catch (error) {
+        if (channel.startsWith('fleet:')) throw fleetIpcFailure(error);
+        throw error;
+      }
     });
   }
 

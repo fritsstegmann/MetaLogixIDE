@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import type { Duplex } from 'node:stream';
 import { decodeMessage, MAX_FRAME, type Operation, type WireMessage } from './protocol';
+export type FleetCloseReason = 'local' | 'unknown' | 'transport' | 'protocol' | 'pressure' | 'deadline';
 
 interface Pending {
   readonly resolve: (value: unknown) => void;
@@ -16,7 +17,8 @@ export class FleetChannel {
   private readonly decoder = new StringDecoder('utf8');
   private readonly pending = new Map<string, Pending>();
   private readonly handlers = new Set<(message: WireMessage) => void>();
-  private readonly closedHandlers = new Set<() => void>();
+  private readonly closedHandlers = new Set<(reason: FleetCloseReason) => void>();
+  private readonly deadlineHandlers = new Set<() => void>();
   private closed = false;
   private count = 0;
   private window = Date.now();
@@ -25,10 +27,10 @@ export class FleetChannel {
       this.receive(bytes);
     });
     socket.on('close', () => {
-      this.close();
+      this.close('unknown');
     });
     socket.on('error', () => {
-      this.close();
+      this.close('transport');
     });
   }
 
@@ -38,21 +40,28 @@ export class FleetChannel {
   }
 
   /** Registers transport loss notification for offline status and pending pairing expiry. */
-  onClose(listener: () => void): void {
+  onClose(listener: (reason: FleetCloseReason) => void): void {
     this.closedHandlers.add(listener);
   }
+  /** Registers a bounded request-deadline notification without exposing request data. */
+  onDeadline(listener: () => void): void {
+    this.deadlineHandlers.add(listener);
+  }
 
-  /** Sends one bounded protocol frame or closes a channel that cannot drain. */
+  /** Sends one bounded protocol frame; a transient writable stall remains buffered up to the byte budget. */
   send(message: WireMessage): void {
     if (this.closed) throw new Error('Peer disconnected');
     const data = `${JSON.stringify(message)}\n`;
-    if (
-      Buffer.byteLength(data) > MAX_FRAME ||
-      this.socket.writableLength > 65_536 ||
-      !this.socket.write(data)
-    ) {
-      this.close();
+    const size = Buffer.byteLength(data);
+    if (size > MAX_FRAME || this.socket.writableLength + size > 65_536) {
+      this.close('pressure');
       throw new Error('Fleet channel backpressure limit');
+    }
+    try {
+      this.socket.write(data);
+    } catch {
+      this.close('transport');
+      throw new Error('Peer disconnected');
     }
   }
 
@@ -64,6 +73,7 @@ export class FleetChannel {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('Fleet request timed out'));
+        for (const listener of this.deadlineHandlers) listener();
       }, 10_000);
       this.pending.set(id, { resolve, reject, timer });
       try {
@@ -78,27 +88,27 @@ export class FleetChannel {
 
   private receive(bytes: Buffer): void {
     if (this.closed || bytes.length + Buffer.byteLength(this.buffer) > MAX_FRAME * 2) {
-      this.close();
+      this.close('protocol');
       return;
     }
     this.buffer += this.decoder.write(bytes);
     while (true) {
       const end = this.buffer.indexOf('\n');
       if (end === -1) {
-        if (Buffer.byteLength(this.buffer) > MAX_FRAME) this.close();
+        if (Buffer.byteLength(this.buffer) > MAX_FRAME) this.close('protocol');
         return;
       }
       const frame = this.buffer.slice(0, end);
       this.buffer = this.buffer.slice(end + 1);
       const message = decodeMessage(frame);
       if (!message || !this.allowFrame()) {
-        this.close();
+        this.close('protocol');
         return;
       }
       if (message.type === 'response') {
         const pending = this.pending.get(message.id);
         if (!pending) {
-          this.close();
+          this.close('protocol');
           return;
         }
         this.pending.delete(message.id);
@@ -127,8 +137,8 @@ export class FleetChannel {
     return this.count <= 128;
   }
 
-  /** Disconnects immediately and rejects outstanding requests. */
-  close(): void {
+  /** Disconnects immediately with a stable local or transport reason and rejects outstanding requests. */
+  close(reason: FleetCloseReason = 'local'): void {
     if (this.closed) return;
     this.closed = true;
     this.socket.destroy();
@@ -137,6 +147,6 @@ export class FleetChannel {
       pending.reject(new Error('Peer disconnected'));
     }
     this.pending.clear();
-    for (const listener of this.closedHandlers) listener();
+    for (const listener of this.closedHandlers) listener(reason);
   }
 }

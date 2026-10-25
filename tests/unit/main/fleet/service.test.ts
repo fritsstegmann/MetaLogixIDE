@@ -11,6 +11,7 @@ import { FleetChannel } from '@main/fleet/channel';
 import { FleetDiscovery } from '@main/fleet/discovery';
 import { FleetIdentityStore, type FleetKeychain } from '@main/fleet/identity';
 import { STATUS_PAGE_SIZE } from '@main/fleet/protocol';
+import log from 'electron-log/main';
 
 const roots: string[] = [];
 const vault = new Map<string, string>();
@@ -69,6 +70,70 @@ function linkedChannel(fleet: FleetService, peerId: string): FleetChannel {
   return channel;
 }
 
+it('records correlated safe pairing and peer-close reasons without logging peer-controlled data', async () => {
+  const fleet = service('Local');
+  const peerId = 'b'.repeat(64);
+  const secret = 'PRIVATE-KEY-CODE-TERMINAL-SENTINEL';
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'identity', { id: 'a'.repeat(64), cert: secret, key: secret });
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [], revoked: [] });
+  Reflect.set(fleet, 'presence', [{ id: peerId, name: secret, host: '127.0.0.1', port: 1, seen: Date.now() }]);
+  const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+  Reflect.set(socket, 'setKeepAlive', () => socket);
+  const attach: unknown = Reflect.get(fleet, 'attachSession');
+  if (typeof attach !== 'function') throw new Error('Session attachment seam unavailable');
+  try {
+    Reflect.apply(attach, fleet, [socket, peerId, false]);
+    socket.push(`${JSON.stringify({ type: 'hello', id: 'c'.repeat(32), nonce: 'd'.repeat(64) })}\n`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('pending');
+    socket.destroy(new Error(secret));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fleet.state().peers.find((peer) => peer.id === peerId)?.status).toBe('discovered');
+    const records = [...info.mock.calls, ...warn.mock.calls].flat().join(' ');
+    expect(records).toContain('pairing-pending');
+    expect(records).toContain('transport');
+    expect(records).toContain(peerId);
+    expect(records).not.toContain(secret);
+  } finally {
+    await fleet.stop();
+    info.mockRestore();
+    warn.mockRestore();
+  }
+});
+
+it('rejects a spoofed discovery identity when the TLS certificate belongs to another peer', () => {
+  const callbacks = operations();
+  const status = vi.spyOn(callbacks, 'status');
+  const fleet = service('Local', callbacks);
+  const claimed = 'b'.repeat(64);
+  const actual = 'c'.repeat(64);
+  const logInfo = vi.spyOn(log, 'info').mockImplementation(() => {});
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'identity', { id: 'a'.repeat(64), cert: '', key: '' });
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [], revoked: [] });
+  Reflect.set(fleet, 'presence', [{ id: claimed, name: 'PRIVATE-NAME-SENTINEL',
+    host: '127.0.0.1', port: 1, seen: Date.now() }]);
+  Reflect.set(fleet, 'certificate', () => actual);
+  const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+  const accept: unknown = Reflect.get(fleet, 'accept');
+  if (typeof accept !== 'function') throw new Error('TLS acceptance seam unavailable');
+  try {
+    expect(Reflect.apply(accept, fleet, [socket, claimed])).toBe(false);
+    expect(socket.destroyed).toBe(true);
+    expect(Reflect.get(fleet, 'sessions')).toEqual(new Map());
+    expect(status).not.toHaveBeenCalled();
+    const records = logInfo.mock.calls.flat().join(' ');
+    expect(records).toContain('tls-mismatch');
+    expect(records).toContain(claimed);
+    expect(records).not.toContain('PRIVATE-NAME-SENTINEL');
+  } finally {
+    logInfo.mockRestore();
+  }
+});
+
 describe('fleet authorization', () => {
   it('rejects invalid machine identity and remote actions before fleet startup', async () => {
     expect(() => service('   ')).toThrow('Invalid fleet machine name');
@@ -113,6 +178,20 @@ describe('fleet authorization', () => {
     channel.close();
   });
 
+  it('does not report control success when a linked peer returns malformed acknowledgements', async () => {
+    const fleet = service('Local');
+    const channel = linkedChannel(fleet, 'f'.repeat(64));
+    const request = vi.spyOn(channel, 'request').mockResolvedValue({ ok: true, secret: 'PRIVATE-RESULT' });
+    try {
+      await expect(fleet.write('f'.repeat(64), 1, 0, 'echo safe')).rejects.toThrow('Invalid peer acknowledgement');
+      await expect(fleet.resize('f'.repeat(64), 1, 0, 80, 24)).rejects.toThrow('Invalid peer acknowledgement');
+      await expect(fleet.stopShell('f'.repeat(64), 1, 0)).rejects.toThrow('Invalid peer acknowledgement');
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      channel.close();
+    }
+  });
+
   it('defaults disabled and forbids unknown, revoked and offline status and shell operations', async () => {
     const fleet = service('Local');
     await fleet.start();
@@ -144,9 +223,16 @@ describe('fleet authorization', () => {
     });
     expect((await first.setEnabled(true)).enabled).toBe(true);
     unsubscribe();
-    expect((await first.setEnabled(false)).enabled).toBe(false);
-    expect(states).toEqual([true]);
-    await first.stop();
+    const diagnostics = vi.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      expect((await first.setEnabled(false)).enabled).toBe(false);
+      expect(states).toEqual([true]);
+      expect(diagnostics.mock.calls.flat().join(' ')).toContain('network-closed reason=disable');
+      expect(diagnostics.mock.calls.flat().join(' ')).toContain('network-disabled reason=disable');
+    } finally {
+      diagnostics.mockRestore();
+      await first.stop();
+    }
   });
 
   it('persists revocation and refuses future pairing with that fingerprint', async () => {
@@ -520,17 +606,24 @@ describe('fleet authorization', () => {
     const fleet = service('Local');
     await fleet.start();
     await fleet.setEnabled(true);
-    const discovery: unknown = Reflect.get(fleet, 'discovery');
-    if (!(discovery instanceof FleetDiscovery))
-      throw new Error('Multicast discovery did not start');
-    const socket: unknown = Reflect.get(discovery, 'socket');
-    if (!(socket instanceof DatagramSocket)) throw new Error('Multicast socket did not start');
-    socket.emit('error', new Error('multicast failed'));
-    await vi.waitFor(() => {
-      expect(fleet.state().error).toMatch(/network unavailable/i);
-      expect(fleet.state().peers).toEqual([]);
-    });
-    await fleet.stop();
+    const records = vi.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      const discovery: unknown = Reflect.get(fleet, 'discovery');
+      if (!(discovery instanceof FleetDiscovery))
+        throw new Error('Multicast discovery did not start');
+      const socket: unknown = Reflect.get(discovery, 'socket');
+      if (!(socket instanceof DatagramSocket)) throw new Error('Multicast socket did not start');
+      socket.emit('error', new Error('DISCOVERY-SECRET-EXCEPTION'));
+      await vi.waitFor(() => {
+        expect(fleet.state().error).toMatch(/network unavailable/i);
+        expect(fleet.state().peers).toEqual([]);
+      });
+      expect(records.mock.calls.flat().join(' ')).toContain('discovery-failed reason=discovery');
+      expect(records.mock.calls.flat().join(' ')).not.toContain('DISCOVERY-SECRET-EXCEPTION');
+    } finally {
+      records.mockRestore();
+      await fleet.stop();
+    }
   });
   it('rejects malformed and inconsistent status pages instead of returning partial lists', async () => {
     const fleet = service('Local');

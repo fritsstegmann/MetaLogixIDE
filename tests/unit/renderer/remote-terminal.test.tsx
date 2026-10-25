@@ -1,5 +1,5 @@
-/** Remote terminal tests exercise launch, ordered attachment, input, cleanup and stale events. */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+/** Remote terminal tests cover ordered asynchronous replay, viewport intent, split attachment, input, and teardown. */
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type * as ReactModule from 'react';
@@ -84,7 +84,26 @@ const runtime = vi.hoisted(() => {
 });
 vi.mock('react', async (original) => ({ ...(await original<typeof ReactModule>()), useState: runtime.useState, useRef: runtime.useRef, useCallback: runtime.useCallback, useMemo: runtime.useMemo, useEffect: runtime.useEffect }));
 type OscHandler = (data: string) => boolean | Promise<boolean>;
-const terminal = vi.hoisted(() => ({ instances: [] as Array<{ writes: string[]; data: (value: string) => void; focus: () => void; paste: (value: string) => void; keyHandler: TerminalKeyHandler | null; osc: Map<number, OscHandler>; oscDisposed: number; disposed: boolean; cols: number; rows: number }> }));
+type FakeTerminal = {
+  writes: string[];
+  parsed: string[];
+  callbacks: Array<() => void>;
+  data: (value: string) => void;
+  focus: Mock;
+  paste: (value: string) => void;
+  keyHandler: TerminalKeyHandler | null;
+  osc: Map<number, OscHandler>;
+  oscDisposed: number;
+  disposed: boolean;
+  cols: number;
+  rows: number;
+  buffer: { active: { viewportY: number; baseY: number }; alternate: { viewportY: number; baseY: number } };
+  scrollToBottom: Mock;
+  finishWrite: () => void;
+  onScroll: (listener: (viewportY: number) => void) => { dispose: () => void };
+  userScroll: (viewportY: number) => void;
+};
+const terminal = vi.hoisted(() => ({ instances: [] as FakeTerminal[] }));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {};
@@ -92,6 +111,9 @@ vi.mock('@xterm/xterm', () => ({
     rows = 24;
     unicode = { activeVersion: '' };
     writes: string[] = [];
+    parsed: string[] = [];
+    lineCount = 0;
+    callbacks: Array<() => void> = [];
     data: (value: string) => void = () => undefined;
     keyHandler: TerminalKeyHandler | null = null;
     osc = new Map<number, OscHandler>();
@@ -100,10 +122,36 @@ vi.mock('@xterm/xterm', () => ({
     focus = vi.fn();
     paste = vi.fn((value: string) => this.data(value));
     disposed = false;
-    constructor() { terminal.instances.push(this); }
+    buffer = { normal: { viewportY: 0, baseY: 0 }, alternate: { viewportY: 0, baseY: 0 }, active: { viewportY: 0, baseY: 0 } };
+    scrollListeners = new Set<(viewportY: number) => void>();
+    scrollToBottom = vi.fn(() => { this.buffer.active.viewportY = this.buffer.active.baseY; });
+    constructor() { this.buffer.active = this.buffer.normal; terminal.instances.push(this); }
     loadAddon() {}
     open() {}
-    write(value: string) { this.writes.push(value); }
+    write(value: string, callback?: () => void) {
+      if (value) this.writes.push(value);
+      this.callbacks.push(() => {
+        this.parsed.push(value);
+        for (const match of value.matchAll(/\u001b]52;([^\u0007]*)\u0007/g))
+          void this.osc.get(52)?.(match[1] ?? '');
+        if (value.includes('\u001b[?1049h')) this.buffer.active = this.buffer.alternate;
+        if (value.includes('\u001b[?1049l')) this.buffer.active = this.buffer.normal;
+        if (value.includes('\n') && this.buffer.active === this.buffer.normal) {
+          const previousBase = this.buffer.normal.baseY;
+          this.lineCount += value.split('\n').length - 1;
+          this.buffer.normal.baseY = Math.max(0, this.lineCount - this.rows);
+          if (this.buffer.normal.viewportY === previousBase)
+            this.buffer.normal.viewportY = this.buffer.normal.baseY;
+        }
+        callback?.();
+      });
+    }
+    finishWrite() { const callback = this.callbacks.shift(); if (!callback) throw new Error('No queued xterm write'); callback(); }
+    userScroll(viewportY: number) {
+      this.buffer.active.viewportY = viewportY;
+      for (const listener of this.scrollListeners) listener(viewportY);
+    }
+    onScroll(listener: (viewportY: number) => void) { this.scrollListeners.add(listener); return { dispose: () => { this.scrollListeners.delete(listener); } }; }
     hasSelection() { return false; }
     getSelection() { return ''; }
     attachCustomKeyEventHandler(handler: TerminalKeyHandler) { this.keyHandler = handler; }
@@ -268,6 +316,116 @@ describe('RemoteTerminal', () => {
     expect(terminal.instances[0]?.writes).toEqual(['one', 'two']);
     expect(app.control('Paste').disabled).toBe(false);
     expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 80, rows: 24 });
+  });
+
+  it('settles a long chunked snapshot at the newest parsed output, then leaves later output and resizing alone', async () => {
+    const subscription = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string) => channel === 'fleet:subscribe' ? subscription.promise
+      : channel === 'fleet:launch-claude' ? Promise.resolve({ shellIndex: 2 }) : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    const instance = terminal.instances[0];
+    const chunks = Array.from({ length: 30 }, (_, index) => `line ${index}\n`);
+    for (const chunk of chunks) app.emit(event('snapshot', chunk));
+    app.emit(event('ready', ''));
+    app.emit(event('data', 'queued live\n'));
+    subscription.resolve({ subscriptionId: 'sub-1' });
+    await flush();
+    expect(instance?.writes).toEqual([...chunks, 'queued live\n']);
+    expect(instance?.scrollToBottom).not.toHaveBeenCalled();
+    for (let index = 0; index < chunks.length; index++) instance?.finishWrite();
+    expect(instance?.scrollToBottom).not.toHaveBeenCalled();
+    instance?.finishWrite();
+    expect(instance?.scrollToBottom).toHaveBeenCalledOnce();
+    expect(instance?.parsed).toEqual([...chunks, '']);
+    expect(instance?.buffer.active.viewportY).toBe(instance?.buffer.active.baseY);
+    instance?.finishWrite();
+    instance?.userScroll(3);
+    app.emit(event('data', 'more output\n'));
+    instance?.finishWrite();
+    app.resizeHost(94, 30);
+    app.draw();
+    expect(instance?.buffer.active.viewportY).toBe(3);
+    expect(instance?.scrollToBottom).toHaveBeenCalledOnce();
+    expect(instance?.focus).toHaveBeenCalledOnce();
+    instance?.data('pwd\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'pwd\r' });
+  });
+
+  it('does not override a deliberate scrollback gesture before the snapshot completes', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    const instance = terminal.instances[0];
+    for (let index = 0; index < 30; index++) app.emit(event('snapshot', `line ${index}\n`));
+    app.emit(event('ready', ''));
+    for (let index = 0; index < 29; index++) instance?.finishWrite();
+    instance?.userScroll(0);
+    for (let index = 29; index < 31; index++) instance?.callbacks.shift()?.();
+    expect(instance?.buffer.active.viewportY).toBe(0);
+    expect(instance?.scrollToBottom).not.toHaveBeenCalled();
+    expect(instance?.focus).toHaveBeenCalledOnce();
+  });
+
+  it('settles explicit reattachment once and ignores old callbacks and old subscription output', async () => {
+    let nextSubscription = 0;
+    invoke.mockImplementation((channel: string) => channel === 'fleet:subscribe'
+      ? Promise.resolve({ subscriptionId: `sub-${++nextSubscription}` })
+      : channel === 'fleet:launch-claude' ? Promise.resolve({ shellIndex: 2 }) : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit(event('snapshot', 'old\n', 'sub-1'));
+    app.emit(event('ready', '', 'sub-1'));
+    const previous = terminal.instances[0];
+    app.control('Reconnect terminal').onClick();
+    app.draw();
+    await flush();
+    const current = terminal.instances[1];
+    expect(previous?.disposed).toBe(true);
+    previous?.finishWrite();
+    previous?.callbacks.shift()?.();
+    expect(previous?.scrollToBottom).not.toHaveBeenCalled();
+    app.emit(event('snapshot', 'wrong shell output\n', 'sub-1'));
+    const chunks = Array.from({ length: 31 }, (_, index) => `fresh ${index}\n`);
+    for (const chunk of chunks) app.emit(event('snapshot', chunk, 'sub-2'));
+    app.emit(event('ready', '', 'sub-2'));
+    app.emit(event('data', 'queued update\n', 'sub-2'));
+    expect(current?.writes).toEqual([...chunks, 'queued update\n']);
+    for (let index = 0; index < chunks.length; index++) current?.finishWrite();
+    expect(current?.scrollToBottom).not.toHaveBeenCalled();
+    current?.callbacks.shift()?.();
+    expect(current?.buffer.active.viewportY).toBe(current?.buffer.active.baseY);
+    expect(current?.scrollToBottom).toHaveBeenCalledOnce();
+    current?.finishWrite();
+    expect(current?.parsed).toEqual([...chunks, '', 'queued update\n']);
+    expect(current?.focus).toHaveBeenCalledOnce();
+  });
+
+  it('replays OSC 52 without allowing a clipboard read or output from a stale shell', async () => {
+    const clipboard = { readText: vi.fn(async () => 'secret'), writeText: vi.fn(async () => undefined) };
+    vi.stubGlobal('navigator', { clipboard });
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit(event('snapshot', '\u001b]52;c;?\u0007\u001b]52;x;c2VjcmV0\u0007'));
+    app.emit(event('snapshot', `\u001b]52;c;${Buffer.from('intended copy').toString('base64')}\u0007`));
+    app.emit(event('ready', ''));
+    const instance = terminal.instances[0];
+    instance?.finishWrite();
+    instance?.finishWrite();
+    instance?.callbacks.shift()?.();
+    app.emit(event('snapshot', '\u001b]52;c;c3RhbGU=\u0007', 'stale-sub'));
+    expect(clipboard.writeText).toHaveBeenCalledOnce();
+    expect(clipboard.writeText).toHaveBeenCalledWith('intended copy');
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.anything());
+    expect(instance?.writes).not.toContain('\u001b]52;c;c3RhbGU=\u0007');
   });
 
   it('buffers only its own shell while subscribing, so a busy sibling shell cannot overflow it', async () => {
@@ -840,6 +998,36 @@ describe('RemoteTerminal split', () => {
     expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 3, cols: 80, rows: 24 });
     expect(right?.osc.get(52)).toBeDefined();
     expect(right?.osc.get(52)).not.toBe(left?.osc.get(52));
+  });
+
+  it('keeps left scrollback while the right alternate screen settles after parsing', async () => {
+    const app = await opened();
+    const [left, right] = terminal.instances;
+    app.emit(shellEvent(0, 'snapshot', Array.from({ length: 32 }, (_, index) => `left ${index}\n`).join('')));
+    app.emit(shellEvent(0, 'ready', ''));
+    app.emit(shellEvent(3, 'snapshot', '\u001b[?1049h'));
+    app.emit(shellEvent(3, 'snapshot', '\u001b[Hright fullscreen'));
+    app.emit(shellEvent(3, 'ready', ''));
+    left?.finishWrite();
+    left?.userScroll(0);
+    left?.callbacks.shift()?.();
+    right?.finishWrite();
+    right?.finishWrite();
+    expect(right?.buffer.active).toBe(right?.buffer.alternate);
+    expect(right?.scrollToBottom).not.toHaveBeenCalled();
+    right?.callbacks.shift()?.();
+    expect(right?.scrollToBottom).toHaveBeenCalledOnce();
+    expect(left?.scrollToBottom).not.toHaveBeenCalled();
+    expect(left?.buffer.active.viewportY).toBe(0);
+    expect(right?.parsed).toEqual(['\u001b[?1049h', '\u001b[Hright fullscreen', '']);
+    app.emit(shellEvent(3, 'data', ' right update'));
+    right?.finishWrite();
+    app.resizeHost(90, 28);
+    expect(right?.scrollToBottom).toHaveBeenCalledOnce();
+    expect(left?.scrollToBottom).not.toHaveBeenCalled();
+    right?.data('q');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 3, data: 'q' });
   });
 
   it('turning the split off stops the right shell and keeps the left attachment', async () => {

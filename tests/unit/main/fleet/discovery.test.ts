@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FleetDiscovery } from '@main/fleet/discovery';
+import log from 'electron-log/main';
 
 const local = 'a'.repeat(64);
 const remote = 'b'.repeat(64);
@@ -41,6 +42,25 @@ describe('fleet public discovery', () => {
     discovery.expire(refreshed + 15_000);
     expect(discovery.list()).toEqual([]);
     expect(states).toEqual([1, 0]);
+  });
+
+  it('reports expired discovery hints without recording untrusted device names', () => {
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+    const discovery = new FleetDiscovery(local, 'Local', () => {});
+    const secret = 'UNTRUSTED-NAME-PRIVATE-SENTINEL';
+    try {
+      discovery.observe(Buffer.from(JSON.stringify({ v: 1, id: remote, name: secret, port: 41111 })),
+        '127.0.0.1');
+      const seen = discovery.list()[0]?.seen;
+      if (seen === undefined) throw new Error('Missing discovery hint');
+      discovery.expire(seen + 15_000);
+      expect(discovery.list()).toEqual([]);
+      const records = info.mock.calls.flat().join(' ');
+      expect(records).toContain('discovery-expired reason=discovery');
+      expect(records).not.toContain(secret);
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it('rejects malformed and secret-bearing discovery packets', () => {
