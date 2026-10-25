@@ -76,6 +76,16 @@ export interface FleetOptions {
   /** Persists a validated port chosen through setPort. */
   readonly savePort?: (port: number) => void;
 }
+type FleetRejectReason = 'network-closed' | 'tls-mismatch' | 'revoked' | 'self' |
+  'unknown-peer' | 'capacity' | 'rate-limit';
+type FleetAcceptResult = 'accepted' | 'redundant' | FleetRejectReason;
+
+class FleetPeerRejected extends Error {
+  constructor(readonly reason: FleetRejectReason) {
+    super('Fleet connection rejected');
+  }
+}
+
 interface TerminalSubscription {
   readonly id: string;
   readonly projectId: number;
@@ -578,38 +588,48 @@ export class FleetService {
       this.fleetLog('reconnect-attempt', 'scheduled', peer.id);
       void this.dial(peer).then((outcome) => {
         this.fleetLog('reconnect-outcome', outcome, peer.id);
-      }, () => {
-        this.fleetLog('reconnect-outcome', 'connect-failure', peer.id);
+      }, (error: unknown) => {
+        this.fleetLog('reconnect-outcome', this.dialFailureReason(error), peer.id);
         this.notify();
       });
     }
   }
 
-  private async dial(peer: Presence): Promise<'connected' | 'skipped'> {
-    if (!this.started || !this.trust.enabled || !this.identity || this.sessions.has(peer.id))
-      return 'skipped';
-    if (this.starting) {
-      try {
-        await this.starting;
-      } catch {
-        /* another peer's failure must not cancel this dial */
-      }
-      if (!this.started || !this.trust.enabled || !this.identity || this.sessions.has(peer.id))
-        return 'skipped';
+  private dialEligible(peer: Presence): boolean {
+    return this.started && this.trust.enabled && this.identity !== null && !this.sessions.has(peer.id);
+  }
+
+  private dialFailureReason(error: unknown): FleetRejectReason | 'deadline' | 'connect-failure' {
+    if (error instanceof FleetPeerRejected) return error.reason;
+    if (error instanceof Error && error.message === 'Fleet connection timeout') return 'deadline';
+    return 'connect-failure';
+  }
+
+  private async waitForDial(peer: Presence): Promise<boolean> {
+    try {
+      await this.starting;
+    } catch {
+      /* another peer's failure must not cancel this dial */
     }
-    const connection = this.connectPeer(peer, this.identity);
+    return this.dialEligible(peer);
+  }
+
+  private async dial(peer: Presence): Promise<'connected' | 'skipped'> {
+    if (!this.dialEligible(peer)) return 'skipped';
+    if (this.starting && !await this.waitForDial(peer)) return 'skipped';
+    const identity = this.identity;
+    if (!identity) return 'skipped';
+    const connection = this.connectPeer(peer, identity);
     this.starting = connection;
     try {
       const socket = await connection;
-      const outcome = socket && this.sessions.get(peer.id)?.channel.socket === socket
-        ? 'connected' : 'skipped';
-      if (outcome === 'connected') this.fleetLog('dial-connected', 'tls-verified', peer.id);
-      return outcome;
+      if (socket && this.sessions.get(peer.id)?.channel.socket === socket) {
+        this.fleetLog('dial-connected', 'tls-verified', peer.id);
+        return 'connected';
+      }
+      return 'skipped';
     } catch (error) {
-      this.fleetLog('dial-failed', error instanceof Error &&
-        error.message === 'Peer TLS identity does not match discovery' ? 'tls-mismatch' :
-          error instanceof Error && error.message === 'Fleet connection timeout' ? 'deadline' : 'connect-failure',
-      peer.id);
+      this.fleetLog('dial-failed', this.dialFailureReason(error), peer.id);
       throw error;
     } finally {
       if (this.starting === connection) this.starting = null;
@@ -630,11 +650,12 @@ export class FleetService {
       },
       () => {
         try {
-          if (this.accept(socket, peer.id)) {
+          const result = this.accept(socket, peer.id);
+          if (result === 'accepted' || result === 'redundant') {
             socket.setTimeout(0);
             socket.removeListener('timeout', onTimeout);
             resolve(this.sessions.get(peer.id)?.channel.socket === socket ? socket : null);
-          } else reject(new Error('Peer TLS identity does not match discovery'));
+          } else reject(new FleetPeerRejected(result));
         } catch (error) {
           socket.destroy();
           reject(error);
@@ -667,57 +688,53 @@ export class FleetService {
     return certificateIdentity(peer.raw);
   }
 
-  private accept(socket: TLSSocket, expected?: string): boolean {
-    if (!this.started || !this.trust.enabled || !this.identity) {
+  private rejectSocket(socket: TLSSocket, reason: FleetRejectReason, expected?: string): FleetRejectReason {
+    if (expected) this.fleetLog('dial-rejected', reason, expected);
+    socket.destroy();
+    return reason;
+  }
+
+  private peerRejection(id: string, expected?: string): FleetRejectReason | null {
+    if (expected && id !== expected) return 'tls-mismatch';
+    if (this.trust.revoked.includes(id)) return 'revoked';
+    if (id === this.identity?.id) return 'self';
+    if (!this.trust.trusted.some((peer) => peer.id === id) &&
+      !this.presence.some((peer) => peer.id === id)) return 'unknown-peer';
+    return null;
+  }
+
+  private acceptSession(socket: TLSSocket, id: string, expected: string | undefined,
+    identityId: string): 'accepted' | 'redundant' | 'capacity' | 'rate-limit' {
+    if (this.sessions.size >= 16 && !this.sessions.has(id)) return 'capacity';
+    if (!this.limit(socket.remoteAddress ?? id)) return 'rate-limit';
+    const outbound = expected !== undefined;
+    const existing = this.sessions.get(id);
+    const preferredOutbound = identityId < id;
+    if (existing && (existing.pairSaving ||
+      existing.outbound === preferredOutbound || outbound !== preferredOutbound)) {
       socket.destroy();
-      return false;
+      return 'redundant';
     }
+    this.attachSession(socket, id, outbound);
+    return 'accepted';
+  }
+
+  private accept(socket: TLSSocket, expected?: string): FleetAcceptResult {
+    if (!this.started || !this.trust.enabled || !this.identity)
+      return this.rejectSocket(socket, 'network-closed', expected);
     let id: string | null;
     try {
       id = this.certificate(socket);
     } catch {
       id = null;
     }
-    if (
-      !id ||
-      (expected && id !== expected) ||
-      this.trust.revoked.includes(id) ||
-      id === this.identity.id
-    ) {
-      if (expected) this.fleetLog('dial-rejected', !id || id !== expected ? 'tls-mismatch' :
-        this.trust.revoked.includes(id) ? 'revoked' : 'self', expected);
-      socket.destroy();
-      return false;
-    }
-    if (
-      !this.trust.trusted.some((peer) => peer.id === id) &&
-      !this.presence.some((peer) => peer.id === id)
-    ) {
-      socket.destroy();
-      return false;
-    }
-    if (this.sessions.size >= 16 && !this.sessions.has(id)) {
-      socket.destroy();
-      return false;
-    }
-    if (!this.limit(socket.remoteAddress ?? id)) {
-      socket.destroy();
-      return false;
-    }
-    const outbound = expected !== undefined;
-    const existing = this.sessions.get(id);
-    const preferredOutbound = this.identity.id < id;
-    if (
-      existing &&
-      (existing.pairSaving ||
-        existing.outbound === preferredOutbound ||
-        outbound !== preferredOutbound)
-    ) {
-      socket.destroy();
-      return true;
-    }
-    this.attachSession(socket, id, outbound);
-    return true;
+    if (!id) return this.rejectSocket(socket, 'tls-mismatch', expected);
+    const rejected = this.peerRejection(id, expected);
+    if (rejected) return this.rejectSocket(socket, rejected, expected);
+    const result = this.acceptSession(socket, id, expected, this.identity.id);
+    if (result === 'capacity' || result === 'rate-limit')
+      return this.rejectSocket(socket, result, expected);
+    return result;
   }
 
   private attachSession(socket: TLSSocket, id: string, outbound: boolean): void {

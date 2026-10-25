@@ -167,12 +167,14 @@ Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
 `channel-closed`, and `reconnect-outcome` to trace a connection. A
 `reconnect-outcome reason=skipped` entry means the dial was cancelled or an
 already-active session made that socket redundant; it does not report a new
-connection. `channel-closed reason=unknown` means Fleet did not identify why
-the peer closed the socket. `reason=pressure` means a bounded output or socket
-queue exceeded its limit. Logs use a validated certificate fingerprint for
-known peers and `anonymous` for events without one. They do not contain
-pairing codes, credentials, terminal output or input
-(`src/main/fleet/service.ts:165-168,569-642,716-755`,
+connection. `dial-failed reason=tls-mismatch` means certificate identity did
+not match discovery; `reason=rate-limit` means an authenticated connection
+exceeded the per-address attempt limit. `channel-closed reason=unknown` means
+Fleet did not identify why the peer closed the socket. `reason=pressure` means
+a bounded output or socket queue exceeded its limit. Logs use a validated
+certificate fingerprint for known peers and `anonymous` for events without
+one. They do not contain pairing codes, credentials, terminal output or input
+(`src/main/fleet/service.ts:175-178,579-667,686-763`,
 `src/main/fleet/channel.ts:25-34,51-65`).
 
 The active log path comes from `app:get-log-path`; `app:reveal-log-file`

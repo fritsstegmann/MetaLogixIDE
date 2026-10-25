@@ -234,7 +234,7 @@ it('correlates refused outbound connections and handshake deadlines without logg
   }
 }, 16_000);
 
-it('does not call a discarded duplicate outbound TLS socket connected', async () => {
+it('distinguishes discarded duplicate and rate-limited outbound TLS sockets', async () => {
   const fleet = service('Local');
   const info = vi.spyOn(log, 'info').mockImplementation(() => {});
   let server: TlsServer | undefined;
@@ -256,14 +256,25 @@ it('does not call a discarded duplicate outbound TLS socket connected', async ()
     Reflect.set(fleet, 'certificate', () => peerId);
     const dial: unknown = Reflect.get(fleet, 'dial');
     if (typeof dial !== 'function') throw new Error('Outbound connection seam unavailable');
-    const connection = Reflect.apply(dial, fleet, [{ id: peerId, name: 'Peer',
-      host: '127.0.0.1', port: address.port, seen: Date.now() }]) as Promise<string>;
+    const peer = { id: peerId, name: 'PRIVATE-PEER-NAME-SENTINEL',
+      host: '127.0.0.1', port: address.port, seen: Date.now() };
+    const connection = Reflect.apply(dial, fleet, [peer]) as Promise<string>;
     existing = linkedChannel(fleet, peerId);
     const session = (Reflect.get(fleet, 'sessions') as Map<string, unknown>).get(peerId);
     if (!session) throw new Error('Session unavailable');
     Reflect.set(session, 'outbound', identity.id < peerId);
     await expect(connection).resolves.toBe('skipped');
     expect(info.mock.calls.flat().join(' ')).not.toContain(`dial-connected reason=tls-verified peer=${peerId}`);
+    existing.close();
+    const sessions = Reflect.get(fleet, 'sessions') as Map<string, unknown>;
+    sessions.delete(peerId);
+    const attempts = Reflect.get(fleet, 'attempts') as Map<string, { count: number; since: number }>;
+    attempts.set('127.0.0.1', { count: 8, since: Date.now() });
+    await expect(Reflect.apply(dial, fleet, [peer]) as Promise<unknown>).rejects.toThrow();
+    const records = info.mock.calls.flat().join(' ');
+    expect(records).toContain(`dial-failed reason=rate-limit peer=${peerId}`);
+    expect(records).not.toContain(`dial-failed reason=tls-mismatch peer=${peerId}`);
+    expect(records).not.toContain(peer.name);
   } finally {
     existing?.close();
     for (const socket of sockets) socket.destroy();
@@ -293,7 +304,7 @@ it('rejects a spoofed discovery identity when the TLS certificate belongs to ano
   const accept: unknown = Reflect.get(fleet, 'accept');
   if (typeof accept !== 'function') throw new Error('TLS acceptance seam unavailable');
   try {
-    expect(Reflect.apply(accept, fleet, [socket, claimed])).toBe(false);
+    expect(Reflect.apply(accept, fleet, [socket, claimed])).toBe('tls-mismatch');
     expect(socket.destroyed).toBe(true);
     expect(Reflect.get(fleet, 'sessions')).toEqual(new Map());
     expect(status).not.toHaveBeenCalled();
@@ -952,7 +963,7 @@ describe('fleet authorization', () => {
       let approval: Promise<void> | undefined;
       let saveReleased = false;
       try {
-        expect(accept.call(fleet, first, peerId)).toBe(true);
+        expect(accept.call(fleet, first, peerId)).toBe('accepted');
         const originalSession = sessions.get(peerId);
         expect(originalSession).toBeDefined();
         expect(firstHelloId).toMatch(/^[a-f0-9]{32}$/);
