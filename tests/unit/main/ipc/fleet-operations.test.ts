@@ -13,6 +13,59 @@ import { FleetService } from '@main/fleet/service';
 import { FleetDiscovery } from '@main/fleet/discovery';
 import type { FleetKeychain } from '@main/fleet/identity';
 
+it('preserves only fixed Fleet diagnostics across registered IPC channels', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'fleet-ipc-secret-'));
+  roots.push(home);
+  const services = buildServices({ homeDir: home, dbPath: join(home, 'state.db'), migrationsDir: resolve('migrations') });
+  const channels = new Map<string, (...args: unknown[]) => unknown>();
+  registerIpc(
+    { handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
+      channels.set(channel, handler);
+    } } as IpcMain,
+    services,
+    () => {},
+  );
+  const secret = 'PRIVATE-KEY-AND-TERMINAL-INPUT-SENTINEL';
+  Reflect.set(services, 'fleet', { status: () => {
+    throw new Error(secret);
+  } });
+  try {
+    const handler = channels.get('fleet:status');
+    if (!handler) throw new Error('Fleet IPC handler missing');
+    await expect(handler({ sender: {} }, { peerId: 'a'.repeat(64) }))
+      .rejects.toThrow('Fleet operation unavailable');
+    await expect(handler({ sender: {} }, { peerId: 'a'.repeat(64) }))
+      .rejects.not.toThrow(secret);
+    Reflect.set(services, 'fleet', { setPort: () => {
+      throw new Error('Fleet port 43872 is already in use');
+    } });
+    const setPort = channels.get('fleet:set-port');
+    if (!setPort) throw new Error('Fleet port IPC handler missing');
+    await expect(setPort({ sender: {} }, { port: 43872 }))
+      .rejects.toThrow('Fleet port is already in use');
+    const launchErrors = [
+      'Choose a Claude permission mode on the remote machine first',
+      'Claude is unavailable on the remote machine',
+      'Remote shell limit reached; unpin a shell or raise the cap',
+      'Remote project folder is unavailable',
+    ];
+    let failure = new Error(launchErrors[0]);
+    Reflect.set(services, 'fleet', { launchClaude: async () => { throw failure; } });
+    const launch = channels.get('fleet:launch-claude');
+    if (!launch) throw new Error('Fleet launch IPC handler missing');
+    const request = { peerId: 'a'.repeat(64), projectId: 1 };
+    for (const message of launchErrors) {
+      failure = new Error(message);
+      await expect(launch({ sender: {} }, request)).rejects.toThrow(message);
+    }
+    failure = new Error(`Remote machine failure: ${secret}`);
+    await expect(launch({ sender: {} }, request)).rejects.toThrow('Fleet operation unavailable');
+    await expect(launch({ sender: {} }, request)).rejects.not.toThrow(secret);
+  } finally {
+    services.db.close();
+  }
+});
+
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -328,6 +381,12 @@ describe('registered Fleet IPC over two real services', () => {
         )
           throw new Error('Remote shell did not launch');
         const shellIndex = launched.shellIndex;
+        await expect(invoke('fleet:resize', { peerId: peer.id, projectId: project.id,
+          shellIndex, cols: 91, rows: 35 })).rejects.toThrow('Peer refused fleet operation');
+        await expect(invoke('fleet:write', { peerId: peer.id, projectId: project.id,
+          shellIndex, data: 'x'.repeat(8193) })).rejects.toThrow('Invalid shell input');
+        await expect(invoke('fleet:launch-cli', { peerId: peer.id, projectId: project.id,
+          argv: ['echo', 'x'.repeat(1025)] })).rejects.toThrow('Invalid CLI launch');
         const attached = await invoke('fleet:subscribe', { peerId: peer.id, projectId: project.id, shellIndex });
         if (!attached || typeof attached !== 'object' || !('subscriptionId' in attached) ||
           typeof attached.subscriptionId !== 'string') throw new Error('No remote subscription');
@@ -361,6 +420,8 @@ describe('registered Fleet IPC over two real services', () => {
             kind: 'data', data: expect.stringContaining('FLEET_IPC_READY') })));
         await invoke('fleet:unsubscribe', { peerId: peer.id, subscriptionId: attached.subscriptionId });
         expect(remote.state().controls).toEqual([]);
+        await expect(invoke('fleet:resize', { peerId: peer.id, projectId: project.id,
+          shellIndex, cols: 91, rows: 35 })).rejects.toThrow('Peer refused fleet operation');
         await invokeRemote('shells:resize', { projectId: project.id, shellIndex, cols: 77, rows: 23 });
         expect(resize).toHaveBeenCalledWith(project.id, shellIndex, 77, 23);
         await invoke('fleet:stop', { peerId: peer.id, projectId: project.id, shellIndex });

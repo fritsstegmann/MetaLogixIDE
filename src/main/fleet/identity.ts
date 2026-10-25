@@ -260,11 +260,8 @@ export class FleetIdentityStore {
     try {
       await vault.setPassword(SERVICE, account, serializeCredential(identity.cert, identity.key));
       log.info('[fleet] rewrote legacy identity in the encoded credential form');
-    } catch (error) {
-      log.warn(
-        '[fleet] could not rewrite legacy identity; keeping it and retrying on next load:',
-        error instanceof Error ? error.message : String(error),
-      );
+    } catch {
+      log.warn('[fleet] credential-rewrite-failed reason=credential-store peer=anonymous');
     }
   }
 

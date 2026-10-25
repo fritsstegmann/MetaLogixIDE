@@ -1,5 +1,6 @@
 /** Opt-in multicast presence with a strict public-only beacon and expiry. */
 import { createSocket, type Socket, type RemoteInfo } from 'node:dgram';
+import log from 'electron-log/main';
 import { networkInterfaces } from 'node:os';
 import { decodeBeacon, type Beacon } from './protocol';
 
@@ -114,6 +115,7 @@ export class FleetDiscovery {
       this.peers.delete(id);
       changed = true;
     }
+    if (changed) log.info('[fleet] discovery-expired reason=discovery peer=anonymous');
     if (changed) this.onChange(this.list());
   }
 

@@ -147,6 +147,46 @@ attachments in each direction per connection. An initial screen over 4 MiB
 ends that attachment; live output exceeding its buffer closes the peer
 connection rather than returning a partial terminal state
 (`src/main/fleet/channel.ts`, `protocol.ts`, `service.ts`).
+`FleetChannel.send` accepts a temporary socket write stall. Node buffers that
+write and delivers it when the socket drains. Before each write, Fleet checks
+the 16 KiB frame limit and a 65,536-byte socket write budget. Fleet closes a
+channel when the next frame would exceed that budget. It also closes a channel
+when pending live output for one subscription exceeds 262,144 bytes. Neither
+limit permits partial terminal replay (`src/main/fleet/channel.ts:51-65`,
+`src/main/fleet/service.ts:1019-1024`).
+
+When a remote terminal first attaches or explicitly reattaches, its xterm
+shows the latest output after snapshot parsing completes. If the user scrolls
+up before that point, the attachment keeps the user's position. Later data
+and resizing do not force the viewport to the bottom
+(`src/renderer/components/RemoteTerminalPane.tsx:145-155,186-199`).
+
+Fleet writes connection transitions to the existing application `main.log`.
+Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
+`listener-ready`, `discovery-ready`, `dial-failed`, `pairing-approved`,
+`channel-closed`, and `reconnect-outcome` to trace a connection. A
+`reconnect-outcome reason=skipped` entry means the dial was cancelled or an
+already-active session made that socket redundant; it does not report a new
+connection. `dial-failed reason=tls-mismatch` means certificate identity did
+not match discovery; `reason=rate-limit` means an authenticated connection
+exceeded the per-address attempt limit. `channel-closed reason=unknown` means
+Fleet did not identify why the peer closed the socket. `reason=pressure` means
+a bounded output or socket queue exceeded its limit. Logs use a validated
+certificate fingerprint for known peers and `anonymous` for events without
+one. They do not contain pairing codes, credentials, terminal output or input
+(`src/main/fleet/service.ts:175-178,579-667,686-763`,
+`src/main/fleet/channel.ts:25-34,51-65`).
+
+The active log path comes from `app:get-log-path`; `app:reveal-log-file`
+opens its folder. The crash screen also has a **reveal log file** button
+(`src/main/ipc/register.ts:959-963`,
+`src/renderer/components/ErrorBoundary.tsx:66-74`). Default locations are
+`~/Library/Logs/<app name>/main.log` on macOS,
+`~/.config/<app name>/logs/main.log` on Linux, and
+`%USERPROFILE%\AppData\Roaming\<app name>\logs\main.log` on Windows.
+Use the resolved application path rather than assuming a default
+(`src/main/index.ts:34-45`).
+
 If credentials or multicast fail on restart, the rest of the app opens and
 the Fleet panel shows an error. Disable and re-enable Fleet after fixing
 the network or credential store (`src/main/fleet/service.ts`).
