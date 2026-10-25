@@ -13,7 +13,7 @@ import { FleetService } from '@main/fleet/service';
 import { FleetDiscovery } from '@main/fleet/discovery';
 import type { FleetKeychain } from '@main/fleet/identity';
 
-it('never forwards an unexpected Fleet failure or its secret cause through IPC', async () => {
+it('preserves only fixed Fleet diagnostics across registered IPC channels', async () => {
   const home = mkdtempSync(join(tmpdir(), 'fleet-ipc-secret-'));
   roots.push(home);
   const services = buildServices({ homeDir: home, dbPath: join(home, 'state.db'), migrationsDir: resolve('migrations') });
@@ -43,6 +43,24 @@ it('never forwards an unexpected Fleet failure or its secret cause through IPC',
     if (!setPort) throw new Error('Fleet port IPC handler missing');
     await expect(setPort({ sender: {} }, { port: 43872 }))
       .rejects.toThrow('Fleet port is already in use');
+    const launchErrors = [
+      'Choose a Claude permission mode on the remote machine first',
+      'Claude is unavailable on the remote machine',
+      'Remote shell limit reached; unpin a shell or raise the cap',
+      'Remote project folder is unavailable',
+    ];
+    let failure = new Error(launchErrors[0]);
+    Reflect.set(services, 'fleet', { launchClaude: async () => { throw failure; } });
+    const launch = channels.get('fleet:launch-claude');
+    if (!launch) throw new Error('Fleet launch IPC handler missing');
+    const request = { peerId: 'a'.repeat(64), projectId: 1 };
+    for (const message of launchErrors) {
+      failure = new Error(message);
+      await expect(launch({ sender: {} }, request)).rejects.toThrow(message);
+    }
+    failure = new Error(`Remote machine failure: ${secret}`);
+    await expect(launch({ sender: {} }, request)).rejects.toThrow('Fleet operation unavailable');
+    await expect(launch({ sender: {} }, request)).rejects.not.toThrow(secret);
   } finally {
     services.db.close();
   }
