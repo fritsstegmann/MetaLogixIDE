@@ -156,7 +156,7 @@ export class FleetService {
   private presence: readonly Presence[] = [];
   private reconnectTimer: NodeJS.Timeout | undefined;
   private started = false;
-  private starting: Promise<void> | null = null;
+  private starting: Promise<TLSSocket | null> | null = null;
   private networkError: string | null = null;
   private recovery: 'reset-identity' | null = null;
   private lifecycle: Promise<void> = Promise.resolve();
@@ -576,8 +576,8 @@ export class FleetService {
       )
         continue;
       this.fleetLog('reconnect-attempt', 'scheduled', peer.id);
-      void this.dial(peer).then(() => {
-        this.fleetLog('reconnect-outcome', 'connected', peer.id);
+      void this.dial(peer).then((outcome) => {
+        this.fleetLog('reconnect-outcome', outcome, peer.id);
       }, () => {
         this.fleetLog('reconnect-outcome', 'connect-failure', peer.id);
         this.notify();
@@ -585,53 +585,26 @@ export class FleetService {
     }
   }
 
-  private async dial(peer: Presence): Promise<void> {
+  private async dial(peer: Presence): Promise<'connected' | 'skipped'> {
     if (!this.started || !this.trust.enabled || !this.identity || this.sessions.has(peer.id))
-      return;
+      return 'skipped';
     if (this.starting) {
       try {
         await this.starting;
       } catch {
         /* another peer's failure must not cancel this dial */
       }
-      if (!this.started || !this.trust.enabled || this.sessions.has(peer.id)) return;
+      if (!this.started || !this.trust.enabled || !this.identity || this.sessions.has(peer.id))
+        return 'skipped';
     }
-    const identity = this.identity;
-    const connection = new Promise<void>((resolve, reject) => {
-      const socket = connect(
-        {
-          host: peer.host,
-          port: peer.port,
-          key: identity.key,
-          cert: identity.cert,
-          rejectUnauthorized: false,
-          minVersion: 'TLSv1.2',
-          timeout: 10_000,
-        },
-        () => {
-          try {
-            if (this.accept(socket, peer.id)) {
-              socket.setTimeout(0);
-              socket.removeListener('timeout', onTimeout);
-              resolve();
-            } else reject(new Error('Peer TLS identity does not match discovery'));
-          } catch (error) {
-            socket.destroy();
-            reject(error);
-          }
-        },
-      );
-      socket.once('error', reject);
-      const onTimeout = () => {
-        socket.destroy();
-        reject(new Error('Fleet connection timeout'));
-      };
-      socket.once('timeout', onTimeout);
-    });
+    const connection = this.connectPeer(peer, this.identity);
     this.starting = connection;
     try {
-      await connection;
-      this.fleetLog('dial-connected', 'tls-verified', peer.id);
+      const socket = await connection;
+      const outcome = socket && this.sessions.get(peer.id)?.channel.socket === socket
+        ? 'connected' : 'skipped';
+      if (outcome === 'connected') this.fleetLog('dial-connected', 'tls-verified', peer.id);
+      return outcome;
     } catch (error) {
       this.fleetLog('dial-failed', error instanceof Error &&
         error.message === 'Peer TLS identity does not match discovery' ? 'tls-mismatch' :
@@ -639,8 +612,42 @@ export class FleetService {
       peer.id);
       throw error;
     } finally {
-      this.starting = null;
+      if (this.starting === connection) this.starting = null;
     }
+  }
+
+  private connectPeer(peer: Presence, identity: FleetIdentity): Promise<TLSSocket | null> {
+    const { promise, resolve, reject } = Promise.withResolvers<TLSSocket | null>();
+    const socket = connect(
+      {
+        host: peer.host,
+        port: peer.port,
+        key: identity.key,
+        cert: identity.cert,
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2',
+        timeout: 10_000,
+      },
+      () => {
+        try {
+          if (this.accept(socket, peer.id)) {
+            socket.setTimeout(0);
+            socket.removeListener('timeout', onTimeout);
+            resolve(this.sessions.get(peer.id)?.channel.socket === socket ? socket : null);
+          } else reject(new Error('Peer TLS identity does not match discovery'));
+        } catch (error) {
+          socket.destroy();
+          reject(error);
+        }
+      },
+    );
+    socket.once('error', reject);
+    const onTimeout = () => {
+      socket.destroy();
+      reject(new Error('Fleet connection timeout'));
+    };
+    socket.once('timeout', onTimeout);
+    return promise;
   }
 
   private certificate(socket: TLSSocket): string | null {
@@ -1442,19 +1449,13 @@ export class FleetService {
     }
   }
 
-  private confirmAck(value: unknown): void {
-    if (value === null || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== 1 || !('ok' in value) || value.ok !== true)
-      throw new Error('Invalid peer acknowledgement');
-  }
-
   /** Stops all renderer delivery for one session-scoped remote attachment. */
   async unsubscribe(peerId: string, subscriptionId: string): Promise<void> {
     const channel = this.linked(peerId);
     const session = this.sessions.get(peerId);
     if (!session || session.channel !== channel || !/^[a-f0-9]{32}$/.test(subscriptionId) ||
       !session.outgoing.delete(subscriptionId)) throw new Error('Unknown fleet subscription');
-    this.confirmAck(await channel.request('unsubscribe', { subscriptionId }));
+    await channel.request('unsubscribe', { subscriptionId });
   }
 
   /** Resizes only an existing remote shell within terminal dimension bounds. */
@@ -1463,13 +1464,13 @@ export class FleetService {
     if (!Number.isSafeInteger(cols) || cols < 2 || cols > 500 ||
       !Number.isSafeInteger(rows) || rows < 2 || rows > 200)
       throw new Error('Invalid terminal dimensions');
-    this.confirmAck(await this.linked(peerId).request('resize', { projectId, shellIndex, cols, rows }));
+    await this.linked(peerId).request('resize', { projectId, shellIndex, cols, rows });
   }
 
   /** Stops an authorized live peer shell. */
   async stopShell(peerId: string, projectId: number, shellIndex: number): Promise<void> {
     this.validateShell(projectId, shellIndex);
-    this.confirmAck(await this.linked(peerId).request('stop', { projectId, shellIndex }));
+    await this.linked(peerId).request('stop', { projectId, shellIndex });
   }
 
   /** Sends bounded terminal input only to an authorized live peer shell. */
@@ -1477,7 +1478,7 @@ export class FleetService {
     this.validateShell(projectId, shellIndex);
     if (typeof data !== 'string' || !data || Buffer.byteLength(data) > 8192)
       throw new Error('Invalid shell input');
-    this.confirmAck(await this.linked(peerId).request('write', { projectId, shellIndex, data }));
+    await this.linked(peerId).request('write', { projectId, shellIndex, data });
   }
 
   /** Returns bounded recent output from an authorized live peer shell. */

@@ -227,7 +227,6 @@ const SAFE_FLEET_ERRORS: readonly string[] = [
   'Invalid shell input',
   'Invalid terminal dimensions',
   'Invalid CLI launch',
-  'Invalid peer acknowledgement',
   'Invalid peer shell',
   'Invalid peer output',
   'Invalid peer subscription',

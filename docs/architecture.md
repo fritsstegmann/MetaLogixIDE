@@ -165,8 +165,10 @@ Fleet writes connection transitions to the existing application `main.log`.
 Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
 `listener-ready`, `discovery-ready`, `dial-failed`, `pairing-approved`,
 `channel-closed`, and `reconnect-outcome` to trace a connection. A
-`channel-closed reason=unknown` entry means Fleet did not identify why the
-peer closed the socket. `reason=pressure` means a bounded output or socket
+`reconnect-outcome reason=skipped` entry means the dial was cancelled or an
+already-active session made that socket redundant; it does not report a new
+connection. `channel-closed reason=unknown` means Fleet did not identify why
+the peer closed the socket. `reason=pressure` means a bounded output or socket
 queue exceeded its limit. Logs use a validated certificate fingerprint for
 known peers and `anonymous` for events without one. They do not contain
 pairing codes, credentials, terminal output or input

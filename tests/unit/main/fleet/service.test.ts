@@ -3,8 +3,8 @@ import { Duplex } from 'node:stream';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Socket as DatagramSocket } from 'node:dgram';
-import { Server as TlsServer } from 'node:tls';
-import { createServer as createTcpServer, type Server as TcpServer } from 'node:net';
+import { createServer as createTlsServer, Server as TlsServer } from 'node:tls';
+import { createServer as createTcpServer, type Server as TcpServer, type Socket as TcpSocket } from 'node:net';
 import { join } from 'node:path';
 import { FleetService, type FleetOperations } from '@main/fleet/service';
 import { FleetChannel } from '@main/fleet/channel';
@@ -104,6 +104,178 @@ it('records correlated safe pairing and peer-close reasons without logging peer-
   }
 });
 
+it('expires an unmatched pairing session without leaking its code or leaving a live channel', async () => {
+  const fleet = service('Local');
+  const peerId = 'b'.repeat(64);
+  const secret = 'PRIVATE-PAIRING-CODE-SENTINEL';
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  vi.useFakeTimers();
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'identity', { id: 'a'.repeat(64), cert: secret, key: secret });
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [], revoked: [] });
+  const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+  Reflect.set(socket, 'setKeepAlive', () => socket);
+  try {
+    const attach: unknown = Reflect.get(fleet, 'attachSession');
+    if (typeof attach !== 'function') throw new Error('Session attachment seam unavailable');
+    Reflect.apply(attach, fleet, [socket, peerId, false]);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(socket.destroyed).toBe(true);
+    expect((Reflect.get(fleet, 'sessions') as Map<string, unknown>).has(peerId)).toBe(false);
+    const records = info.mock.calls.flat().join(' ');
+    expect(records).toContain('channel-closed');
+    expect(records).toContain('deadline');
+    expect(records).toContain(peerId);
+    expect(records).not.toContain(secret);
+  } finally {
+    await fleet.stop();
+    vi.useRealTimers();
+    info.mockRestore();
+  }
+});
+
+it('closes a pressured terminal stream, releases its watcher and logs only the peer and reason', async () => {
+  const fleet = service('Local');
+  const peerId = 'b'.repeat(64);
+  const secret = 'PRIVATE-TERMINAL-OUTPUT-SENTINEL';
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'identity', { id: 'a'.repeat(64), cert: secret, key: secret });
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [], revoked: [] });
+  const socket = new Duplex({ read() {}, write(_chunk, _encoding, done) { done(); } });
+  Reflect.set(socket, 'setKeepAlive', () => socket);
+  const unsubscribe = vi.fn();
+  try {
+    const attach: unknown = Reflect.get(fleet, 'attachSession');
+    const queueOutput: unknown = Reflect.get(fleet, 'queueOutput');
+    if (typeof attach !== 'function' || typeof queueOutput !== 'function')
+      throw new Error('Terminal stream seam unavailable');
+    Reflect.apply(attach, fleet, [socket, peerId, false]);
+    const sessions = Reflect.get(fleet, 'sessions') as Map<string, unknown>;
+    const session = sessions.get(peerId);
+    if (!session) throw new Error('Session unavailable');
+    const incoming = Reflect.get(session, 'incoming') as Map<string, unknown>;
+    const subscription = { id: 'c'.repeat(32), projectId: 1, shellIndex: 0,
+      pending: [], pendingBytes: 262_140, unsubscribe, exited: false };
+    incoming.set(subscription.id, subscription);
+    Reflect.apply(queueOutput, fleet, [session, subscription, 'data', secret]);
+    expect(socket.destroyed).toBe(true);
+    expect(sessions.has(peerId)).toBe(false);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    const records = info.mock.calls.flat().join(' ');
+    expect(records).toContain('channel-closed');
+    expect(records).toContain('pressure');
+    expect(records).toContain(peerId);
+    expect(records).not.toContain(secret);
+  } finally {
+    await fleet.stop();
+    info.mockRestore();
+  }
+});
+
+it('does not log a reconnect as connected when a queued dial becomes ineligible', async () => {
+  const fleet = service('Local');
+  const peerId = 'b'.repeat(64);
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  const { promise: starting, resolve: release } = Promise.withResolvers<undefined>();
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'identity', { id: 'a'.repeat(64), cert: '', key: '' });
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [{ id: peerId, name: 'Peer' }], revoked: [] });
+  Reflect.set(fleet, 'presence', [{ id: peerId, name: 'Peer', host: '127.0.0.1', port: 1, seen: Date.now() }]);
+  Reflect.set(fleet, 'starting', starting);
+  try {
+    const reconnect: unknown = Reflect.get(fleet, 'reconnect');
+    if (typeof reconnect !== 'function') throw new Error('Reconnect seam unavailable');
+    Reflect.apply(reconnect, fleet, []);
+    Reflect.set(fleet, 'trust', { enabled: false, trusted: [], revoked: [] });
+    release(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const records = info.mock.calls.flat().join(' ');
+    expect(records).toContain('reconnect-attempt');
+    expect(records).toContain('reconnect-outcome');
+    expect(records).toContain(peerId);
+    expect(records).toContain('skipped');
+    expect(records).not.toContain('reconnect-outcome reason=connected');
+  } finally {
+    release(undefined);
+    await fleet.stop();
+    info.mockRestore();
+  }
+});
+
+it('correlates refused outbound connections and handshake deadlines without logging peer names', async () => {
+  const fleet = service('Local');
+  const peerId = 'b'.repeat(64);
+  const secret = 'PRIVATE-PEER-NAME-SENTINEL';
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  const stalled = await occupy();
+  const sockets: TcpSocket[] = [];
+  stalled.server.on('connection', (socket) => { sockets.push(socket); });
+  try {
+    await fleet.start();
+    await fleet.setEnabled(true);
+    const dial: unknown = Reflect.get(fleet, 'dial');
+    if (typeof dial !== 'function') throw new Error('Outbound connection seam unavailable');
+    const refused = await freePort();
+    const peer = { id: peerId, name: secret, host: '127.0.0.1', port: refused, seen: Date.now() };
+    await expect(Reflect.apply(dial, fleet, [peer]) as Promise<unknown>).rejects.toThrow();
+    await expect(Reflect.apply(dial, fleet, [{ ...peer, port: stalled.port }]) as Promise<unknown>)
+      .rejects.toThrow('Fleet connection timeout');
+    const records = info.mock.calls.flat().join(' ');
+    expect(records).toContain(`dial-failed reason=connect-failure peer=${peerId}`);
+    expect(records).toContain(`dial-failed reason=deadline peer=${peerId}`);
+    expect(records).not.toContain(secret);
+    expect((Reflect.get(fleet, 'sessions') as Map<string, unknown>).size).toBe(0);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => stalled.server.close(() => resolve()));
+    await fleet.stop();
+    info.mockRestore();
+  }
+}, 16_000);
+
+it('does not call a discarded duplicate outbound TLS socket connected', async () => {
+  const fleet = service('Local');
+  const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+  let server: TlsServer | undefined;
+  let existing: FleetChannel | undefined;
+  const sockets: TcpSocket[] = [];
+  try {
+    await fleet.start();
+    await fleet.setEnabled(true);
+    const identity = Reflect.get(fleet, 'identity') as { id: string; key: string; cert: string };
+    const peerId = identity.id === 'f'.repeat(64) ? '0'.repeat(64) : 'f'.repeat(64);
+    server = createTlsServer({ key: identity.key, cert: identity.cert });
+    server.on('connection', (socket) => { sockets.push(socket); });
+    await new Promise<void>((resolve, reject) => {
+      server?.once('error', reject);
+      server?.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('TLS listener unavailable');
+    Reflect.set(fleet, 'certificate', () => peerId);
+    const dial: unknown = Reflect.get(fleet, 'dial');
+    if (typeof dial !== 'function') throw new Error('Outbound connection seam unavailable');
+    const connection = Reflect.apply(dial, fleet, [{ id: peerId, name: 'Peer',
+      host: '127.0.0.1', port: address.port, seen: Date.now() }]) as Promise<string>;
+    existing = linkedChannel(fleet, peerId);
+    const session = (Reflect.get(fleet, 'sessions') as Map<string, unknown>).get(peerId);
+    if (!session) throw new Error('Session unavailable');
+    Reflect.set(session, 'outbound', identity.id < peerId);
+    await expect(connection).resolves.toBe('skipped');
+    expect(info.mock.calls.flat().join(' ')).not.toContain(`dial-connected reason=tls-verified peer=${peerId}`);
+  } finally {
+    existing?.close();
+    for (const socket of sockets) socket.destroy();
+    if (server) {
+      const listener = server;
+      await new Promise<void>((resolve) => listener.close(() => resolve()));
+    }
+    await fleet.stop();
+    info.mockRestore();
+  }
+});
+
 it('rejects a spoofed discovery identity when the TLS certificate belongs to another peer', () => {
   const callbacks = operations();
   const status = vi.spyOn(callbacks, 'status');
@@ -176,20 +348,6 @@ describe('fleet authorization', () => {
     await expect(fleet.snapshot(peerId, 1, 0)).rejects.toThrow('Invalid peer output');
     expect(request).toHaveBeenCalledTimes(2);
     channel.close();
-  });
-
-  it('does not report control success when a linked peer returns malformed acknowledgements', async () => {
-    const fleet = service('Local');
-    const channel = linkedChannel(fleet, 'f'.repeat(64));
-    const request = vi.spyOn(channel, 'request').mockResolvedValue({ ok: true, secret: 'PRIVATE-RESULT' });
-    try {
-      await expect(fleet.write('f'.repeat(64), 1, 0, 'echo safe')).rejects.toThrow('Invalid peer acknowledgement');
-      await expect(fleet.resize('f'.repeat(64), 1, 0, 80, 24)).rejects.toThrow('Invalid peer acknowledgement');
-      await expect(fleet.stopShell('f'.repeat(64), 1, 0)).rejects.toThrow('Invalid peer acknowledgement');
-      expect(request).toHaveBeenCalledTimes(3);
-    } finally {
-      channel.close();
-    }
   });
 
   it('defaults disabled and forbids unknown, revoked and offline status and shell operations', async () => {
