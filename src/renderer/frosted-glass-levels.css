@@ -1,5 +1,6 @@
-/* macOS frosted-glass level values for chrome Medium and Strong (spec macos-frosted-glass-settings
- * D15). Every selector starts with :root[data-platform="mac"]; imported after frosted-chrome.css,
+/* Frosted-glass level values (macOS and Linux) for chrome Medium and Strong (spec
+ * macos-frosted-glass-settings D15). Every selector starts with the presence gate
+ * :root[data-platform], shared by both platforms; imported after frosted-chrome.css,
  * whose palette blocks hold the Subtle values. Each block mirrors one palette block with
  * [data-chrome-frost] added, so it is always the most specific match for its combination, and every
  * block declares the same token set, so no level value leaks across palettes. A block sets the
@@ -10,8 +11,8 @@
  * floor across the material envelope (D22); 0% is written as the plain value. Tuned against
  * tests/unit/renderer/frosted-chrome-contrast.test.ts. */
 
-:root[data-platform="mac"][data-chrome-frost="medium"],
-:root[data-platform="mac"][data-theme="dark"][data-chrome-frost="medium"] {
+:root[data-platform][data-chrome-frost="medium"],
+:root[data-platform][data-theme="dark"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.805;
   --terminal-glass-alpha: 0.32462;
   --terminal-pane-alpha: 0;
@@ -47,7 +48,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 92.1%, #ffffff);
 }
 
-:root[data-platform="mac"][data-theme="light"][data-chrome-frost="medium"] {
+:root[data-platform][data-theme="light"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.81;
   --terminal-glass-alpha: 0.33316;
   --terminal-pane-alpha: 0;
@@ -83,7 +84,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 96.2%, #000000);
 }
 
-:root[data-platform="mac"][data-palette="catppuccin"][data-chrome-frost="medium"] {
+:root[data-platform][data-palette="catppuccin"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.77;
   --terminal-glass-alpha: 0.27522;
   --terminal-pane-alpha: 0;
@@ -119,7 +120,7 @@
   --terminal-agent-blocked: var(--agent-blocked-base);
 }
 
-:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="medium"] {
+:root[data-platform][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.81;
   --terminal-glass-alpha: 0.33526;
   --terminal-pane-alpha: 0;
@@ -155,7 +156,7 @@
   --terminal-agent-blocked: var(--agent-blocked-base);
 }
 
-:root[data-platform="mac"][data-palette="rose-pine"][data-chrome-frost="medium"] {
+:root[data-platform][data-palette="rose-pine"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.775;
   --terminal-glass-alpha: 0.28133;
   --terminal-pane-alpha: 0;
@@ -191,7 +192,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 92%, #ffffff);
 }
 
-:root[data-platform="mac"][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="medium"] {
+:root[data-platform][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="medium"] {
   --chrome-glass-alpha: 0.81;
   --terminal-glass-alpha: 0.33316;
   --terminal-pane-alpha: 0;
@@ -228,7 +229,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root[data-platform="mac"][data-chrome-frost="medium"]:not([data-theme]) {
+  :root[data-platform][data-chrome-frost="medium"]:not([data-theme]) {
     --chrome-glass-alpha: 0.81;
     --terminal-glass-alpha: 0.33316;
     --terminal-pane-alpha: 0;
@@ -264,7 +265,7 @@
     --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 96.2%, #000000);
   }
 
-  :root[data-platform="mac"][data-palette="catppuccin"][data-chrome-frost="medium"]:not([data-theme]) {
+  :root[data-platform][data-palette="catppuccin"][data-chrome-frost="medium"]:not([data-theme]) {
     --chrome-glass-alpha: 0.81;
     --terminal-glass-alpha: 0.33526;
     --terminal-pane-alpha: 0;
@@ -300,7 +301,7 @@
     --terminal-agent-blocked: var(--agent-blocked-base);
   }
 
-  :root[data-platform="mac"][data-palette="rose-pine"][data-chrome-frost="medium"]:not([data-theme]) {
+  :root[data-platform][data-palette="rose-pine"][data-chrome-frost="medium"]:not([data-theme]) {
     --chrome-glass-alpha: 0.81;
     --terminal-glass-alpha: 0.33316;
     --terminal-pane-alpha: 0;
@@ -337,8 +338,8 @@
   }
 }
 
-:root[data-platform="mac"][data-chrome-frost="strong"],
-:root[data-platform="mac"][data-theme="dark"][data-chrome-frost="strong"] {
+:root[data-platform][data-chrome-frost="strong"],
+:root[data-platform][data-theme="dark"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.77;
   --terminal-glass-alpha: 0.27522;
   --terminal-pane-alpha: 0;
@@ -374,7 +375,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 83.6%, #ffffff);
 }
 
-:root[data-platform="mac"][data-theme="light"][data-chrome-frost="strong"] {
+:root[data-platform][data-theme="light"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.775;
   --terminal-glass-alpha: 0.28133;
   --terminal-pane-alpha: 0;
@@ -410,7 +411,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 92.3%, #000000);
 }
 
-:root[data-platform="mac"][data-palette="catppuccin"][data-chrome-frost="strong"] {
+:root[data-platform][data-palette="catppuccin"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.735;
   --terminal-glass-alpha: 0.23887;
   --terminal-pane-alpha: 0;
@@ -446,7 +447,7 @@
   --terminal-agent-blocked: var(--agent-blocked-base);
 }
 
-:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="strong"] {
+:root[data-platform][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.775;
   --terminal-glass-alpha: 0.44133;
   --terminal-pane-alpha: 0;
@@ -482,7 +483,7 @@
   --terminal-agent-blocked: var(--agent-blocked-base);
 }
 
-:root[data-platform="mac"][data-palette="rose-pine"][data-chrome-frost="strong"] {
+:root[data-platform][data-palette="rose-pine"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.74;
   --terminal-glass-alpha: 0.24346;
   --terminal-pane-alpha: 0;
@@ -518,7 +519,7 @@
   --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 81.7%, #ffffff);
 }
 
-:root[data-platform="mac"][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="strong"] {
+:root[data-platform][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="strong"] {
   --chrome-glass-alpha: 0.775;
   --terminal-glass-alpha: 0.44133;
   --terminal-pane-alpha: 0;
@@ -555,7 +556,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root[data-platform="mac"][data-chrome-frost="strong"]:not([data-theme]) {
+  :root[data-platform][data-chrome-frost="strong"]:not([data-theme]) {
     --chrome-glass-alpha: 0.775;
     --terminal-glass-alpha: 0.28133;
     --terminal-pane-alpha: 0;
@@ -591,7 +592,7 @@
     --terminal-agent-blocked: color-mix(in oklab, var(--agent-blocked-base) 92.3%, #000000);
   }
 
-  :root[data-platform="mac"][data-palette="catppuccin"][data-chrome-frost="strong"]:not([data-theme]) {
+  :root[data-platform][data-palette="catppuccin"][data-chrome-frost="strong"]:not([data-theme]) {
     --chrome-glass-alpha: 0.775;
     --terminal-glass-alpha: 0.44133;
     --terminal-pane-alpha: 0;
@@ -627,7 +628,7 @@
     --terminal-agent-blocked: var(--agent-blocked-base);
   }
 
-  :root[data-platform="mac"][data-palette="rose-pine"][data-chrome-frost="strong"]:not([data-theme]) {
+  :root[data-platform][data-palette="rose-pine"][data-chrome-frost="strong"]:not([data-theme]) {
     --chrome-glass-alpha: 0.775;
     --terminal-glass-alpha: 0.44133;
     --terminal-pane-alpha: 0;
@@ -668,20 +669,20 @@
  * foreground is darkened on :root, so three terminal levels fit 8/255 apart above 4.5:1 (chrome Medium
  * needs no lift). ShellTab re-reads it when a level attribute changes; ANSI colours are never redeclared. */
 
-:root[data-platform="mac"][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="strong"][data-terminal-frost] {
+:root[data-platform][data-palette="catppuccin"][data-theme="light"][data-chrome-frost="strong"][data-terminal-frost] {
   --term-fg: color-mix(in oklab, #4c4f69 99%, #000000);
 }
 
-:root[data-platform="mac"][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="strong"][data-terminal-frost] {
+:root[data-platform][data-palette="rose-pine"][data-theme="light"][data-chrome-frost="strong"][data-terminal-frost] {
   --term-fg: color-mix(in oklab, #575279 99.4%, #000000);
 }
 
 @media (prefers-color-scheme: light) {
-  :root[data-platform="mac"][data-palette="catppuccin"][data-chrome-frost="strong"][data-terminal-frost]:not([data-theme]) {
+  :root[data-platform][data-palette="catppuccin"][data-chrome-frost="strong"][data-terminal-frost]:not([data-theme]) {
     --term-fg: color-mix(in oklab, #4c4f69 99%, #000000);
   }
 
-  :root[data-platform="mac"][data-palette="rose-pine"][data-chrome-frost="strong"][data-terminal-frost]:not([data-theme]) {
+  :root[data-platform][data-palette="rose-pine"][data-chrome-frost="strong"][data-terminal-frost]:not([data-theme]) {
     --term-fg: color-mix(in oklab, #575279 99.4%, #000000);
   }
 }

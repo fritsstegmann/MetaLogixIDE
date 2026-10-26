@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
+import { UnloadSessionDialog } from './components/UnloadSessionDialog';
+import type { RemoteProjectSelection } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TitleGroup } from './components/TitleGroup';
 import { CHROME_TESTIDS } from './chrome-testids';
@@ -29,6 +31,8 @@ import { ProjectSearch } from './components/ProjectSearch';
 import { PromptLibrary } from './components/PromptLibrary';
 import { ScrollbackSearch } from './components/ScrollbackSearch';
 import { TasksPanel } from './components/TasksPanel';
+import { FleetPanel } from './components/FleetPanel';
+import { RemoteTerminal, type RemoteShellFocus, type RemoteShellsState } from './components/RemoteTerminal';
 import { ToastStack } from './components/ToastStack';
 import { PermissionModeDialog } from './components/PermissionModeDialog';
 import { ProjectEnvTab } from './components/ProjectEnvTab';
@@ -42,9 +46,11 @@ import { useClaudePermissionMode } from './hooks/useClaudePermissionMode';
 import { useTaskCount } from './hooks/useTaskCount';
 import { toast } from './hooks/useToasts';
 import { useKeepAwake } from './hooks/useKeepAwake';
+import { useFleetViewing, useRemoteShellFocus } from './hooks/useRemoteSession';
 import { KeepAwakeUntilDialog } from './components/KeepAwakeUntilDialog';
 import { useRoots } from './hooks/useRoots';
 import type { Project } from '@shared/types';
+import type { FleetState } from '@shared/fleet-contract';
 import { api } from './api';
 import { createPendingFileOpen } from './pending-file-open';
 import { useTheme, type ThemeMode } from './hooks/useTheme';
@@ -73,6 +79,7 @@ import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
 import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
 import { useExternalDragGuard } from './hooks/useExternalDragGuard';
+import { isPrimaryVisible } from './unload-session';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -88,12 +95,14 @@ interface ProjectUiState {
   splitRatio: number;
 }
 
+const NO_REMOTE_SHELLS: RemoteShellsState = { count: 0, shownShellIndex: null };
+
 /**
- * The sidebar fold's flags and terminal hold. `animate` is sampled when `open` flips: mouse
+ * A side pane's fold flags and terminal hold (the sidebar, and the activity sheet inside it). `animate` is sampled when `open` flips: mouse
  * toggles fold (holding terminal geometry until the fold completes), keyboard toggles are instant
  * and take no hold. Returns the `custom` for the fold and its completion handler.
  */
-function useSidebarFold(open: boolean, animate: boolean) {
+function usePaneFold(open: boolean, animate: boolean) {
   const reduced = usePrefersReducedMotion();
   const [prevOpen, setPrevOpen] = useState(open);
   const [folding, setFolding] = useState(false);
@@ -165,6 +174,26 @@ function MainApp() {
     return () => { cancelled = true; };
   }, []);
   const [selected, setSelected] = useState<Project | null>(null);
+  const [remoteProject, setRemoteProject] = useState<RemoteProjectSelection | null>(null);
+  const [fleetState, setFleetState] = useState<FleetState | null>(null);
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    const off = api.on('fleet:changed', (next) => {
+      changed = true;
+      if (active) setFleetState(next);
+    });
+    void api.invoke('fleet:get-state', undefined).then((next) => {
+      if (active && !changed) setFleetState(next);
+    }).catch(() => { if (active && !changed) setFleetState(null); });
+    return () => { active = false; off(); };
+  }, []);
+  const remoteAvailable = fleetState?.enabled === true && fleetState.peers.some(
+    (peer) => peer.id === remoteProject?.peerId && peer.status === 'linked',
+  );
+  const [remoteShells, setRemoteShells] = useState<RemoteShellsState>(NO_REMOTE_SHELLS);
+  const [remoteFocus, setRemoteFocus] = useState<RemoteShellFocus | null>(null);
+  const remoteFocusSeq = useRef(0);
   // -1 never matches a real project id, so this reads idle when nothing is selected.
   const selectedAgentState = useProjectAgentState(selected?.id ?? -1);
   // Keep a live ref of `selected` so the shortcut handler (bound once in a
@@ -188,8 +217,12 @@ function MainApp() {
   const [activeView, setActiveView] = usePersistedState<ActivityView>(
     'metaide.activeView',
     'projects',
-    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks',
+    (v): v is ActivityView => v === 'projects' || v === 'chat' || v === 'git' || v === 'tasks' || v === 'fleet',
   );
+  useFleetViewing(remoteProject && remoteAvailable && activeView !== 'fleet' && remoteShells.shownShellIndex !== null
+    ? { peerId: remoteProject.peerId, projectId: remoteProject.projectId, shellIndex: remoteShells.shownShellIndex }
+    : null);
+  useRemoteShellFocus(fleetState, (target, shellIndex) => openRemote(target, shellIndex));
   // Live-ref of the active view so the metaproject subscriber can decide
   // whether to bump the badge without re-subscribing on every switch.
   const activeViewRef = useRef<ActivityView>('projects');
@@ -251,6 +284,26 @@ function MainApp() {
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
+  const primaryAlive = allProjectShells.some((shell) => shell.shellIndex === 0);
+  const [unloadTarget, setUnloadTarget] = useState<Pick<Project, 'id' | 'name'> | null>(null);
+  const unloadTargetRef = useRef<Pick<Project, 'id' | 'name'> | null>(null);
+  const unloadOpenerRef = useRef<HTMLElement | null>(null);
+  const openUnloadSession = useCallback((project: Project, opener: HTMLElement | null) => {
+    if (unloadTargetRef.current) return;
+    unloadTargetRef.current = { id: project.id, name: project.name };
+    unloadOpenerRef.current = opener;
+    setUnloadTarget(unloadTargetRef.current);
+  }, []);
+  const closeUnloadSession = useCallback(() => {
+    unloadTargetRef.current = null;
+    setUnloadTarget(null);
+    requestAnimationFrame(() => {
+      const opener = unloadOpenerRef.current;
+      const fallback = document.querySelector<HTMLElement>('[data-testid="status-bar-palette-hint"]');
+      (opener?.isConnected ? opener : fallback)?.focus();
+      unloadOpenerRef.current = null;
+    });
+  }, []);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
     true,
@@ -263,7 +316,10 @@ function MainApp() {
     setSidebarAnimate(animate);
     setSidebarOpen((v) => open ?? !v);
   }, [setSidebarOpen]);
-  const sidebarFold = useSidebarFold(sidebarOpen, sidebarAnimate);
+  const sidebarFold = usePaneFold(sidebarOpen, sidebarAnimate);
+  // Only an activity-bar click folds the sheet; keyboard and palette paths switch it instantly.
+  const [sheetAnimate, setSheetAnimate] = useState(false);
+  const sheetFold = usePaneFold(activeView !== 'projects', sheetAnimate);
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Chat panel gets its own persisted width so the wider chat view doesn't
   // resize the projects list back to a tiny column when the user flips modes.
@@ -308,10 +364,10 @@ function MainApp() {
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
-  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen' || unloadTarget !== null;
   const overlayOpen = paletteRequest != null || settingsOpen || newProjectOpen
     || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
-    || permissionMode.status === 'unchosen';
+    || permissionMode.status === 'unchosen' || unloadTarget !== null;
   useWindowTerminalFocus(overlayOpen);
   // A request issued while the palette is still open is refused by the overlay rule, so it waits for the close to commit.
   const focusAfterPaletteRef = useRef<number | null>(null);
@@ -372,6 +428,7 @@ function MainApp() {
 
   const commands = useMemo(() => buildPaletteCommands({
     hasProject: selected != null,
+    hasPrimary: primaryAlive && remoteProject === null,
     sidebarOpen,
     openPalette,
     openProjectSearch: () => setSearchOpen(true),
@@ -383,9 +440,9 @@ function MainApp() {
     openHelp: () => setHelpOpen(true),
     openNewProject: () => setNewProjectOpen(true),
     unloadSession: async () => {
-      if (!selected) return;
-      await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 });
-      toast('Session unloaded', { kind: 'success' });
+      if (selected && !remoteProject && primaryAlive) {
+        openUnloadSession(selected, document.querySelector<HTMLElement>('[data-testid="status-bar-palette-hint"]'));
+      }
     },
     popOutShell: async () => {
       if (selected) await api.invoke('windows:popout-shell', { projectId: selected.id, shellIndex: 0 });
@@ -400,7 +457,7 @@ function MainApp() {
     },
     keepAwake: paletteKeepAwake,
     platform,
-  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, paletteKeepAwake, platform]);
+  }), [selected, remoteProject, primaryAlive, openUnloadSession, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, paletteKeepAwake, platform]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -469,6 +526,7 @@ function MainApp() {
 
   useEffect(() => {
     const off = api.on('app:open-file-request', async ({ path }) => {
+      const requestId = ++selectionRequestRef.current;
       try {
         const { projects } = await api.invoke('projects:list', undefined as never);
         // Longest-prefix wins — a project nested inside a parent project
@@ -482,9 +540,12 @@ function MainApp() {
         const { project, relPath } = match
           ? { project: match, relPath: path === match.path ? '' : path.slice(match.path.length + 1) }
           : await api.invoke('projects:ensure-for-file', { path });
+        if (selectionRequestRef.current !== requestId) return;
         await api.invoke('projects:open', { id: project.id });
-        lastPickIdRef.current = project.id;
+        if (selectionRequestRef.current !== requestId) return;
         setProjectSettingsTarget(null);
+        setRemoteProject(null);
+        setActiveView('projects');
         setSelected(project);
         try { await api.invoke('shells:launch', { projectId: project.id }); } catch { /* fine */ }
         setMainTab('files');
@@ -502,11 +563,14 @@ function MainApp() {
   // switch to that shell tab.
   useEffect(() => {
     const off = api.on('shell:focus-request', async ({ projectId, shellIndex }) => {
+      const requestId = ++selectionRequestRef.current;
+      setRemoteProject(null);
       terminalFocus.requestFocus({ projectId, shellIndex });
       try {
         const cur = selectedRef.current;
         if (!cur || cur.id !== projectId) {
           const { project } = await api.invoke('projects:open', { id: projectId });
+          if (selectionRequestRef.current !== requestId) return;
           setProjectSettingsTarget(null);
           setSelected(project);
         }
@@ -555,25 +619,23 @@ function MainApp() {
   // window-manager surface. Electron picks up document.title changes and
   // pushes them straight to the BrowserWindow's native title.
   useEffect(() => {
-    document.title = selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
-  }, [selected]);
+    document.title = remoteProject ? `${remoteProject.projectName} on ${remoteProject.peerName} — MetaLogix IDE` : selected ? `${selected.name} — MetaLogix IDE` : 'MetaLogix IDE';
+  }, [selected, remoteProject]);
 
   useExternalDragGuard();
 
-  // Guards against the "clicked another project but nothing happens" bug:
-  // a slow projects:open (or the shells:launch that runs after it) can
-  // resolve after the user has clicked a DIFFERENT project. Without this
-  // ref the stale earlier setSelected would win, reverting the click.
-  const lastPickIdRef = useRef<number | null>(null);
+  const selectionRequestRef = useRef(0);
   /** Selects `p` as the sidebar does and launches its shell; resolves true when it selected `p`, false when the open failed or a newer pick superseded it. */
   async function pick(p: Pick<Project, 'id'>): Promise<boolean> {
     setProjectSettingsTarget(null);
-    lastPickIdRef.current = p.id;
+    setRemoteProject(null);
+    const requestId = ++selectionRequestRef.current;
     terminalFocus.cancelRequest();
+    setActiveView('projects');
     let selectedIt = false;
     try {
       const { project } = await api.invoke('projects:open', { id: p.id });
-      if (lastPickIdRef.current !== p.id) return false;    // superseded by a newer click
+      if (selectionRequestRef.current !== requestId) return false;
       if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
       setSelected(project);
       selectedIt = true;
@@ -581,7 +643,7 @@ function MainApp() {
     } catch (e) {
       // Only surface the toast when the failure is for the current pick —
       // otherwise a stale evictee-failure would confuse the user.
-      if (lastPickIdRef.current === p.id) {
+      if (selectionRequestRef.current === requestId) {
         toast('Failed to launch shell', { kind: 'error', detail: String(e).replace(/^Error:\s*/, ''), timeoutMs: 8000 });
         // Open Settings → Launch commands so the user can fix the startup command immediately.
         setSettingsSection('launch');
@@ -589,7 +651,7 @@ function MainApp() {
       }
       console.error(e);
     }
-    return selectedIt;
+    return selectedIt && selectionRequestRef.current === requestId;
   }
 
   /**
@@ -614,8 +676,22 @@ function MainApp() {
     void pick(p);
   }
 
+  /** Shows a remote project in the main pane, optionally on `shellIndex` (a clicked Fleet notice); null keeps the default shell. */
+  function openRemote(target: RemoteProjectSelection, shellIndex: number | null): void {
+    selectionRequestRef.current++;
+    terminalFocus.cancelRequest();
+    setProjectSettingsTarget(null);
+    setSelected(null);
+    if (remoteProject?.peerId !== target.peerId || remoteProject.projectId !== target.projectId) setRemoteShells(NO_REMOTE_SHELLS);
+    setRemoteProject(target);
+    setRemoteFocus(shellIndex === null ? null : { shellIndex, seq: ++remoteFocusSeq.current });
+    setActiveView('projects');
+    setMainTab('shell');
+  }
+
   /** Opens an explicit sidebar target without selecting its project or launching a shell. */
   function openProjectSettings(target: ProjectSettingsTarget): void {
+    setRemoteProject(null);
     setProjectSettingsTarget(target);
     mainTabRef.current = 'settings';
     setMainTab('settings');
@@ -795,12 +871,8 @@ function MainApp() {
     setSelected((current) => current?.id === project.id ? project : current);
   }
 
-  async function unloadCurrent() {
-    if (!selected) return;
-    try {
-      await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 });
-      toast('Session unloaded', { kind: 'success' });
-    } catch (e) { console.error(e); }
+  function unloadCurrent(event: React.MouseEvent<HTMLButtonElement>) {
+    if (selected && primaryAlive) openUnloadSession(selected, event.currentTarget);
   }
 
   const mainSheetContent: SheetContent = mainTab === 'shell' ? 'shell' : 'other';
@@ -812,8 +884,8 @@ function MainApp() {
       <div className="drag relative h-11 flex items-center pl-[76px] pr-[3px] shrink-0">
         <div className="absolute inset-y-0 left-[130px] right-[130px] flex items-center justify-center min-w-0 pointer-events-none">
           <TitleGroup
-            projectName={selected?.name ?? null}
-            branch={git.isRepo ? (git.branch ?? 'HEAD') : null}
+            projectName={activeView === 'fleet' ? 'Fleet' : remoteProject ? `${remoteProject.projectName} on ${remoteProject.peerName}` : selected?.name ?? null}
+            branch={!remoteProject && activeView !== 'fleet' && git.isRepo ? (git.branch ?? 'HEAD') : null}
           />
         </div>
         <div className="ml-auto flex items-center gap-0.5 no-drag" data-testid={CHROME_TESTIDS.titleButtons}>
@@ -854,8 +926,9 @@ function MainApp() {
         <ActivityBar
           active={activeView}
           onSelect={(v) => {
-            // Toggle if the same view is clicked twice — quality-of-life.
-            setActiveView(activeView === v && v !== 'projects' ? 'projects' : v);
+            const next = sidebarOpen && activeView === v && v !== 'projects' ? 'projects' : v;
+            setSheetAnimate((next !== 'projects') !== (activeView !== 'projects'));
+            setActiveView(next);
             if (!sidebarOpen) toggleSidebar(true, true);
           }}
           onToggleSidebar={() => toggleSidebar(true)}
@@ -866,14 +939,19 @@ function MainApp() {
         />
         <AnimatePresence initial={false} custom={sidebarFold.custom}>
           {sidebarOpen && (
-            <FoldPane key="sidebar" size="intrinsic" anchor="end" custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
-              {/* Project sidebar is ALWAYS visible when the sidebar is open — chat
-                  sits alongside it in its own resizable column instead of
-                  replacing it, so the user never has to swap views just to pick
-                  a different project. */}
+            <FoldPane key="sidebar" size="intrinsic" anchor="end" className={`fleet-projects-pane ${activeView === 'fleet' ? 'fleet-sheet-open' : ''}`} custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
-                onSelect={pick}
+                onUnloadSession={openUnloadSession}
+                selectedRemote={remoteProject}
+                onSelectRemote={(target) => {
+                  openRemote(target, null);
+                  if (window.innerWidth < 640) toggleSidebar(false, false);
+                }}
+                onSelect={(project) => {
+                  void pick(project);
+                  if (window.innerWidth < 640) toggleSidebar(false, false);
+                }}
                 onNewProject={() => setNewProjectOpen(true)}
                 onEditEnv={editEnv}
                 onProjectSettings={openProjectSettings}
@@ -887,78 +965,114 @@ function MainApp() {
                 max={SIDEBAR_WIDTH.max}
                 side="left"
               />
-              {activeView === 'chat' && (
-                <>
-                  <div
-                    data-view="chat"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <ChatTab
-                      projectId={selected?.id ?? 0}
-                      metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
-                      compact
-                      onDismiss={() => setActiveView('projects')}
-                    />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={300}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
-              {activeView === 'git' && (
-                <>
-                  <div
-                    data-view="git"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <GitPanel projectId={selected?.id ?? null} />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={280}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
-              {activeView === 'tasks' && (
-                <>
-                  <div
-                    data-view="tasks"
-                    className="section-panel h-full flex flex-col shrink-0"
-                    style={{ width: chatPanelWidth }}
-                  >
-                    <TasksPanel
-                      projectId={selected?.id ?? null}
-                      onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
-                    />
-                  </div>
-                  <ResizeHandle
-                    value={chatPanelWidth}
-                    onChange={setChatPanelWidth}
-                    onReset={() => setChatPanelWidth(400)}
-                    min={280}
-                    max={640}
-                    side="left"
-                  />
-                </>
-              )}
+              <AnimatePresence initial={false} custom={sheetFold.custom}>
+                {activeView !== 'projects' && (
+                  <FoldPane key="sheet" size="intrinsic" anchor="end" className="sheet-fold" custom={sheetFold.custom} onFoldComplete={() => { sheetFold.onFoldComplete(); setSheetAnimate(false); }}>
+                    {activeView === 'chat' && (
+                      <>
+                        <div
+                          data-view="chat"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <ChatTab
+                            projectId={selected?.id ?? 0}
+                            metaprojectProjectId={selected ? (selected.config.linkedMetaprojectProjectId ?? selected.metaprojectProjectId ?? null) : null}
+                            compact
+                            onDismiss={() => setActiveView('projects')}
+                          />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={300}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'git' && (
+                      <>
+                        <div
+                          data-view="git"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <GitPanel projectId={selected?.id ?? null} />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={280}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'tasks' && (
+                      <>
+                        <div
+                          data-view="tasks"
+                          className="section-panel h-full flex flex-col shrink-0"
+                          style={{ width: chatPanelWidth }}
+                        >
+                          <TasksPanel
+                            projectId={selected?.id ?? null}
+                            onLaunched={(shellIndex) => { setMainTab('shell'); setActiveShellIndex(shellIndex); }}
+                          />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={280}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                    {activeView === 'fleet' && (
+                      <>
+                        <div className="section-panel h-full flex flex-col shrink-0" style={{ width: chatPanelWidth }}>
+                          <FleetPanel />
+                        </div>
+                        <ResizeHandle
+                          value={chatPanelWidth}
+                          onChange={setChatPanelWidth}
+                          onReset={() => setChatPanelWidth(400)}
+                          min={300}
+                          max={640}
+                          side="left"
+                        />
+                      </>
+                    )}
+                  </FoldPane>
+                )}
+              </AnimatePresence>
             </FoldPane>
           )}
         </AnimatePresence>
         <main
-          className="flex-1 flex flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
+          className="flex flex-1 flex-col min-h-0 min-w-0 bg-[--surface-sheet] rounded-[14px] mr-2"
           data-sheet-content={mainSheetContent}
         >
+          {remoteProject ? (
+            <RemoteTerminal
+              key={`${remoteProject.peerId}:${remoteProject.projectId}`}
+              project={remoteProject}
+              available={remoteAvailable}
+              focusShell={remoteFocus}
+              onShellsChange={setRemoteShells}
+              onRefreshAvailability={() => {
+                void api.invoke('fleet:get-state', undefined).then(setFleetState).catch(() => {
+                  toast('Could not refresh Fleet connection. Check the network and retry.', { kind: 'error' });
+                });
+              }}
+            />
+          ) : (
+          <>
           <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5 pb-1 text-xs shrink-0" data-testid={DIFF_TESTIDS.tabBar}>
             <TabButton active={mainTab === 'shell'} onClick={() => setMainTab('shell')}>Shell</TabButton>
             <TabButton active={mainTab === 'files'} onClick={() => setMainTab('files')}>Files</TabButton>
@@ -1001,14 +1115,15 @@ function MainApp() {
                   <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
                     <StatusDot state={selectedAgentState} />
                     <span className="truncate font-medium">{selected.name}</span>
-                    <button
+                    {primaryAlive && <button
                       onClick={unloadCurrent}
-                      className="ml-1 text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]/60 w-4 h-4 flex items-center justify-center rounded"
+                      className="ml-1 text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]/60 w-11 h-11 lg:w-4 lg:h-4 flex shrink-0 items-center justify-center rounded focus-visible:ring-2 focus-visible:ring-[--accent]"
                       title="Unload session (close shell)"
+                      aria-label="Unload session (close shell)"
                       data-testid="unload-current"
                     >
                       <XIcon />
-                    </button>
+                    </button>}
                   </span>
                   <MetaprojectBoardButton project={selected} onRequestLink={() => setActiveView('chat')} />
                   <Tooltip label="Prompt library" shortcut={SHORTCUT_COPY.promptsShortcut(platform)}>
@@ -1085,10 +1200,23 @@ function MainApp() {
                   </section>
               : selected ? mainBody(selected) : <EmptyState />}
           </div>
+          </>
+          )}
         </main>
       </div>
 
-      <StatusBar project={selected} aliveCount={aliveCount} onOpenPalette={() => openPalette('')} keepAwake={keepAwake} />
+      <StatusBar
+        project={remoteProject ? null : selected}
+        remote={remoteProject}
+        aliveCount={remoteProject ? remoteShells.count : aliveCount}
+        onOpenPalette={() => openPalette('')}
+        keepAwake={keepAwake}
+      />
+      {unloadTarget && <UnloadSessionDialog key={unloadTarget.id} project={unloadTarget}
+        visible={isPrimaryVisible(unloadTarget.id, { selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex })}
+        onClose={closeUnloadSession}
+        onStopped={() => { toast('Session unloaded', { kind: 'success' }); }}
+      />}
       {keepAwakeUntilOpen && keepAwake && (
         <KeepAwakeUntilDialog onStart={(endsAt) => { void keepAwake.startUntil(endsAt); }} onClose={() => setKeepAwakeUntilOpen(false)} />
       )}
@@ -1137,11 +1265,14 @@ function MainApp() {
         open={scrollbackOpen}
         onClose={() => setScrollbackOpen(false)}
         onFocus={async (projectId, shellIndex) => {
+          const requestId = ++selectionRequestRef.current;
+          setRemoteProject(null);
           terminalFocus.cancelRequest();
           try {
             const cur = selectedRef.current;
             if (!cur || cur.id !== projectId) {
               const { project } = await api.invoke('projects:open', { id: projectId });
+              if (selectionRequestRef.current !== requestId) return;
               setProjectSettingsTarget(null);
               setSelected(project);
             }

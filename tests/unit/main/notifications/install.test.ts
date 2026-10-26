@@ -109,7 +109,8 @@ function fakePty() {
 }
 
 /** Installs notification history independently of the dot tracker. */
-function installSetup<P extends ExitSource>(ptyManager: P, sessions = new SessionRegistry()) {
+function installSetup<P extends ExitSource>(ptyManager: P, sessions = new SessionRegistry(),
+  forwardToFleet?: (shell: ShellKey, notice: { kind: string; body: string }) => boolean) {
   FakeNotification.instances = [];
   const tracker = new ClaudeHookHistory({ sessions, lastOutputAt: () => null, now: () => 0 });
   const main = fakeWindow();
@@ -126,6 +127,7 @@ function installSetup<P extends ExitSource>(ptyManager: P, sessions = new Sessio
     notificationClass: FakeNotification,
     windows: { main: () => main, popout: () => null, focused: () => null },
     broadcast,
+    ...(forwardToFleet ? { forwardToFleet } : {}),
   });
   return { emit: (h: ReceivedHook) => handle(h), sessions, ptyManager, broadcast, main, tracker };
 }
@@ -135,6 +137,24 @@ const ev = (hookEventName: string, extra: { notificationType?: string; backgroun
 const NEEDS_INPUT = ev('Notification', { notificationType: 'permission_prompt' });
 
 describe('installClaudeNotifications', () => {
+  it('hands each notice to the Fleet forwarder and skips the local one when a peer took it', () => {
+    const forward = vi.fn(() => true);
+    const { emit, sessions } = installSetup(fakePty(), new SessionRegistry(), forward);
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
+    expect(forward).toHaveBeenCalledWith(K, { kind: 'needs-input', body: 'Claude needs your input' });
+    expect(FakeNotification.instances).toHaveLength(0);
+  });
+
+  it('notifies locally when the Fleet forwarder reports no controlling peer', () => {
+    const forward = vi.fn(() => false);
+    const { emit, sessions } = installSetup(fakePty(), new SessionRegistry(), forward);
+    const s = sessions.issue(K);
+    emit({ sessionId: s.id, shell: K, event: NEEDS_INPUT });
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(FakeNotification.instances).toHaveLength(1);
+  });
+
   it('routes applied hooks to OS notifications that navigate on click', () => {
     const { emit, sessions, broadcast, main } = installSetup(fakePty());
     const s = sessions.issue(K);
@@ -266,6 +286,8 @@ describe.skipIf(process.platform === 'win32')('installClaudeNotifications — re
     const exits: unknown[] = [];
     pty.on('exit', (ev: unknown) => exits.push(ev));
     await pty.spawn(shell.projectId, shell.shellIndex, launch);
+    const oldGeneration = pty.liveShell(shell.projectId, shell.shellIndex)?.generation;
+    expect(oldGeneration).toEqual(expect.any(String));
     await pty.kill(shell.projectId, shell.shellIndex);
     await pty.spawn(shell.projectId, shell.shellIndex, launch);
     const fresh = issued[1]!;
@@ -273,7 +295,10 @@ describe.skipIf(process.platform === 'win32')('installClaudeNotifications — re
     expect(exits).toHaveLength(0);
     const deadline = Date.now() + 3000;
     while (exits.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
-    expect(exits).toHaveLength(1);
+    expect(exits).toEqual([
+      expect.objectContaining({ projectId: shell.projectId, shellIndex: shell.shellIndex, generation: oldGeneration }),
+    ]);
+    expect(pty.liveShell(shell.projectId, shell.shellIndex)?.generation).not.toBe(oldGeneration);
     expect(sessions.verify(fresh.id, fresh.token)).toEqual(shell);
     expect(FakeNotification.instances).toHaveLength(1);
     expect(FakeNotification.instances[0]!.closed).toBe(false);

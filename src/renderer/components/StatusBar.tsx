@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project } from '@shared/types';
+import type { FleetGitStatus } from '@shared/fleet-contract';
 import { useGitStatus } from '@renderer/hooks/useGitStatus';
 import { usePorts } from '@renderer/hooks/usePorts';
 import { api } from '@renderer/api';
@@ -9,6 +10,8 @@ import type { ShortcutPlatform } from '@renderer/shortcut-contract';
 import { SHORTCUT_COPY } from '@renderer/shortcut-copy';
 import { RUNTIME_SHORTCUT_PLATFORM, useShortcutPlatform } from '@renderer/shortcut-platform';
 import type { KeepAwakeControls } from '@renderer/hooks/useKeepAwake';
+import { useFleetGitStatus } from '@renderer/hooks/useRemoteSession';
+import type { RemoteProjectSelection } from './Sidebar';
 import { KeepAwakeChip } from './KeepAwakeChip';
 import { XIcon } from './shell-icons';
 import { ICON_SIZE } from './icon-size';
@@ -21,6 +24,9 @@ interface LiveShell {
 
 interface StatusBarProps {
   readonly project: Project | null;
+  /** A remote Fleet session; when set it replaces `project`, git comes from the peer and port chips are hidden. */
+  readonly remote?: RemoteProjectSelection | null;
+  /** Live shells: the local alive count, or the remote project's shell count for a remote session. */
   readonly aliveCount: number;
   /** Opens the command palette exactly as ⌘K does. */
   readonly onOpenPalette: () => void;
@@ -28,10 +34,19 @@ interface StatusBarProps {
   readonly keepAwake?: KeepAwakeControls | null;
 }
 
-/** The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version. */
-export function StatusBar({ project, aliveCount, onOpenPalette, keepAwake }: StatusBarProps): React.JSX.Element {
-  const { status: git } = useGitStatus(project?.id ?? null);
-  const ports = usePorts(project?.id ?? null);
+/**
+ * The window's bottom bar: project, git branch, shells chip, port chips, the ⌘K palette hint and the app version.
+ * For a `remote` session the label reads `<project> · <peer>`, git is read on the peer (`fleet:git-status`), the
+ * shells chip is a plain count and no port chips show; local git and ports are never asked about the remote id.
+ */
+export function StatusBar({ project, remote = null, aliveCount, onOpenPalette, keepAwake }: StatusBarProps): React.JSX.Element {
+  const localId = remote ? null : project?.id ?? null;
+  const { status: localGit } = useGitStatus(localId);
+  const remoteGit = useFleetGitStatus(remote);
+  const localPorts = usePorts(localId);
+  const git: FleetGitStatus = remote ? remoteGit : { ...localGit, changedCount: Object.keys(localGit.files).length };
+  const ports = remote ? [] : localPorts;
+  const label = remote ? `${remote.projectName} · ${remote.peerName}` : project?.name ?? null;
   const platform = useShortcutPlatform();
   // App version shown at the far right so users know exactly which build
   // they're running when they hit a bug or file feedback. Cached for the
@@ -43,12 +58,12 @@ export function StatusBar({ project, aliveCount, onOpenPalette, keepAwake }: Sta
   return (
     <div className="h-[34px] shrink-0 px-3 text-xs text-[--text-muted] flex items-center gap-4 tabular-nums" data-testid="status-bar">
       <span className="flex items-center gap-1.5">
-        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--text-muted]/50'}`} />
-        {project ? project.name : 'no project'}
+        <span className={`inline-block w-1.5 h-1.5 rounded-full ${label ? 'bg-[color:var(--accent-mark,var(--accent))]' : 'bg-[--text-muted]/50'}`} />
+        {label ?? 'no project'}
       </span>
       {git.isRepo && (
         <span className="flex items-center gap-1" title={
-          `${git.branch ?? 'detached'}${git.ahead ? ` · ahead ${git.ahead}` : ''}${git.behind ? ` · behind ${git.behind}` : ''}${git.dirty ? ` · ${Object.keys(git.files).length} changed` : ''}`
+          `${git.branch ?? 'detached'}${git.ahead ? ` · ahead ${git.ahead}` : ''}${git.behind ? ` · behind ${git.behind}` : ''}${git.dirty ? ` · ${git.changedCount} changed` : ''}`
         }>
           <span className="text-[--hue-pink] flex"><BranchIcon /></span>
           <span className="text-[--text]">{git.branch ?? 'HEAD'}</span>
@@ -57,7 +72,9 @@ export function StatusBar({ project, aliveCount, onOpenPalette, keepAwake }: Sta
           {git.behind > 0 && <span className="text-[--hue-pink]">↓{git.behind}</span>}
         </span>
       )}
-      <ShellsChip aliveCount={aliveCount} />
+      {remote
+        ? <span className="px-1.5" title={`Shells open on ${remote.peerName}`} data-testid="shells-chip">{shellLabel(aliveCount)}</span>
+        : <ShellsChip aliveCount={aliveCount} />}
       {keepAwake && (
         <KeepAwakeChip
           state={keepAwake.state}
@@ -166,7 +183,7 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
         title="Alive shells — click to see details / kill"
         data-testid="shells-chip"
       >
-        <span>{aliveCount} shell{aliveCount === 1 ? '' : 's'}</span>
+        <span>{shellLabel(aliveCount)}</span>
         {open && shells.length > 0 && (
           <span className="opacity-70">· {totalCpu.toFixed(0)}%</span>
         )}
@@ -232,6 +249,10 @@ function ShellsChip({ aliveCount }: { aliveCount: number }) {
       )}
     </div>
   );
+}
+
+function shellLabel(count: number): string {
+  return `${count} shell${count === 1 ? '' : 's'}`;
 }
 
 function fmtDuration(ms: number): string {

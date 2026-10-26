@@ -32,6 +32,7 @@ import { MODAL_CLASSES } from '../../src/renderer/modal-glass';
 import { DIFF_COPY } from '../../src/renderer/diff-tab-copy';
 import { SETTINGS_NAV_ITEMS } from '../../src/renderer/components/settings/nav-icons';
 import { AGENT_DOT } from '../../src/shared/agent-state';
+import { UNLOAD_SESSION_COPY, UNLOAD_SESSION_TESTIDS } from '../../src/renderer/unload-session-copy';
 import {
   launch, openProject, projectIdByName, aliveProjectNames, terminalActiveIn, waitForProjectShown,
   PRIMARY, SIDEBAR_FILTER_INPUT, type Launched,
@@ -705,14 +706,24 @@ test.describe('typing and errors', () => {
     });
   });
 
-  test('AC16: a command that rejects shows an error toast and closes the palette', async () => {
+  test('AC16: a rejected unload visibly reports failure, keeps the PTY alive, and closes the palette', async () => {
     await withApp(['alpha'], async ({ app, win }) => {
       await openProject(win, 'alpha');
-      await failIpc(app, 'shells:kill', 'e2e: kill refused');
+      const id = await projectIdByName(win, 'alpha');
+      await failIpc(app, 'shells:stop-primary', 'e2e: stop refused');
       await runCommand(win, 'Unload current session');
       await expect(root(win), 'the palette does not stay open').toHaveCount(0);
-      const toast = win.getByTestId('toast').filter({ hasText: PALETTE_COPY.commandFailed });
-      await expect(toast, 'an error toast names the failure').toHaveCount(1);
+      const confirmation = win.getByTestId(UNLOAD_SESSION_TESTIDS.dialog);
+      await expect(confirmation).toBeVisible();
+      await expect(confirmation.getByTestId(UNLOAD_SESSION_TESTIDS.keep)).toBeFocused();
+      await expect.poll(() => invoke<{ shells: Array<{ projectId: number; shellIndex: number }> }>(win, 'shells:alive-list')
+        .then(({ shells }) => shells.some((shell) => shell.projectId === id && shell.shellIndex === 0))).toBe(true);
+      await confirmation.getByRole('button', { name: UNLOAD_SESSION_COPY.unload }).click();
+      await expect(confirmation.getByTestId(UNLOAD_SESSION_TESTIDS.error), 'the failure is visible to the user')
+        .toContainText(UNLOAD_SESSION_COPY.stopFailed);
+      await expect(confirmation.getByTestId(UNLOAD_SESSION_TESTIDS.retry)).toBeVisible();
+      await expect.poll(() => invoke<{ shells: Array<{ projectId: number; shellIndex: number }> }>(win, 'shells:alive-list')
+        .then(({ shells }) => shells.some((shell) => shell.projectId === id && shell.shellIndex === 0))).toBe(true);
     });
   });
 });

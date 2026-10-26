@@ -36,6 +36,8 @@ import type { TerminalWeights } from '@shared/terminal-font-weight';
 import { stepTerminalFontSize } from '@shared/terminal-font-size';
 import { buildFontFamilyStack } from '@renderer/fonts/font-family';
 import { TERMINAL_FONT_FALLBACK, type FontFamilyPreference } from '@shared/font-settings';
+import type { FleetState } from '@shared/fleet-contract';
+import { TERMINAL_SCROLLBACK_LINES } from '@shared/terminal-scrollback';
 import {
   createTerminalFontUpdater,
   createTerminalGeometrySynchronizer,
@@ -80,20 +82,54 @@ const ZOOM_STEP: Readonly<Record<Exclude<TerminalTabAction, 'find'>, 'in' | 'out
   'zoom-reset': 'reset',
 };
 
-export function ShellTab({
+interface Props {
+  readonly projectId: number;
+  readonly shellIndex: number;
+  readonly onOpenFile?: HoverPreviewOpen;
+  readonly onOpenLaunchSettings?: () => void;
+  readonly primary?: boolean;
+  readonly popout?: boolean;
+}
+
+/** Displays local terminal only when no Fleet peer controls this precise shell. */
+export function ShellTab(props: Props) {
+  const [fleet, setFleet] = useState<FleetState | null | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    const off = api.on('fleet:changed', (next) => {
+      changed = true;
+      if (active) setFleet(next);
+    });
+    void api.invoke('fleet:get-state', undefined).then((next) => {
+      if (active && !changed) setFleet(next);
+    }).catch(() => {
+      if (active && !changed) setFleet(null);
+    });
+    return () => { active = false; off(); };
+  }, []);
+
+  const control = fleet?.controls.find((item) => item.projectId === props.projectId && item.shellIndex === props.shellIndex);
+  if (control) {
+    return (
+      <div role="status" aria-label="Terminal controlled remotely" className="flex h-full min-w-0 items-center justify-center px-4 text-center text-base text-[--text]">
+        <p className="max-w-full break-words">This terminal is controlled remotely by {control.peerName}. It will return here when control ends.</p>
+      </div>
+    );
+  }
+  if (!fleet) {
+    return (
+      <div role={fleet === null ? 'alert' : 'status'} className="flex h-full min-w-0 items-center justify-center px-4 text-center text-base text-[--text]">
+        {fleet === null ? 'Could not check terminal control. Reopen this terminal to retry.' : 'Checking terminal control…'}
+      </div>
+    );
+  }
+  return <LocalShellTab {...props} />;
+}
+
+function LocalShellTab({
   projectId, shellIndex, onOpenFile, onOpenLaunchSettings, primary = false, popout = false,
-}: {
-  projectId: number;
-  shellIndex: number;
-  /** Opens a file from terminal output; a click on the preview card or on the printed path passes `projectId` only when the peek found the file in another project. */
-  onOpenFile?: HoverPreviewOpen;
-  /** Opens Settings → Launch commands so the user can fix a broken launch command. */
-  onOpenLaunchSettings?: () => void;
-  /** Left pane or popout terminal: the window-focus fallback when none was used yet. */
-  primary?: boolean;
-  /** Popout window: hover previews of another project's file cannot be opened from here. */
-  popout?: boolean;
-}) {
+}: Props) {
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
   platformRef.current = platform;
@@ -105,13 +141,6 @@ export function ShellTab({
   const geometrySyncRef = useRef<TerminalGeometrySynchronizer | null>(null);
   const fontUpdaterRef = useRef<TerminalFontUpdater | null>(null);
   const appliedFontFamilyRef = useRef<FontFamilyPreference>(null);
-  // Ordering guard for the "snapshot vs live" race on remount. Live PTY
-  // data can arrive between term.open() and the snapshot HTTP round-trip
-  // resolving; if we wrote it straight to xterm and then also wrote the
-  // snapshot, we'd get a splice like [live delta][full scrollback again].
-  // Instead we buffer live in `pendingLive` until the snapshot lands,
-  // then flush the buffer. `snapshotReady` flips to true after either
-  // path completes so live writes go direct from then on.
   const snapshotReady = useRef(false);
   const pendingLive = useRef('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -186,8 +215,9 @@ export function ShellTab({
 
   useEffect(() => {
     if (!termHostRef.current) return;
+    termHostRef.current.style.visibility = 'hidden';
     const term = new Terminal({
-      scrollback: 10000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       // Explicit SF Mono stack — first match wins. Falls back through
       // common developer monospace fonts. `ui-monospace` alone can pick
       // Menlo bitmap fallback on some setups and looks pixelated.
@@ -275,7 +305,7 @@ export function ShellTab({
     const focusReg = terminalFocus.register({
       key: { projectId, shellIndex },
       primary: primaryRef.current,
-      isOpen: () => opened,
+      isOpen: () => opened && snapshotReady.current,
       focus: () => term.focus(),
     });
 
@@ -309,23 +339,67 @@ export function ShellTab({
     pendingLive.current = '';
     let cachedSnapshot: string | null = null;
     const snapshotPromise = api.invoke('shells:snapshot', { projectId, shellIndex })
-      .then(({ output }) => { cachedSnapshot = output; })
+      .then(({ output }) => {
+        cachedSnapshot = output;
+        // Existing output means the process already started — an idle Claude
+        // prompt emits nothing, so don't wait for live data to drop the overlay.
+        if (output && !disposed) {
+          if (startingTimerRef.current) { clearTimeout(startingTimerRef.current); startingTimerRef.current = null; }
+          setShowStarting(false);
+        }
+      })
       .catch(() => { cachedSnapshot = ''; });
 
     function writeSnapshotAndFlush() {
       if (termRef.current !== term || disposed) return;
       const output = cachedSnapshot ?? '';
-      if (output) {
-        term.reset();
-        // Main serializes complete terminal state, so write it verbatim — it
-        // also restores the live SGR state the next PTY bytes continue from.
-        term.write(output);
-      }
-      if (pendingLive.current) term.write(pendingLive.current);
-      snapshotReady.current = true;
+      if (output) term.reset();
+
+      const settleReplay = () => {
+        if (termRef.current !== term || disposed) return;
+        term.scrollToBottom();
+        // xterm synchronizes the DOM scroll area in a later animation frame.
+        // Keep the host hidden until that scroll area and scrollTop agree with
+        // the parsed buffer, so no intermediate viewport can be painted.
+        const revealWhenSettled = () => {
+          if (termRef.current !== term || disposed) return;
+          const host = termHostRef.current;
+          const viewport = host?.querySelector<HTMLElement>('.xterm-viewport');
+          const maximum = viewport ? viewport.scrollHeight - viewport.clientHeight : 0;
+          if (!host || !viewport || viewport.clientHeight === 0 ||
+            (term.buffer.active.baseY > 0 && (maximum <= 0 || viewport.scrollTop < maximum - 1))) {
+            requestAnimationFrame(revealWhenSettled);
+            return;
+          }
+          snapshotReady.current = true;
+          host.style.visibility = '';
+          focusReg.opened();
+          requestAnimationFrame(() => synchronizeGeometry());
+        };
+        requestAnimationFrame(revealWhenSettled);
+      };
+      const finishReplay = () => {
+        if (termRef.current !== term || disposed) return;
+        const live = pendingLive.current;
+        pendingLive.current = '';
+        if (live) {
+          snapshotReady.current = true;
+          term.write(live, settleReplay);
+        } else {
+          settleReplay();
+        }
+      };
+
+      const live = pendingLive.current;
       pendingLive.current = '';
-      // One last fit + refresh once xterm has processed the write queue.
-      requestAnimationFrame(() => synchronizeGeometry());
+      if (output && live) {
+        term.write(output);
+        term.write(live, finishReplay);
+      } else if (output || live) {
+        term.write(output || live, finishReplay);
+      } else {
+        finishReplay();
+      }
     }
 
     /**
@@ -369,7 +443,6 @@ export function ShellTab({
       } catch (e) { console.warn('[metaide] webgl renderer unavailable, falling back to DOM', e); }
       opened = true;
       term.textarea?.addEventListener('focus', () => focusReg.used());
-      focusReg.opened();
       // First fit AFTER open so xterm has an element to measure.
       synchronizeGeometry();
       // Snapshot may already be back — write it into the correctly-sized
@@ -609,7 +682,7 @@ export function ShellTab({
     >
       {/* `isolate` keeps xterm's internal z-indexes (e.g. its link layer) inside the
           host, so the exit overlay, drop hint and search bar always paint above it. */}
-      <div ref={termHostRef} className="w-full h-full isolate" />
+      <div ref={termHostRef} className="w-full h-full isolate" style={{ visibility: 'hidden' }} />
       {sessionCorrupted && (
         <div className="absolute inset-x-0 top-3 flex items-center justify-center pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 bg-[--danger]/15 border border-[--danger]/40 rounded-md shadow-xl px-3 py-2 text-xs text-[--text] max-w-[720px]">

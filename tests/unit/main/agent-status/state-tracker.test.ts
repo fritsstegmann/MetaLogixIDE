@@ -87,4 +87,61 @@ describe('Agent status transitions', () => {
       vi.useRealTimers();
     }
   });
+
+  it('fails guarded reads only for a failed sample and restores them after a successful sample', async () => {
+    let unavailable = true;
+    const tracker = new AgentStatusTracker({
+      liveShell: () => ({ pid: 10, generation: 'g1', agent: 'claude' }),
+      liveStatus: async () => {
+        if (unavailable) throw new Error('screen unavailable');
+        return { rows: ['✻ Thinking…', 'esc to interrupt'], title: '' };
+      },
+    }, async () => false, 'win32');
+    tracker.spawn(identity);
+    await tracker.refresh();
+    expect(tracker.list()).toEqual([{ ...shell, agent: 'claude', state: 'idle' }]);
+    expect(() => tracker.readForGuard(1, 0, 'g1')).toThrow('agent status unavailable');
+    unavailable = false;
+    await tracker.refresh();
+    expect(tracker.readForGuard(1, 0, 'g1')).toEqual({ agent: 'claude', state: 'busy' });
+  });
+
+  it('fails a guarded read after a foreground-sample error but permits a later plain-shell result', async () => {
+    let unavailable = true;
+    const tracker = new AgentStatusTracker({
+      liveShell: () => ({ pid: 10, generation: 'g1', agent: null }),
+      liveStatus: async () => ({ rows: [], title: '' }),
+    }, async () => {
+      if (unavailable) throw new Error('foreground unavailable');
+      return false;
+    }, 'darwin');
+    tracker.spawn({ ...identity, agent: null });
+    await tracker.refresh();
+    expect(() => tracker.readForGuard(1, 0, 'g1')).toThrow('agent status unavailable');
+    unavailable = false;
+    await tracker.refresh();
+    expect(tracker.readForGuard(1, 0, 'g1')).toEqual({ agent: null, state: null });
+  });
+
+  it('never lends a prior generation failure or an unsampled idle state to a replacement', async () => {
+    let generation = 'g1';
+    let unavailable = true;
+    const tracker = new AgentStatusTracker({
+      liveShell: () => ({ pid: 10, generation, agent: 'claude' }),
+      liveStatus: async () => {
+        if (unavailable) throw new Error('old screen unavailable');
+        return { rows: ['✻ Thinking…', 'esc to interrupt'], title: '' };
+      },
+    }, async () => false, 'win32');
+    tracker.spawn(identity);
+    await tracker.refresh();
+    expect(() => tracker.readForGuard(1, 0, 'g1')).toThrow('agent status unavailable');
+    generation = 'g2';
+    tracker.spawn({ ...identity, generation: 'g2' });
+    expect(() => tracker.readForGuard(1, 0, 'g1')).toThrow('agent status unavailable');
+    expect(() => tracker.readForGuard(1, 0, 'g2')).toThrow('agent status unavailable');
+    unavailable = false;
+    await tracker.refresh();
+    expect(tracker.readForGuard(1, 0, 'g2')).toEqual({ agent: 'claude', state: 'busy' });
+  });
 });

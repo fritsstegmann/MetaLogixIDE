@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ActivityBar } from '@renderer/components/ActivityBar';
 
 const noop = () => {};
-function render(props: { chatUnread?: number; gitDirty?: number; taskCount?: number; active?: 'projects' | 'chat' | 'git' | 'tasks' } = {}) {
+function render(props: { chatUnread?: number; gitDirty?: number; taskCount?: number; active?: 'projects' | 'chat' | 'git' | 'tasks' | 'fleet' } = {}) {
   return renderToStaticMarkup(
     <ActivityBar active={props.active ?? 'projects'} onSelect={noop} onToggleSidebar={noop} sidebarOpen
       chatUnread={props.chatUnread} gitDirty={props.gitDirty} taskCount={props.taskCount} />,
@@ -30,21 +30,29 @@ describe('ActivityBar geometry (AC10)', () => {
     expect(c).toContain('w-14');
     expect(c).not.toContain('w-11');
   });
-  it('every button is 36x36 with 10px radius', () => {
+  it('every rail button offers a 44px touch target with 10px radius', () => {
     const bs = buttons(render());
-    expect(bs).toHaveLength(5);
+    expect(bs).toHaveLength(6);
     for (const b of bs) {
-      expect(classesOf(b)).toEqual(expect.arrayContaining(['w-9', 'h-9', 'rounded-[10px]']));
+      expect(classesOf(b)).toEqual(expect.arrayContaining(['w-11', 'h-11', 'rounded-[10px]']));
       expect(classesOf(b)).not.toContain('w-8');
     }
   });
   it('every icon is 16x16', () => {
     const icons = svgs(render());
-    expect(icons).toHaveLength(5);
+    expect(icons).toHaveLength(6);
     for (const s of icons) {
       expect(s).toContain('width="16"');
       expect(s).toContain('height="16"');
     }
+  });
+  it('names the Fleet destination and marks it active without hiding other views', () => {
+    const html = render({ active: 'fleet' });
+    expect(html).toContain('data-testid="ab-fleet"');
+    expect(html).toContain('aria-label="Fleet"');
+    expect(html).toMatch(/<button[^>]*aria-label="Fleet"[^>]*aria-current="page"/);
+    expect(html).toContain('data-testid="ab-projects"');
+    expect(html).toContain('bg-[--accent-soft]');
   });
 });
 

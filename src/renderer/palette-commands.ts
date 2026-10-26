@@ -27,6 +27,7 @@ export type PaletteTab = 'shell' | 'files' | 'diff' | 'env';
 /** The App actions the commands run, plus the two facts that shape the list. */
 export interface PaletteCommandDeps {
   readonly hasProject: boolean;
+  readonly hasPrimary: boolean;
   readonly sidebarOpen: boolean;
   readonly openPalette: (seed: PaletteSeed) => void;
   readonly openProjectSearch: () => void;
@@ -107,5 +108,5 @@ export function buildPaletteCommands(d: PaletteCommandDeps): PaletteCommand[] {
       run: () => d.openSettings(section),
     })),
   ];
-  return d.hasProject ? all : all.filter((c) => !c.needsProject);
+  return all.filter((command) => (d.hasProject || !command.needsProject) && (d.hasPrimary || command.id !== 'shell.unload'));
 }

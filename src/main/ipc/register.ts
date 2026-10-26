@@ -2,6 +2,8 @@ import type { IpcMain } from 'electron';
 import { app, dialog, nativeImage, nativeTheme, shell, BrowserWindow } from 'electron';
 import log from 'electron-log/main';
 import type { Services } from '@main/services';
+import type { FleetOperations } from '@main/fleet/service';
+import type { FleetGitStatus } from '@shared/fleet-contract';
 import type { GitDiffKind, IpcChannelName, IpcRequest, IpcResponse, IpcEventName, IpcEvents } from '@shared/ipc-contract';
 import { discoverProjects } from '@main/domain/discovery';
 import { pruneMissingProjects } from '@main/domain/prune-missing';
@@ -31,18 +33,22 @@ import {
   resolveTerminalWeights,
 } from '@shared/terminal-font-weight';
 import { parseViewedShells } from '@main/notifications/viewed-shells';
+import { parseFleetViewing } from '@main/notifications/fleet-notices';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from 'node:fs';
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { parseGitPanelStatus } from '@shared/parse-git-panel-status';
 import { describeGitFailure, runGit } from '@main/git/run-git';
+import { gitCommandError, runGitCommand } from '@main/git/run-git-command';
 import { GIT_DIFF_MAX_BYTES, readFileDiff } from '@main/git/file-diff';
 import { readDiffSides } from '@main/git/diff-sides';
 import { dropHandlers } from '@main/drops/handlers';
 import { keepAwakeHandlers } from '@main/keep-awake/handlers';
 import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
+import { decodeStoredSecret, encodeStoredSecret } from '@main/credential-encoding';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import type { StopPrimarySessionRequest } from '@shared/unload-session-contract';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
 const execFileAsync = promisify(execFile);
@@ -83,6 +89,26 @@ function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
   return patch;
 }
 
+
+/** Validates a local guarded-unload target before reading PTY or tracker state. */
+function primaryProjectId(request: unknown): number {
+  if (typeof request !== 'object' || request === null || !('projectId' in request) ||
+    typeof request.projectId !== 'number' || !Number.isSafeInteger(request.projectId) || request.projectId <= 0)
+    throw new Error('invalid projectId');
+  return request.projectId;
+}
+
+/** Parses consent as a bounded opaque generation and an explicit work-risk acknowledgment. */
+function stopPrimaryRequest(request: unknown): StopPrimarySessionRequest {
+  const projectId = primaryProjectId(request);
+  if (typeof request !== 'object' || request === null || !('generation' in request) ||
+    typeof request.generation !== 'string' || request.generation.length > 128 ||
+    !/^[A-Za-z0-9-]+$/.test(request.generation))
+    throw new Error('invalid generation');
+  if (!('acknowledgedWorkRisk' in request) || typeof request.acknowledgedWorkRisk !== 'boolean')
+    throw new Error('invalid acknowledgedWorkRisk');
+  return { projectId, generation: request.generation, acknowledgedWorkRisk: request.acknowledgedWorkRisk };
+}
 export type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
 
@@ -196,6 +222,59 @@ function peekFile({ abs, root, projectId }: PeekCandidate, maxLines: number): Ip
   }
 }
 
+/** Reads one field from an untrusted IPC payload; null, non-objects and missing fields yield undefined. */
+function requestField(req: unknown, key: string): unknown {
+  return typeof req === 'object' && req !== null && key in req
+    ? (req as Record<string, unknown>)[key]
+    : undefined;
+}
+
+function needFleet(services: Services): NonNullable<Services['fleet']> {
+  if (!services.fleet) throw new Error('Fleet is not available');
+  return services.fleet;
+}
+
+const SAFE_FLEET_ERRORS: readonly string[] = [
+  'Fleet port must be an integer between 1024 and 65535',
+  'Fleet identity reset is not available',
+  'Fleet service not started',
+  'Peer is not linked and online',
+  'Peer refused fleet operation',
+  'Choose a Claude permission mode on the remote machine first',
+  'Claude is unavailable on the remote machine',
+  'Remote shell limit reached; unpin a shell or raise the cap',
+  'Remote project folder is unavailable',
+  'Peer disconnected',
+  'Fleet request timed out',
+  'Fleet channel backpressure limit',
+  'Invalid project ID',
+  'Invalid shell identity',
+  'Invalid shell input',
+  'Invalid terminal dimensions',
+  'Invalid CLI launch',
+  'Invalid peer shell',
+  'Invalid peer output',
+  'Invalid peer subscription',
+  'Invalid peer status',
+  'Invalid peer status page',
+  'Invalid peer profiles',
+  'Invalid peer git status',
+  'No active pairing',
+  'Verification code mismatch',
+  'Peer not available for pairing',
+  'Peer not discovered',
+  'Invalid peer identity',
+];
+/** Returns only known fixed Fleet diagnostics to the renderer, not adapter or peer exception text. */
+function fleetIpcFailure(error: unknown): Error {
+  if (error instanceof Error && /^Fleet port (?:[1-9]\d{3,4}) is already in use$/.test(error.message))
+    return new Error('Fleet port is already in use');
+  if (error instanceof Error && error.message.startsWith('invalid fleet:viewing:'))
+    return new Error('invalid fleet:viewing');
+  return new Error(error instanceof Error && SAFE_FLEET_ERRORS.includes(error.message)
+    ? error.message : 'Fleet operation unavailable');
+}
+
 const handlers: { [C in IpcChannelName]: Handler<C> } = {
   'dialogs:pick-directory': async (_s, _req, event) => {
     if (process.env.METAIDE_TEST_MODE === '1') {
@@ -214,6 +293,51 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   },
 
   'app:ping': async () => 'pong',
+  'fleet:get-state': async (s) => needFleet(s).state(),
+  'fleet:set-enabled': async (s, { enabled }) => needFleet(s).setEnabled(enabled),
+  'fleet:set-port': async (s, req) => needFleet(s).setPort(requestField(req, 'port')),
+  'fleet:reset-identity': async (s) => needFleet(s).resetIdentity(),
+  'fleet:pair': async (s, { peerId }) => { await needFleet(s).pair(peerId); return { ok: true }; },
+  'fleet:approve': async (s, { peerId, verificationCode }) => {
+    await needFleet(s).approve(peerId, verificationCode);
+    return { ok: true };
+  },
+  'fleet:revoke': async (s, { peerId }) => { await needFleet(s).revoke(peerId); return { ok: true }; },
+  'fleet:status': async (s, { peerId }) => needFleet(s).status(peerId),
+  'fleet:launch': async (s, { peerId, projectId }) => needFleet(s).launch(peerId, projectId),
+  'fleet:launch-claude': async (s, { peerId, projectId }) => needFleet(s).launchClaude(peerId, projectId),
+  'fleet:profiles': async (s, { peerId, projectId }) => needFleet(s).profiles(peerId, projectId),
+  'fleet:launch-cli': async (s, { peerId, projectId, profileName, argv, save }) =>
+    needFleet(s).launchCli(peerId, projectId, { ...(profileName !== undefined ? { profileName } : {}),
+      ...(argv !== undefined ? { argv } : {}), ...(save !== undefined ? { save } : {}) }),
+  'fleet:set-default-cli': async (s, { peerId, projectId, name }) => needFleet(s).setDefaultCli(peerId, projectId, name),
+  'fleet:remove-cli-profile': async (s, { peerId, projectId, name }) => needFleet(s).removeCliProfile(peerId, projectId, name),
+  'fleet:subscribe': async (s, { peerId, projectId, shellIndex }) => needFleet(s).subscribe(peerId, projectId, shellIndex),
+  'fleet:unsubscribe': async (s, { peerId, subscriptionId }) => {
+    await needFleet(s).unsubscribe(peerId, subscriptionId);
+    return { ok: true };
+  },
+  'fleet:resize': async (s, { peerId, projectId, shellIndex, cols, rows }) => {
+    await needFleet(s).resize(peerId, projectId, shellIndex, cols, rows);
+    return { ok: true };
+  },
+  'fleet:stop': async (s, { peerId, projectId, shellIndex }) => {
+    await needFleet(s).stopShell(peerId, projectId, shellIndex);
+    return { ok: true };
+  },
+  'fleet:write': async (s, { peerId, projectId, shellIndex, data }) => {
+    await needFleet(s).write(peerId, projectId, shellIndex, data);
+    return { ok: true };
+  },
+  'fleet:snapshot': async (s, { peerId, projectId, shellIndex }) =>
+    needFleet(s).snapshot(peerId, projectId, shellIndex),
+  'fleet:git-status': async (s, { peerId, projectId }) => needFleet(s).gitStatus(peerId, projectId),
+  // Renderer-supplied view data: validated here; a forged view can at worst hold back the user's own notices.
+  'fleet:viewing': async (s, req) => {
+    needFleet(s).setViewing(parseFleetViewing(req));
+    return { ok: true } as const;
+  },
+
 
   'roots:list':   async (s) => ({ roots: s.roots.list() }),
   'roots:add':    async (s, { path }) => {
@@ -280,7 +404,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (initGit) {
       const gitDir = join(path, '.git');
       if (!existsSync(gitDir)) {
-        const r = spawnSync('git', ['init', '-q', path], { cwd: path });
+        const r = await runGitCommand(path, ['init', '-q', path]);
         if (r.status !== 0) {
           // Fall back to just an empty .git directory marker so discovery picks it up.
           mkdirSync(gitDir, { recursive: true });
@@ -315,11 +439,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     // Delegate the clone to system git — much simpler than a JS libgit2
     // dependency and handles SSH, https, credential helpers, submodules, …
     // exactly like the user's own terminal would.
-    const r = spawnSync('git', ['clone', '--', url, path], { cwd: root.path });
-    if (r.status !== 0) {
-      const stderr = r.stderr?.toString() || 'git clone failed';
-      throw new Error(stderr.trim());
-    }
+    const r = await runGitCommand(root.path, ['clone', '--', url, path]);
+    if (r.status !== 0) throw gitCommandError(r, 'git clone failed');
     const project = s.projects.upsert(rootId, path, folder);
     s.projects.markLastOpened(project.id, new Date());
     return { project };
@@ -447,8 +568,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (launch.variant === 'subsequent') {
       const settlement = await new Promise<'ok' | 'no-session' | { error: string }>((resolveP) => {
         const timer = setTimeout(() => resolveP('ok'), 2500);
-        const onExit = (ev: { projectId: number; shellIndex: number; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
+        const onExit = (ev: { projectId: number; shellIndex: number; generation: string; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
           if (ev.projectId !== projectId || ev.shellIndex !== 0) return;
+          const live = s.ptyManager.liveShell(projectId, 0);
+          if (live && live.generation !== ev.generation) return;
           clearTimeout(timer);
           s.ptyManager.off('exit', onExit);
           const text = (ev.earlyOutput ?? '').toLowerCase();
@@ -496,10 +619,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const project = s.projects.get(projectId);
     if (!project) throw new Error(`no project ${projectId}`);
     assertProjectPathExists(project);
-    // Pick the smallest unused shellIndex for this project. shellIndex 0 is
-    // typically the Claude shell; ad-hoc terminals get 1, 2, …
     const used = new Set(s.shells.list().filter(r => r.projectId === projectId).map(r => r.shellIndex));
-    let idx = 0;
+    let idx = 1;
     while (used.has(idx)) idx++;
     // Respect the alive cap the same way the primary launch does.
     const cap = s.settings.get('keep_alive_cap');
@@ -609,6 +730,27 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
+  'shells:inspect-primary': async (s, request) => {
+    const projectId = primaryProjectId(request);
+    const live = s.ptyManager.liveShell(projectId, 0);
+    if (!live) return { kind: 'gone' };
+    if (!s.agentStatus) throw new Error('agent status not installed');
+    const status = s.agentStatus.readForGuard(projectId, 0, live.generation);
+    return { kind: 'live', generation: live.generation, ...status };
+  },
+  'shells:stop-primary': async (s, request) => {
+    const { projectId, generation, acknowledgedWorkRisk } = stopPrimaryRequest(request);
+    const live = s.ptyManager.liveShell(projectId, 0);
+    if (!live) return { kind: 'gone' };
+    if (live.generation !== generation) return { kind: 'replaced' };
+    if (!s.agentStatus) throw new Error('agent status not installed');
+    const { state } = s.agentStatus.readForGuard(projectId, 0, generation);
+    if (!acknowledgedWorkRisk && (state === 'busy' || state === 'blocked'))
+      return { kind: 'escalated' };
+    const kind = s.ptyManager.stopIfGeneration(projectId, generation);
+    if (kind === 'stopped') s.shells.remove(projectId, 0);
+    return { kind };
+  },
   /**
    * Repair a corrupted Claude session: find the project's session dir
    * (`~/.claude/projects/<encoded-path>/`), locate the most recently
@@ -670,7 +812,11 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     writeFileSync(targetPath, repaired.join('\n'), 'utf8');
     return { repaired: 1, blocksStripped, backup: backupPath } as const;
   },
-  'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => { s.ptyManager.resize(projectId, shellIndex, cols, rows); return { ok: true } as const; },
+  'shells:resize': async (s, { projectId, shellIndex, cols, rows }) => {
+    if (!s.fleet?.isRemotelyControlled(projectId, shellIndex))
+      s.ptyManager.resize(projectId, shellIndex, cols, rows);
+    return { ok: true } as const;
+  },
   'shells:write':  async (s, { projectId, shellIndex, data }) => { s.ptyManager.write(projectId, shellIndex, data); s.shells.touch(projectId, shellIndex, new Date()); return { ok: true } as const; },
   'agent-state:list': async (s) => {
     if (!s.agentStatus) throw new Error('agent status not installed');
@@ -911,7 +1057,7 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (remember) {
       try {
         const keytar = await loadKeytar();
-        await keytar.setPassword(KEYTAR_SERVICE, username, password);
+        await keytar.setPassword(KEYTAR_SERVICE, username, encodeStoredSecret(password));
       } catch (err) {
         console.warn('[metaproject] failed to persist credential', err);
       }
@@ -924,8 +1070,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!username) return { username: null, hasPassword: false };
     try {
       const keytar = await loadKeytar();
-      const pw = await keytar.getPassword(KEYTAR_SERVICE, username);
-      return { username, hasPassword: !!pw };
+      const stored = await keytar.getPassword(KEYTAR_SERVICE, username);
+      return { username, hasPassword: stored !== null && decodeStoredSecret(stored).text !== '' };
     } catch {
       return { username, hasPassword: false };
     }
@@ -950,7 +1096,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     let password: string | null = null;
     try {
       const keytar = await loadKeytar();
-      password = await keytar.getPassword(KEYTAR_SERVICE, username);
+      const stored = await keytar.getPassword(KEYTAR_SERVICE, username);
+      password = stored === null ? null : decodeStoredSecret(stored).text;
     } catch (err) {
       log.warn('[metaproject] auto-login: keychain read failed', err);
       return { ok: false, reason: `keychain-error: ${err instanceof Error ? err.message : String(err)}` };
@@ -1216,8 +1363,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
     if (paths.length === 0) return { ok: true } as const;
-    const r = spawnSync('git', ['-C', p.path, 'add', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git add failed');
+    const r = await runGitCommand(p.path, ['add', '--', ...paths], { timeout: 15000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git add failed');
     return { ok: true } as const;
   },
   'git:unstage': async (s, { projectId, paths }) => {
@@ -1225,8 +1372,8 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!p) throw new Error(`no project ${projectId}`);
     if (paths.length === 0) return { ok: true } as const;
     // `git restore --staged` is the modern equivalent of `git reset HEAD --`.
-    const r = spawnSync('git', ['-C', p.path, 'restore', '--staged', '--', ...paths], { encoding: 'utf8', timeout: 15000 });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || 'git unstage failed');
+    const r = await runGitCommand(p.path, ['restore', '--staged', '--', ...paths], { timeout: 15000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git unstage failed');
     return { ok: true } as const;
   },
   'git:commit':  async (s, { projectId, message }) => {
@@ -1235,22 +1382,22 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (!message.trim()) throw new Error('commit message is empty');
     // Pass the message via `-F -` on stdin so we never worry about shell
     // quoting on multi-line messages or embedded backticks/dollars.
-    const r = spawnSync('git', ['-C', p.path, 'commit', '-F', '-'], { encoding: 'utf8', timeout: 30000, input: message });
-    if (r.status !== 0) throw new Error(r.stderr.trim() || r.stdout.trim() || 'git commit failed');
+    const r = await runGitCommand(p.path, ['commit', '-F', '-'], { timeout: 30000, input: message });
+    if (r.status !== 0) throw gitCommandError(r, 'git commit failed');
     return { ok: true } as const;
   },
   'git:push':    async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const r = spawnSync('git', ['-C', p.path, 'push'], { encoding: 'utf8', timeout: 60000 });
-    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git push failed');
+    const r = await runGitCommand(p.path, ['push'], { timeout: 60000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git push failed');
     return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
   },
   'git:pull':    async (s, { projectId }) => {
     const p = s.projects.get(projectId);
     if (!p) throw new Error(`no project ${projectId}`);
-    const r = spawnSync('git', ['-C', p.path, 'pull'], { encoding: 'utf8', timeout: 60000 });
-    if (r.status !== 0) throw new Error((r.stderr || r.stdout).trim() || 'git pull failed');
+    const r = await runGitCommand(p.path, ['pull'], { timeout: 60000 });
+    if (r.status !== 0) throw gitCommandError(r, 'git pull failed');
     return { ok: true, output: (r.stdout + r.stderr).trim() } as const;
   },
 
@@ -1447,6 +1594,129 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
   ...keepAwakeHandlers,
 };
 
+function fleetName(name: string): string {
+  const clean = name.includes('\0') ? name.replaceAll('\0', '') : name;
+  if (Buffer.byteLength(clean, 'utf8') <= 160) return clean || 'Unnamed project';
+  const encoded = Buffer.from(clean, 'utf8');
+  let end = 156;
+  while ((encoded[end]! & 0xc0) === 0x80) end--;
+  return encoded.toString('utf8', 0, end);
+}
+
+/** Bounds a local git status for a peer: branch, counts and dirty flag only, never paths. */
+export function fleetGitSummary(status: { isRepo: boolean; branch: string | null; ahead: number; behind: number; dirty: boolean; files: Record<string, unknown> }): FleetGitStatus {
+  if (!status.isRepo) return { isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 };
+  const count = (value: number): number => Math.min(Math.max(Math.trunc(value) || 0, 0), 1_000_000);
+  return {
+    isRepo: true,
+    branch: fleetBranch(status.branch),
+    dirty: status.dirty,
+    ahead: count(status.ahead),
+    behind: count(status.behind),
+    changedCount: count(Object.keys(status.files).length),
+  };
+}
+
+function fleetBranch(branch: string | null): string | null {
+  if (!branch || /\p{Cc}/u.test(branch)) return null;
+  const encoded = Buffer.from(branch, 'utf8');
+  if (encoded.length <= 255) return branch;
+  let end = 255;
+  while ((encoded[end]! & 0xc0) === 0x80) end--;
+  return encoded.toString('utf8', 0, end);
+}
+
+/** Restricts peer operations to existing local shell handlers and an explicit status allow-list. */
+export function createFleetOperations(services: Services): FleetOperations {
+  return {
+    status: () => {
+      const rootRows = services.roots.list();
+      const projectRows = services.projects.list();
+      const live = services.ptyManager.liveShells();
+      if (rootRows.length > 256 || projectRows.length > 256 || live.length > 256)
+        throw new Error('Fleet status exceeds the 256-root/project/shell limit');
+      const roots = rootRows.map(({ id, path }) => ({ id, name: fleetName(basename(path)) }));
+      const projects = projectRows.map(({ id, rootId, name }) => ({
+        id, rootId, name: fleetName(name.replaceAll('\\', '/').split('/').at(-1) ?? ''),
+      }));
+      const visibleProjects = new Set(projectRows.map(({ id }) => id));
+      const agents = new Map(
+        (services.agentStatus?.list() ?? []).map((entry) =>
+          [`${entry.projectId}:${entry.shellIndex}`, entry]),
+      );
+      const shellRows = new Map(services.shells.list().map(row => [`${row.projectId}:${row.shellIndex}`, row]));
+      const shells = live.filter(({ projectId }) => visibleProjects.has(projectId))
+        .map(({ projectId, shellIndex }) => {
+          const agent = agents.get(`${projectId}:${shellIndex}`);
+          const row = shellRows.get(`${projectId}:${shellIndex}`);
+          const bin = row?.launchArgv?.[0] ?? '';
+          const base = bin.replace(/.*\//, '');
+          const launchName = base === '$SHELL' || /^(zsh|bash|sh|fish)$/.test(base)
+            ? 'Terminal' : base ? base[0]!.toUpperCase() + base.slice(1) : `Shell ${shellIndex}`;
+          return { projectId, shellIndex, agent: agent?.agent ?? null, state: agent?.state ?? 'idle' as const,
+            launchName: fleetName(launchName.replaceAll('\\', '/').split('/').at(-1) ?? ''),
+            pinned: !!row?.pinned, startedAt: row?.startedAt ?? null, lastActiveAt: row?.lastActiveAt ?? null };
+        });
+      return { roots, projects, shells };
+    },
+    launch: (projectId) => handlers['shells:launch-plain'](services, { projectId }),
+    launchClaude: (projectId) => handlers['shells:launch'](services, { projectId }),
+    profiles: async (projectId) => {
+      const { profiles } = await handlers['shells:cli-profiles-list'](services, { projectId });
+      return { profiles: profiles.map(({ name, scope, icon }) =>
+        ({ name, scope, ...(icon !== undefined ? { icon } : {}) })),
+        defaultCliName: services.projects.get(projectId)?.config.defaultCliName ?? null };
+    },
+    launchCli: (projectId, options) => handlers['shells:launch-cli'](services, { projectId, ...options }),
+    setDefaultCli: async (projectId, name) => {
+      const { project } = await handlers['shells:set-default-cli'](services, { projectId, name });
+      return { defaultCliName: project.config.defaultCliName ?? null };
+    },
+    removeCliProfile: (projectId, name) =>
+      handlers['shells:cli-profiles-remove'](services, { projectId, name }),
+    hasProject: (projectId) => Boolean(services.projects.get(projectId)),
+    isAlive: (projectId, shellIndex) =>
+      Boolean(services.projects.get(projectId)) && services.ptyManager.isAlive(projectId, shellIndex),
+    terminalSnapshot: (projectId, shellIndex) => services.ptyManager.getSnapshot(projectId, shellIndex),
+    watch: (projectId, shellIndex, onData, onExit) => {
+      const data = (event: { projectId: number; shellIndex: number; data: string }): void => {
+        if (event.projectId === projectId && event.shellIndex === shellIndex) onData(event.data);
+      };
+      const generation = services.ptyManager.liveShell(projectId, shellIndex)?.generation;
+      const exit = (event: { projectId: number; shellIndex: number; generation: string }): void => {
+        if (event.projectId === projectId && event.shellIndex === shellIndex && event.generation === generation) onExit();
+      };
+      services.ptyManager.on('data', data);
+      services.ptyManager.on('exit', exit);
+      return () => {
+        services.ptyManager.off('data', data);
+        services.ptyManager.off('exit', exit);
+      };
+    },
+    resize: async (projectId, shellIndex, cols, rows) => {
+      services.ptyManager.resize(projectId, shellIndex, cols, rows);
+    },
+    stop: async (projectId, shellIndex) => {
+      await handlers['shells:kill'](services, { projectId, shellIndex });
+    },
+    write: async (projectId, shellIndex, data) => {
+      await handlers['shells:write'](services, { projectId, shellIndex, data });
+    },
+    snapshot: async (projectId, shellIndex) => {
+      const result = await handlers['shells:snapshot'](services, { projectId, shellIndex });
+      if (Buffer.byteLength(result.output, 'utf8') <= 8192) return result;
+      const encoded = Buffer.from(result.output, 'utf8');
+      let start = encoded.length - 8188;
+      while ((encoded[start]! & 0xc0) === 0x80) start++;
+      return { alive: result.alive, output: encoded.toString('utf8', start) };
+    },
+    gitStatus: async (projectId) => {
+      if (!services.projects.list().some(({ id }) => id === projectId)) throw new Error(`no project ${projectId}`);
+      return fleetGitSummary(await handlers['git:status'](services, { projectId }));
+    },
+  };
+}
+
 /** Events broadcast after a channel's handler resolves; exported for the CHANNEL_EMITS guard test. */
 export const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'roots:add':      ['projects:changed'],
@@ -1468,6 +1738,7 @@ export const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'shells:set-default-cli': ['projects:changed'],
   'projects:update-config': ['projects:changed'],
   'shells:kill':    ['alive-shells:changed'],
+  'shells:stop-primary': ['alive-shells:changed'],
   'shells:pin':     ['alive-shells:changed'],
 };
 
@@ -1476,12 +1747,15 @@ function eventPayload<E extends IpcEventName>(name: E): IpcEvents[E] {
   return {} as IpcEvents[E];
 }
 
+/** Registers IPC handlers and forwards PTY exits only when no newer generation owns the shell. */
 export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: SendEvent, windowHooks?: WindowHooks): void {
   if (services.ptyManager) {
     services.ptyManager.on('data', (ev: IpcEvents['pty:data']) => sendEvent('pty:data', ev));
-    services.ptyManager.on('exit', (ev: IpcEvents['pty:exit']) => {
-      sendEvent('pty:exit', ev);
+    services.ptyManager.on('exit', (ev: IpcEvents['pty:exit'] & { generation: string }) => {
+      const live = services.ptyManager.liveShell(ev.projectId, ev.shellIndex);
+      if (live && live.generation !== ev.generation) return;
       services.shells?.remove(ev.projectId, ev.shellIndex);
+      sendEvent('pty:exit', { projectId: ev.projectId, shellIndex: ev.shellIndex, code: ev.code });
       sendEvent('alive-shells:changed', {});
     });
   }
@@ -1515,9 +1789,14 @@ export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: Sen
     if (WINDOW_CHANNELS.has(channel) || CUSTOM_EMIT_CHANNELS[channel]) continue; // wired below
     ipcMain.handle(channel, async (event, req) => {
       const fn = handlers[channel] as (s: Services, req: unknown, e?: Electron.IpcMainInvokeEvent) => Promise<unknown>;
-      const result = await fn(services, req, event);
-      for (const evt of CHANNEL_EMITS[channel] ?? []) sendEvent(evt, eventPayload(evt));
-      return result;
+      try {
+        const result = await fn(services, req, event);
+        for (const evt of CHANNEL_EMITS[channel] ?? []) sendEvent(evt, eventPayload(evt));
+        return result;
+      } catch (error) {
+        if (channel.startsWith('fleet:')) throw fleetIpcFailure(error);
+        throw error;
+      }
     });
   }
 

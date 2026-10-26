@@ -7,7 +7,9 @@ import type { TerminalFontWeight } from './terminal-font-weight';
 import type { ProjectDefaultAgentRequest, ScopedCliProfile } from './project-default-agent';
 import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, StageFileRequest, StageResult } from './terminal-drop-contract';
 import type { TasksDiscovery } from './tasks-contract';
+import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
 import type { KeepAwakeDarkenResult, KeepAwakeStartRequest, KeepAwakeStartResult, KeepAwakeState } from './keep-awake-contract';
+import type { PrimarySessionInspection, StopPrimarySessionRequest, StopPrimarySessionResult } from './unload-session-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -100,6 +102,10 @@ export interface IpcContract {
    */
   'shells:set-default-cli':     { request: ProjectDefaultAgentRequest; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
+  /** One live local shell-zero generation and its recognized agent status; unavailable status rejects. */
+  'shells:inspect-primary': { request: { projectId: number }; response: PrimarySessionInspection };
+  /** Stops only the inspected generation; stale consent cannot stop a replacement or newly reported work. */
+  'shells:stop-primary': { request: StopPrimarySessionRequest; response: StopPrimarySessionResult };
   /** Repair a corrupted Claude session by stripping all thinking blocks from the most recent .jsonl session file. Backs up the original. */
   'claude:repair-session': { request: { projectId: number }; response: { repaired: number; blocksStripped: number; backup: string } | { repaired: 0; blocksStripped: 0; backup: null; reason: string } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
@@ -384,6 +390,39 @@ export interface IpcContract {
     };
   };
 
+  /** Fleet transport and trust live only in main; the renderer sees approved peer state. */
+  'fleet:get-state':   { request: undefined; response: FleetState };
+  'fleet:set-enabled': { request: { enabled: boolean }; response: FleetState };
+  'fleet:set-port':    { request: { port: number }; response: FleetState };
+  'fleet:reset-identity': { request: undefined; response: FleetState };
+  'fleet:pair':        { request: { peerId: string }; response: { ok: true } };
+  'fleet:approve':     { request: { peerId: string; verificationCode: string }; response: { ok: true } };
+  'fleet:revoke':      { request: { peerId: string }; response: { ok: true } };
+  'fleet:status':      { request: { peerId: string }; response: FleetStatus };
+  'fleet:launch':      { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  /** Launches or reattaches Claude using the remote host's existing project policy. */
+  'fleet:launch-claude': { request: { peerId: string; projectId: number }; response: { shellIndex: number } };
+  /** Lists only display metadata from the remote host's project and global CLI catalog. */
+  'fleet:profiles': { request: { peerId: string; projectId: number };
+    response: { profiles: readonly { name: string; scope: 'project' | 'global'; icon?: string }[]; defaultCliName: string | null } };
+  /** Launches a saved remote CLI or a bounded inline command without transmitting environment values. */
+  'fleet:launch-cli': { request: { peerId: string; projectId: number; profileName?: string; argv?: string[]; save?: boolean };
+    response: { shellIndex: number } };
+  'fleet:set-default-cli': { request: { peerId: string; projectId: number; name: string | null };
+    response: { defaultCliName: string | null } };
+  'fleet:remove-cli-profile': { request: { peerId: string; projectId: number; name: string }; response: { ok: true } };
+  /** One active terminal attachment streams a full screen snapshot, then live PTY output. */
+  'fleet:subscribe': { request: { peerId: string; projectId: number; shellIndex: number }; response: { subscriptionId: string } };
+  'fleet:unsubscribe': { request: { peerId: string; subscriptionId: string }; response: { ok: true } };
+  'fleet:resize': { request: { peerId: string; projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };
+  'fleet:stop':        { request: { peerId: string; projectId: number; shellIndex: number }; response: { ok: true } };
+  'fleet:write':       { request: { peerId: string; projectId: number; shellIndex: number; data: string }; response: { ok: true } };
+  'fleet:snapshot':    { request: { peerId: string; projectId: number; shellIndex: number }; response: { output: string; alive: boolean } };
+  /** Git summary of a remote project, read on the peer that hosts it. */
+  'fleet:git-status':  { request: { peerId: string; projectId: number }; response: FleetGitStatus };
+  /** The remote shell this window shows, or null; Fleet notices for it are held back. */
+  'fleet:viewing':     { request: { shell: FleetShellRef | null }; response: { ok: true } };
+
   // keep-awake (macOS only; off darwin start/darken return 'unsupported')
   'keep-awake:get':    { request: undefined; response: KeepAwakeState };
   'keep-awake:start':  { request: KeepAwakeStartRequest; response: KeepAwakeStartResult };
@@ -425,6 +464,10 @@ export interface IpcEvents {
    * add the file's parent as a new root if nothing matches.
    */
   'app:open-file-request':  { path: string };
+  'fleet:changed':         FleetState;
+  'fleet:terminal':        FleetTerminalEvent;
+  /** A Fleet notice was clicked: open this remote shell. */
+  'fleet:focus-remote-shell': FleetShellRef;
   /** Keep-awake state changed (start, re-start, stop, expiry, quit); sent to every window. */
   'keep-awake:changed':     KeepAwakeState;
   /** Both darken actions (`pmset displaysleepnow`, ScreenSaverEngine) failed; keep-awake stays on. */

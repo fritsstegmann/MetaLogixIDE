@@ -1,10 +1,8 @@
-/**
- * The Settings dialog's scrolling content area, showing the panel for the
- * active section.
- */
+/** Settings dialog content routes each nav section to its dedicated settings panel. */
 import type { FontDiscoveryState } from '@renderer/components/FontControl';
 import { EnvironmentPanel } from '@renderer/components/settings/EnvironmentPanel';
 import { GeneralPanel } from '@renderer/components/settings/GeneralPanel';
+import { FleetSettingsPanel } from '@renderer/components/settings/FleetSettingsPanel';
 import { LaunchPanel } from '@renderer/components/settings/LaunchPanel';
 import { MetaprojectPanel } from '@renderer/components/settings/MetaprojectPanel';
 import { RootsPanel } from '@renderer/components/settings/RootsPanel';
@@ -18,7 +16,7 @@ interface Props {
   readonly onLoadInstalledFonts: () => Promise<void>;
 }
 
-/** Renders the panel for `section`; General gets the session's font discovery, Environment the app-owned `envDrafts`. */
+/** Renders the active section; app-wide Fleet discovery stays separate from Fleet pairing controls. */
 export function SettingsSectionPanel({
   section,
   envDrafts,
@@ -34,6 +32,7 @@ export function SettingsSectionPanel({
       {section === 'launch' && <LaunchPanel />}
       {section === 'env' && <EnvironmentPanel drafts={envDrafts} />}
       {section === 'metaproject' && <MetaprojectPanel />}
+      {section === 'fleet' && <FleetSettingsPanel />}
     </div>
   );
 }
