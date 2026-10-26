@@ -117,11 +117,16 @@ its primary Claude command if there are no live shells. The header uses the
 local Shell tab styling, project pill and shell tab strip; each tab reflects
 the driven machine's live shell and agent state. The add-shell menu lists
 that machine's CLI profiles and supports profile launches, custom commands,
-plain shells, folder defaults and removal of saved folder profiles. Switching
-tabs detaches only the selected terminal stream; other PTYs stay alive on
-the remote machine. Stopping a tab terminates that remote PTY. Local-only
-Files/Diff/Env/project-settings views, split and popout controls are not
-shown for remote projects because Fleet does not expose those operations.
+plain shells, folder defaults and removal of saved folder profiles. A tab
+switch keeps the previous attachment until the replacement reports its
+parsed viewport ready. It then detaches the old stream. Other remote PTYs
+remain alive. A failed replacement returns to the previous tab
+(`src/renderer/components/RemoteTerminal.tsx:266-278,326-343,421-432`).
+Stopping a tab terminates its remote PTY. Remote Split launches a plain
+shell in the right pane and keeps it out of the tab strip. **To tab** makes
+that shell the selected tab; closing the split stops it
+(`src/renderer/components/RemoteTerminal.tsx:85-121,398-443`).
+Files, Diff, Env, project-settings and popout remain local-only.
 Selecting a local folder restores its workspace; local and remote numeric
 project IDs remain separate.
 The selected remote machine refreshes its status while visible. The Fleet
@@ -155,11 +160,16 @@ when pending live output for one subscription exceeds 262,144 bytes. Neither
 limit permits partial terminal replay (`src/main/fleet/channel.ts:51-65`,
 `src/main/fleet/service.ts:1019-1024`).
 
-When a remote terminal first attaches or explicitly reattaches, its xterm
-shows the latest output after snapshot parsing completes. If the user scrolls
-up before that point, the attachment keeps the user's position. Later data
-and resizing do not force the viewport to the bottom
-(`src/renderer/components/RemoteTerminalPane.tsx:145-155,186-199`).
+On remote attachment, xterm parses the initial snapshot before the pane
+becomes visible. It scrolls to the active buffer's bottom unless the user
+scrolled up first. Later output and resizing do not force a scroll
+(`src/renderer/components/RemoteTerminalPane.tsx:156-158,189-202,368-377`).
+The local terminal also hides its host until snapshot and initially queued
+PTY output finish parsing. It then scrolls the active buffer to the bottom
+before reveal (`src/renderer/components/ShellTab.tsx:353-389,669-671`).
+The initial OMP browser test still sees zero scrollable overflow on its first
+visible frame after a remount. It sees the full scrollback later
+(`tests/e2e/terminal-project-switch-focus.spec.ts:467-557`).
 
 Fleet writes connection transitions to the existing application `main.log`.
 Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
