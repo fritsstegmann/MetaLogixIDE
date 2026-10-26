@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import type * as Keytar from 'keytar';
-import { closeApp, launch } from './helpers/claude-harness';
+import { aliveShells, closeApp, launch } from './helpers/claude-harness';
 import type {} from '../../src/renderer/api';
 
 test('fleet requires local opt-in and rejects unlinked remote shell control', async () => {
@@ -203,6 +203,8 @@ test('paired Electron instances show remote root folders and hand viewport contr
   let driven: Awaited<ReturnType<typeof launch>> | undefined;
   try {
     driven = await launch(['Driven Fleet Project']);
+    const drivenWin = driven.win;
+    const drivenApp = driven.app;
     await isolateFleetCredentials(driver.app);
     await isolateFleetCredentials(driven.app);
     await driven.win.getByTestId('project-row').filter({ hasText: 'Driven Fleet Project' }).click();
@@ -217,21 +219,21 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await driver.win.getByRole('switch', { name: 'Enable Fleet discovery' }).click();
     await driven.win.getByRole('switch', { name: 'Enable Fleet discovery' }).click();
     await expect.poll(async () => (await publicBeacon(driver.app))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
-    await expect.poll(async () => (await publicBeacon(driven.app))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
+    await expect.poll(async () => (await publicBeacon(drivenApp))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
     const driverBeacon = await publicBeacon(driver.app);
     const drivenBeacon = await publicBeacon(driven.app);
     if (!driverBeacon || !drivenBeacon) throw new Error('Fleet TLS listeners unavailable');
     await announcePublicBeacon(driver.app, drivenBeacon);
     await announcePublicBeacon(driven.app, driverBeacon);
     await expect.poll(async () => (await fleetPeer(driver.win, 'discovered'))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
-    await expect.poll(async () => (await fleetPeer(driven.win, 'discovered'))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
+    await expect.poll(async () => (await fleetPeer(drivenWin, 'discovered'))?.id ?? null, { timeout: 20_000 }).not.toBeNull();
     const controllerPeer = await fleetPeer(driver.win, 'discovered');
     if (!controllerPeer) throw new Error('Driven instance was not discovered');
     await driver.win.getByRole('button', { name: 'Request link' }).click();
     await expect.poll(async () => (await fleetPeer(driver.win, 'pending'))?.verificationCode ?? null).not.toBeNull();
     const code = (await fleetPeer(driver.win, 'pending'))?.verificationCode;
     if (!code) throw new Error('No comparison code on driving instance');
-    await expect.poll(async () => (await fleetPeer(driven.win, 'pending'))?.verificationCode).toBe(code);
+    await expect.poll(async () => (await fleetPeer(drivenWin, 'pending'))?.verificationCode).toBe(code);
     await driver.win.getByRole('textbox', { name: /Matching code for/ }).fill(code);
     await driven.win.getByRole('textbox', { name: /Matching code for/ }).fill(code);
     await driver.win.getByRole('button', { name: 'Approve link' }).click();
@@ -259,15 +261,106 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await expect(tabs).toHaveCount(3);
     await expect(tabs.last()).toContainText('Claude');
     await tabs.first().click();
-    await expect(workspace.locator('.xterm')).toBeVisible();
+    await expect(workspace.locator('.xterm').first()).toBeVisible();
     await expect(driven.win.getByText(/terminal is controlled remotely by/)).toBeVisible();
+    // Shell 0's notice SHOULD disappear once shell 1 owns control. Instead
+    // record every driven Fleet state during handoff: at least one shell in
+    // this project must remain controlled at all times.
+    const notice = drivenWin.getByRole('status', { name: 'Terminal controlled remotely' });
+    await expect(notice).toBeVisible();
+    const secondIndex = Number(await tabs.nth(1).getAttribute('data-shell-index'));
+    expect(secondIndex, 'positive control: the existing second tab is distinct from shell 0').toBeGreaterThan(0);
+    await drivenWin.evaluate(async ({ projectId, target }) => {
+      const state = await window.api.invoke('fleet:get-state', undefined);
+      if (!state.controls.some((control) => control.projectId === projectId && control.shellIndex === 0))
+        throw new Error('Positive control: driven shell 0 must begin under remote control');
+      let gap = false;
+      let seenTarget = false;
+      const off = window.api.on('fleet:changed', (next) => {
+        const indices = next.controls.filter((control) => control.projectId === projectId)
+          .map((control) => control.shellIndex);
+        if (indices.length === 0) gap = true;
+        if (indices.includes(target)) seenTarget = true;
+      });
+      Object.assign(window, { __fleetControlWatch: {
+        get gap() { return gap; },
+        get seenTarget() { return seenTarget; },
+        off,
+      } });
+    }, { projectId: project.id, target: secondIndex });
+    await tabs.nth(1).click();
+    await expect(workspace.locator('.xterm').first()).toBeVisible();
+    await expect(workspace.locator('[data-shell-index]').filter({ hasText: 'Terminal' }).first())
+      .toHaveAttribute('data-shell-index', String(secondIndex));
+    await expect(notice, 'shell-0 notice correctly ends when the second shell takes control').toHaveCount(0);
+    await expect.poll(() => drivenWin.evaluate(() => (window as typeof window & {
+      __fleetControlWatch?: { seenTarget: boolean };
+    }).__fleetControlWatch?.seenTarget)).toBe(true);
+    expect(await drivenWin.evaluate(() => (window as typeof window & {
+      __fleetControlWatch?: { gap: boolean };
+    }).__fleetControlWatch?.gap), 'no Fleet control gap while selecting the second tab').toBe(false);
+    expect((await fleetPeer(driver.win, 'linked'))?.id, 'both apps remain paired').toBe(controllerPeer.id);
+    expect((await fleetPeer(driven.win, 'linked'))?.id, 'driven app remains paired').toBe(driverBeacon.id);
+
+    // Split is an independent right-hand PTY, not a tab switch. Assert the
+    // selected left shell by sending distinct commands to both real PTYs.
+    const beforeSplit = (await aliveShells(driven.win)).filter((shell) => shell.projectId === project.id).map((shell) => shell.shellIndex);
+    await workspace.getByTestId('tabbar-split').click();
+    const right = workspace.getByTestId('split-right');
+    await expect(right.locator('.xterm')).toBeVisible();
+    let rightIndex: number | undefined;
+    await expect.poll(async () => {
+      rightIndex = (await aliveShells(drivenWin))
+        .find((shell) => shell.projectId === project.id && !beforeSplit.includes(shell.shellIndex))?.shellIndex;
+      return rightIndex;
+    }, { message: 'Split starts a separate shell on the linked machine' }).toBeGreaterThan(secondIndex);
+    if (rightIndex === undefined) throw new Error('Split shell missing on driven instance');
+    const splitShellIndex = rightIndex;
+    await expect(tabs.nth(1)).toHaveAttribute('data-shell-index', String(secondIndex));
+    await expect(tabs).toHaveCount(3);
+    const left = workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ });
+    await expect(right.locator('.xterm-helper-textarea'), 'positive control: new right pane finished attaching')
+      .toBeFocused();
+    await expect(left.locator('.xterm')).toBeVisible();
+    const leftMarker = `left-${Date.now()}`;
+    const rightMarker = `right-${Date.now()}`;
+    await left.locator('.xterm').click();
+    await driver.win.keyboard.type(`echo ${leftMarker}`);
+    await driver.win.keyboard.press('Enter');
+    await expect.poll(async () => (await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }), { id: project.id, index: secondIndex })).output)
+      .toContain(leftMarker);
+    await right.locator('.xterm').click();
+    await driver.win.keyboard.type(`echo ${rightMarker}`);
+    await driver.win.keyboard.press('Enter');
+    await expect.poll(async () => (await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }), { id: project.id, index: splitShellIndex })).output)
+      .toContain(rightMarker);
+    const leftOutput = await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }), { id: project.id, index: secondIndex });
+    expect(leftOutput.output, 'right pane did not route input into the selected left shell').not.toContain(rightMarker);
+    await expect.poll(() => drivenWin.evaluate((id) => window.api.invoke('fleet:get-state', undefined)
+      .then((state) => state.controls.filter((control) => control.projectId === id).map((control) => control.shellIndex)),
+    project.id)).toEqual(expect.arrayContaining([secondIndex, rightIndex]));
+    expect(await drivenWin.evaluate(() => (window as typeof window & {
+      __fleetControlWatch?: { gap: boolean };
+    }).__fleetControlWatch?.gap), 'split must not leave the driven project without remote control').toBe(false);
+    expect((await fleetPeer(driver.win, 'linked'))?.id).toBe(controllerPeer.id);
+    expect((await fleetPeer(driven.win, 'linked'))?.id).toBe(driverBeacon.id);
+    await workspace.getByTestId('tabbar-split').click();
+    await expect(right).toHaveCount(0);
+    await tabs.first().click();
+    await expect(notice).toBeVisible();
     await expect(driven.win.locator('main .xterm')).toHaveCount(0);
+    expect(await drivenWin.evaluate(() => (window as typeof window & {
+      __fleetControlWatch?: { gap: boolean };
+    }).__fleetControlWatch?.gap), 'returning to shell 0 also keeps continuous remote control').toBe(false);
     await expect(driver.win.getByRole('button', { name: 'Paste', exact: true })).toBeEnabled();
     const wide = await remoteShellSize(driver.win, driven.win, project.id);
     await testInfo.attach('driving-instance-folders', { body: await driver.win.screenshot(), contentType: 'image/png' });
     await testInfo.attach('driven-instance-control-notice', { body: await driven.win.screenshot(), contentType: 'image/png' });
     await driver.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(900, 700); });
-    await expect.poll(async () => (await remoteShellSize(driver.win, driven.win, project.id)).cols, { timeout: 15_000 }).toBeLessThan(wide.cols);
+    await expect.poll(async () => (await remoteShellSize(driver.win, drivenWin, project.id)).cols, { timeout: 15_000 }).toBeLessThan(wide.cols);
     const narrow = await remoteShellSize(driver.win, driven.win, project.id);
     await driven.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(900, 700); });
     await driven.win.evaluate((id) => window.api.invoke('shells:resize', { projectId: id, shellIndex: 0, cols: 42, rows: 16 }), project.id);
@@ -276,6 +369,14 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await driver.win.getByRole('switch', { name: 'Enable Fleet discovery' }).click();
     await expect(driven.win.getByText(/terminal is controlled remotely by/)).toHaveCount(0);
     await expect(driven.win.locator('main .xterm')).toBeVisible();
+    // Positive control: intentionally unlinking ends every remote control
+    // and the event recorder detects the very zero-control state it rejects.
+    await expect.poll(() => drivenWin.evaluate(() => (window as typeof window & {
+      __fleetControlWatch?: { gap: boolean };
+    }).__fleetControlWatch?.gap)).toBe(true);
+    await drivenWin.evaluate(() => {
+      (window as typeof window & { __fleetControlWatch?: { off: () => void } }).__fleetControlWatch?.off();
+    });
   } finally {
     if (driven) { await closeApp(driven.app); driven.cleanup(); }
     await closeApp(driver.app);
