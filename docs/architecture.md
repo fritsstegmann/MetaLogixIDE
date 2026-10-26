@@ -160,10 +160,13 @@ when pending live output for one subscription exceeds 262,144 bytes. Neither
 limit permits partial terminal replay (`src/main/fleet/channel.ts:51-65`,
 `src/main/fleet/service.ts:1019-1024`).
 
-On remote attachment, xterm parses the initial snapshot before the pane
-becomes visible. It scrolls to the active buffer's bottom unless the user
-scrolled up first. Later output and resizing do not force a scroll
-(`src/renderer/components/RemoteTerminalPane.tsx:156-158,189-202,368-377`).
+On remote attachment, xterm parses the initial snapshot, then waits until
+its DOM scroll area exists and reflects the parsed buffer before revealing
+the pane or releasing the previous attachment. It starts at the active
+buffer's bottom unless the user deliberately scrolled up during replay;
+in that case it preserves the selected position. Later output and resizing
+do not force a scroll
+(`src/renderer/components/RemoteTerminalPane.tsx:156-158,189-215,382-389`).
 The local terminal also hides its host while snapshot and initially queued
 PTY output finish parsing. It scrolls the active buffer to the bottom, then
 waits for xterm's DOM scroll area and scroll position to match the parsed
