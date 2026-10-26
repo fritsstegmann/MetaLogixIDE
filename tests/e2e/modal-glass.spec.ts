@@ -176,7 +176,7 @@ async function restoreLook(win: Page, look: { palette: string | null; theme: str
 
 /** Makes the app raise its own error toast ("Could not focus shell"), whatever is open. */
 async function raiseToast(app: ElectronApplication, win: Page): Promise<void> {
-  const previous = await win.getByTestId('toast').first().elementHandle();
+  const previous = await win.evaluateHandle(() => document.querySelector('[data-testid="toast"]'));
   try {
     await app.evaluate(({ BrowserWindow }, projectId: number) => {
       BrowserWindow.getAllWindows()[0]!.webContents.send('shell:focus-request', { projectId, shellIndex: 0 });
@@ -189,7 +189,7 @@ async function raiseToast(app: ElectronApplication, win: Page): Promise<void> {
       { message: 'precondition: a new toast was raised' },
     ).toBe(true);
   } finally {
-    await previous?.dispose();
+    await previous.dispose();
   }
 }
 
