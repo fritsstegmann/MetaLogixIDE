@@ -153,13 +153,13 @@ vi.mock('@renderer/api', () => ({ api: { invoke, on: () => () => undefined } }))
 
 const fleet = { enabled: true, peers: [], port: 43872, controls: [] } satisfies FleetState;
 const frameCallbacks: Array<FrameRequestCallback> = [];
-const viewport = { clientHeight: 480, scrollHeight: 480, scrollTop: 0 };
+const viewport = { attached: true, clientHeight: 480, scrollHeight: 480, scrollTop: 0 };
 const flush = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 const host = {
   clientWidth: 640,
   clientHeight: 480,
   style: { visibility: '' },
-  querySelector: (selector: string) => selector === '.xterm-viewport' ? viewport : null,
+  querySelector: (selector: string) => selector === '.xterm-viewport' && viewport.attached ? viewport : null,
   addEventListener() {},
   removeEventListener() {},
 };
@@ -200,6 +200,7 @@ beforeEach(() => {
   focusOpened.mockReset();
   frameCallbacks.length = 0;
   host.style.visibility = '';
+  viewport.attached = true;
   viewport.clientHeight = 480;
   viewport.scrollHeight = 480;
   viewport.scrollTop = 0;
@@ -304,5 +305,22 @@ describe('local shell initial snapshot viewport', () => {
     for (const callback of frameCallbacks.splice(0)) callback(0);
     expect(host.style.visibility).toBe('');
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it('does not reveal an empty snapshot before its browser viewport attaches', async () => {
+    const snapshot = Promise.withResolvers<{ output: string }>();
+    const term = await mount(snapshot.promise);
+    viewport.attached = false;
+    snapshot.resolve({ output: '' });
+    await flush();
+    expect(term.writes).toEqual([]);
+    expect(host.style.visibility).toBe('hidden');
+    for (const callback of frameCallbacks.splice(0)) callback(0);
+    expect(host.style.visibility).toBe('hidden');
+    expect(focusOpened).not.toHaveBeenCalled();
+    viewport.attached = true;
+    for (const callback of frameCallbacks.splice(0)) callback(16);
+    expect(host.style.visibility).toBe('');
+    expect(focusOpened).toHaveBeenCalledOnce();
   });
 });

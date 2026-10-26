@@ -104,6 +104,13 @@ type FakeTerminal = {
   userScroll: (viewportY: number) => void;
 };
 const terminal = vi.hoisted(() => ({ instances: [] as FakeTerminal[] }));
+const viewportGate = vi.hoisted(() => ({
+  delayed: false,
+  missing: false,
+  scrollHeight: 300,
+  scrollTop: 0,
+  frames: [] as FrameRequestCallback[],
+}));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {};
@@ -127,7 +134,15 @@ vi.mock('@xterm/xterm', () => ({
     scrollToBottom = vi.fn(() => { this.buffer.active.viewportY = this.buffer.active.baseY; });
     constructor() { this.buffer.active = this.buffer.normal; terminal.instances.push(this); }
     loadAddon() {}
-    open() {}
+    open(host: object) {
+      const buffer = this.buffer;
+      const viewport = {
+        clientHeight: 300,
+        get scrollHeight() { return viewportGate.delayed ? viewportGate.scrollHeight : 300 + buffer.active.baseY * 16; },
+        get scrollTop() { return viewportGate.delayed ? viewportGate.scrollTop : buffer.active.viewportY * 16; },
+      };
+      Reflect.set(host, 'querySelector', (selector: string) => selector === '.xterm-viewport' && !viewportGate.missing ? viewport : null);
+    }
     write(value: string, callback?: () => void) {
       if (value) this.writes.push(value);
       this.callbacks.push(() => {
@@ -277,6 +292,16 @@ beforeEach(() => {
   remote.status = null;
   invoke.mockReset();
   toast.mockReset();
+  viewportGate.delayed = false;
+  viewportGate.missing = false;
+  viewportGate.scrollHeight = 300;
+  viewportGate.scrollTop = 0;
+  viewportGate.frames.length = 0;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    if (viewportGate.delayed) viewportGate.frames.push(callback);
+    else callback(0);
+    return viewportGate.frames.length;
+  });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
@@ -626,6 +651,84 @@ describe('RemoteTerminal', () => {
     terminal.instances.at(-1)?.data('second shell\r');
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'second shell\r' });
+  });
+
+  it('keeps the old controller until the replacement scroll area and bottom position are visible-ready', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? Promise.resolve({ subscriptionId: `sub-${request?.shellIndex}` })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+
+    viewportGate.delayed = true;
+    viewportGate.missing = true;
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    const replacement = terminal.instances.at(-1);
+    app.emit(event('snapshot', Array.from({ length: 40 }, (_, index) => `line ${index}\n`).join(''), 'sub-2'));
+    app.emit(event('ready', '', 'sub-2'));
+    replacement?.finishWrite();
+    replacement?.finishWrite();
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(app.control('Paste').disabled).toBe(true);
+    for (const callback of viewportGate.frames.splice(0)) callback(0);
+    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    viewportGate.missing = false;
+    for (const callback of viewportGate.frames.splice(0)) callback(16);
+    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+
+    const bottom = (replacement?.buffer.active.baseY ?? 0) * 16;
+    expect(bottom).toBeGreaterThan(0);
+    viewportGate.scrollHeight = 300 + bottom;
+    for (const callback of viewportGate.frames.splice(0)) callback(32);
+    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    viewportGate.scrollTop = bottom;
+    for (const callback of viewportGate.frames.splice(0)) callback(48);
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(app.control('Paste').disabled).toBe(false);
+  });
+
+  it('reselects the previous tab during a pending second attachment without a control gap', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    app.bar().onSelect(0);
+    app.draw();
+    expect(app.paneShells()).toEqual([0]);
+    expect(app.bar().active).toBe(0);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-2' });
+    terminal.instances[0]?.data('kept shell\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'kept shell\r' });
   });
 
   it('restores the previous tab and attachment when the replacement subscription fails', async () => {

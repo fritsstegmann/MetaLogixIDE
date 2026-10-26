@@ -195,9 +195,27 @@ export function RemoteTerminalPane({
           if (!active || exited) return;
           initialSettled = true;
           if (!userScrolled) term.scrollToBottom();
-          setViewportReady(true);
-          runningRef.current = true;
-          report({ kind: 'running' });
+          // xterm updates the browser scroll area after parsing, in a later
+          // frame. Keep the old controller until the new pane can paint at
+          // its settled scroll position.
+          const revealWhenSettled = () => {
+            if (!active || exited) return;
+            const viewport = host.querySelector<HTMLElement>('.xterm-viewport');
+            const maximum = viewport ? viewport.scrollHeight - viewport.clientHeight : 0;
+            if (
+              !viewport ||
+              viewport.clientHeight === 0 ||
+              (term.buffer.active.baseY > 0 &&
+                (maximum <= 0 || (!userScrolled && viewport.scrollTop < maximum - 1)))
+            ) {
+              requestAnimationFrame(revealWhenSettled);
+              return;
+            }
+            setViewportReady(true);
+            runningRef.current = true;
+            report({ kind: 'running' });
+          };
+          requestAnimationFrame(revealWhenSettled);
         });
       }
       if (event.kind === 'exit') {
