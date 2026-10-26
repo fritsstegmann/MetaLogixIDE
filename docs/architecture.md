@@ -118,10 +118,14 @@ local Shell tab styling, project pill and shell tab strip; each tab reflects
 the driven machine's live shell and agent state. The add-shell menu lists
 that machine's CLI profiles and supports profile launches, custom commands,
 plain shells, folder defaults and removal of saved folder profiles. A tab
-switch keeps the previous attachment until the replacement reports its
-parsed viewport ready. It then detaches the old stream. Other remote PTYs
+switch keeps the previous attachment subscribed until the replacement
+reports its parsed DOM viewport ready. During handoff, both terminal panes
+are hidden and input-disabled, and no shell is reported as shown; this
+prevents a command typed for the selected new tab from reaching the old PTY.
+The old stream detaches only when the new pane is ready. Other remote PTYs
 remain alive. A failed replacement returns to the previous tab
-(`src/renderer/components/RemoteTerminal.tsx:266-278,326-343,421-432`).
+(`src/renderer/components/RemoteTerminal.tsx:266-289,326-350,432-439`;
+`src/renderer/components/RemoteTerminalPane.tsx:247-292,386-392`).
 Stopping a tab terminates its remote PTY. Remote Split launches a plain
 shell in the right pane and keeps it out of the tab strip. **To tab** makes
 that shell the selected tab; closing the split stops it
