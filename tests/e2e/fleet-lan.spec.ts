@@ -270,6 +270,26 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await expect(notice).toBeVisible();
     const secondIndex = Number(await tabs.nth(1).getAttribute('data-shell-index'));
     expect(secondIndex, 'positive control: the existing second tab is distinct from shell 0').toBeGreaterThan(0);
+    // Populate the already-running second PTY while shell 0 remains on
+    // screen. Both markers must survive the driven screen mirror's snapshot.
+    const newest = `REMOTE-NEWEST-${Date.now()}`;
+    await drivenWin.evaluate(({ id, index, marker }) =>
+      window.api.invoke('shells:write', {
+        projectId: id, shellIndex: index,
+        data: `for i in $(seq 1 180); do printf 'remote-line-%03d\\n' "$i"; done; printf '${marker}\\n'\r`,
+      }),
+    { id: project.id, index: secondIndex, marker: newest });
+    await expect.poll(async () => (await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }),
+    { id: project.id, index: secondIndex })).output, { message: 'driven PTY finishes all 180 output lines' })
+      .toContain('remote-line-180');
+    const serialized = await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }),
+    { id: project.id, index: secondIndex });
+    expect(serialized.output, 'positive control: serialized remote scrollback retains older content')
+      .toContain('remote-line-001');
+    expect(serialized.output, 'positive control: serialized remote scrollback contains newest output')
+      .toContain(newest);
     await drivenWin.evaluate(async ({ projectId, target }) => {
       const state = await window.api.invoke('fleet:get-state', undefined);
       if (!state.controls.some((control) => control.projectId === projectId && control.shellIndex === 0))
@@ -288,10 +308,48 @@ test('paired Electron instances show remote root folders and hand viewport contr
         off,
       } });
     }, { projectId: project.id, target: secondIndex });
+    // Sample the replacement pane, not the retained shell-0 pane. Freeze
+    // its first visible rAF before the click; later scroll settling cannot
+    // turn a bad first frame green.
+    await driver.win.evaluate(() => {
+      type Viewport = { scroll: number; max: number; height: number };
+      const root = document.querySelector('[data-testid="remote-workspace"]');
+      const old = root?.querySelector('[role="region"][aria-label^="Terminal for "]');
+      if (!root || !old) throw new Error('Positive control: remote shell 0 is mounted before handoff');
+      const watch: { first: Viewport | null; expired: boolean } = { first: null, expired: false };
+      Object.assign(window, { __remoteFirstVisible: watch });
+      const deadline = performance.now() + 10_000;
+      const sample = () => {
+        const replacement = [...root.querySelectorAll<HTMLElement>('[role="region"][aria-label^="Terminal for "]')]
+          .find((region) => region !== old && region.parentElement?.getAttribute('aria-hidden') === 'false' &&
+            getComputedStyle(region.parentElement).visibility === 'visible');
+        const viewport = replacement?.querySelector<HTMLElement>('.xterm-viewport');
+        if (replacement && viewport && viewport.getClientRects().length > 0) {
+          watch.first = {
+            scroll: viewport.scrollTop,
+            max: viewport.scrollHeight - viewport.clientHeight,
+            height: viewport.clientHeight,
+          };
+        } else if (performance.now() < deadline) requestAnimationFrame(sample);
+        else watch.expired = true;
+      };
+      requestAnimationFrame(sample);
+    });
     await tabs.nth(1).click();
     await expect(workspace.locator('.xterm').first()).toBeVisible();
     await expect(workspace.locator('[data-shell-index]').filter({ hasText: 'Terminal' }).first())
       .toHaveAttribute('data-shell-index', String(secondIndex));
+    await expect.poll(() => driver.win.evaluate(() => (window as typeof window & {
+      __remoteFirstVisible?: { first: { scroll: number; max: number; height: number } | null };
+    }).__remoteFirstVisible?.first ?? null), { timeout: 11_000 }).not.toBeNull();
+    const firstRemote = await driver.win.evaluate(() => (window as typeof window & {
+      __remoteFirstVisible?: { first: { scroll: number; max: number; height: number } | null };
+    }).__remoteFirstVisible?.first);
+    if (!firstRemote) throw new Error('First visible replacement viewport was not sampled');
+    expect(firstRemote.height, 'positive control: first replacement pane is laid out').toBeGreaterThan(0);
+    expect(firstRemote.max, 'first visible remote viewport already contains parsed scrollback').toBeGreaterThan(0);
+    expect(firstRemote.scroll, `first visible remote viewport starts at newest content (bottom=${firstRemote.max})`)
+      .toBeGreaterThanOrEqual(firstRemote.max - 1);
     await expect(notice, 'shell-0 notice correctly ends when the second shell takes control').toHaveCount(0);
     await expect.poll(() => drivenWin.evaluate(() => (window as typeof window & {
       __fleetControlWatch?: { seenTarget: boolean };
