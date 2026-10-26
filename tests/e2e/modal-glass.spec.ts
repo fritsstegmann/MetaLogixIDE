@@ -176,11 +176,21 @@ async function restoreLook(win: Page, look: { palette: string | null; theme: str
 
 /** Makes the app raise its own error toast ("Could not focus shell"), whatever is open. */
 async function raiseToast(app: ElectronApplication, win: Page): Promise<void> {
-  const before = await win.getByTestId('toast').count();
-  await app.evaluate(({ BrowserWindow }, projectId: number) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.send('shell:focus-request', { projectId, shellIndex: 0 });
-  }, MISSING_PROJECT_ID);
-  await expect.poll(() => win.getByTestId('toast').count(), { message: 'precondition: a toast was raised' }).toBeGreaterThan(before);
+  const previous = await win.getByTestId('toast').first().elementHandle();
+  try {
+    await app.evaluate(({ BrowserWindow }, projectId: number) => {
+      BrowserWindow.getAllWindows()[0]!.webContents.send('shell:focus-request', { projectId, shellIndex: 0 });
+    }, MISSING_PROJECT_ID);
+    await expect.poll(
+      () => win.evaluate((prior) => {
+        const latest = document.querySelector('[data-testid="toast"]');
+        return latest !== null && latest !== prior;
+      }, previous),
+      { message: 'precondition: a new toast was raised' },
+    ).toBe(true);
+  } finally {
+    await previous?.dispose();
+  }
 }
 
 /** For each live toast: whether the topmost element at its centre belongs to that toast. */
