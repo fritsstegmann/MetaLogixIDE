@@ -568,8 +568,10 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     if (launch.variant === 'subsequent') {
       const settlement = await new Promise<'ok' | 'no-session' | { error: string }>((resolveP) => {
         const timer = setTimeout(() => resolveP('ok'), 2500);
-        const onExit = (ev: { projectId: number; shellIndex: number; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
+        const onExit = (ev: { projectId: number; shellIndex: number; generation: string; code: number | null; uptimeMs?: number; earlyOutput?: string }) => {
           if (ev.projectId !== projectId || ev.shellIndex !== 0) return;
+          const live = s.ptyManager.liveShell(projectId, 0);
+          if (live && live.generation !== ev.generation) return;
           clearTimeout(timer);
           s.ptyManager.off('exit', onExit);
           const text = (ev.earlyOutput ?? '').toLowerCase();
@@ -1680,8 +1682,9 @@ export function createFleetOperations(services: Services): FleetOperations {
       const data = (event: { projectId: number; shellIndex: number; data: string }): void => {
         if (event.projectId === projectId && event.shellIndex === shellIndex) onData(event.data);
       };
-      const exit = (event: { projectId: number; shellIndex: number }): void => {
-        if (event.projectId === projectId && event.shellIndex === shellIndex) onExit();
+      const generation = services.ptyManager.liveShell(projectId, shellIndex)?.generation;
+      const exit = (event: { projectId: number; shellIndex: number; generation: string }): void => {
+        if (event.projectId === projectId && event.shellIndex === shellIndex && event.generation === generation) onExit();
       };
       services.ptyManager.on('data', data);
       services.ptyManager.on('exit', exit);
@@ -1747,9 +1750,11 @@ function eventPayload<E extends IpcEventName>(name: E): IpcEvents[E] {
 export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: SendEvent, windowHooks?: WindowHooks): void {
   if (services.ptyManager) {
     services.ptyManager.on('data', (ev: IpcEvents['pty:data']) => sendEvent('pty:data', ev));
-    services.ptyManager.on('exit', (ev: IpcEvents['pty:exit']) => {
-      sendEvent('pty:exit', ev);
+    services.ptyManager.on('exit', (ev: IpcEvents['pty:exit'] & { generation: string }) => {
+      const live = services.ptyManager.liveShell(ev.projectId, ev.shellIndex);
+      if (live && live.generation !== ev.generation) return;
       services.shells?.remove(ev.projectId, ev.shellIndex);
+      sendEvent('pty:exit', { projectId: ev.projectId, shellIndex: ev.shellIndex, code: ev.code });
       sendEvent('alive-shells:changed', {});
     });
   }

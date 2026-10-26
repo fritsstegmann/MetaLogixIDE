@@ -140,12 +140,13 @@ export class PtyManager extends EventEmitter {
     setTimeout(() => { entry.bufferOpen = false; entry.earlyBuffer = ''; }, EARLY_BUFFER_MS);
     pty.onExit(({ exitCode }: { exitCode: number }) => {
       const current = this.entries.get(k);
-      if (current && current !== entry) return;
       const captured = entry.earlyBuffer;
       const uptimeMs = Date.now() - entry.startedAt;
-      this.flushOutput(entry);
-      this.releaseEntry(k, entry);
-      this.emit('exit', { projectId, shellIndex, code: exitCode, uptimeMs, earlyOutput: captured });
+      if (!current || current === entry) {
+        this.flushOutput(entry);
+        this.releaseEntry(k, entry);
+      }
+      this.emit('exit', { projectId, shellIndex, generation: entry.generation, code: exitCode, uptimeMs, earlyOutput: captured });
     });
     this.emit('spawn', { projectId, shellIndex, pid: pty.pid, generation: entry.generation, agent: entry.agent, ompSpawn: entry.agent === 'omp' ? effective.env[OMP_SPAWN_ENV] : undefined });
     return { pid: pty.pid };

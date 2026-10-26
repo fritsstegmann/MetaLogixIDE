@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IpcMain } from 'electron';
-import { registerIpc } from '@main/ipc/register';
+import { createFleetOperations, registerIpc } from '@main/ipc/register';
 import { openDb } from '@main/db/connection';
 import { runMigrations } from '@main/db/migrator';
 import { SettingsRepo } from '@main/repos/settings-repo';
@@ -18,6 +18,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { commitAll, finishOrder, git, makeConflict, markerScript, slowCommandDir, stubGitEnv, tempProject } from '../git/temp-repo';
 import { parseGitStatus } from '@shared/parse-git-status';
 import { tmpdir } from 'node:os';
+import { EventEmitter } from 'node:events';
 import { join, resolve } from 'node:path';
 
 const migrationsDir = resolve(__dirname, '../../../../migrations');
@@ -92,6 +93,55 @@ describe('registerIpc', () => {
     registerIpc(ipc, services, () => {});
     await expect(ipc.handlers.get('agent-state:list')!({}, undefined)).rejects.toThrow('agent status not installed');
   });
+
+  describe('PTY exit delivery', () => {
+    function rig() {
+      const ipc = fakeIpcMain();
+      const ptyManager = fakePtyManager();
+      const source = new EventEmitter();
+      ptyManager.on.mockImplementation((event: string, listener: (...args: unknown[]) => void) => source.on(event, listener));
+      const shells = { remove: vi.fn() };
+      const sendEvent = vi.fn();
+      registerIpc(ipc, { ptyManager, shells } as unknown as Parameters<typeof registerIpc>[1], sendEvent);
+      return { ptyManager, source, shells, sendEvent };
+    }
+
+    it('keeps the replacement shell entry and renderer stream when its predecessor exits late', () => {
+      const { ptyManager, source, shells, sendEvent } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 42, generation: 'successor', agent: null });
+      source.emit('exit', { projectId: 4, shellIndex: 0, generation: 'predecessor', code: 0, uptimeMs: 20, earlyOutput: '' });
+      expect(ptyManager.liveShell(4, 0)?.generation).toBe('successor');
+      expect(shells.remove).not.toHaveBeenCalled();
+      expect(sendEvent).not.toHaveBeenCalledWith('pty:exit', expect.anything());
+      expect(sendEvent).not.toHaveBeenCalledWith('alive-shells:changed', expect.anything());
+    });
+
+    it('forwards a current shell exit and removes its entry without leaking internal generation', () => {
+      const { ptyManager, source, shells, sendEvent } = rig();
+      ptyManager.liveShell.mockReturnValue(null);
+      source.emit('exit', { projectId: 4, shellIndex: 2, generation: 'ended', code: 7, uptimeMs: 20, earlyOutput: '' });
+      expect(shells.remove).toHaveBeenCalledTimes(1);
+      expect(shells.remove).toHaveBeenCalledWith(4, 2);
+      expect(sendEvent).toHaveBeenNthCalledWith(1, 'pty:exit', { projectId: 4, shellIndex: 2, code: 7 });
+      expect(sendEvent).toHaveBeenNthCalledWith(2, 'alive-shells:changed', {});
+    });
+  });
+  it('does not close a Fleet terminal watching the successor when the predecessor exits', () => {
+    const source = new EventEmitter();
+    const ptyManager = fakePtyManager();
+    ptyManager.on.mockImplementation((event: string, listener: (...args: unknown[]) => void) => source.on(event, listener));
+    ptyManager.off.mockImplementation((event: string, listener: (...args: unknown[]) => void) => source.off(event, listener));
+    ptyManager.liveShell.mockReturnValue({ pid: 42, generation: 'successor', agent: null });
+    const watch = createFleetOperations({ ptyManager } as unknown as Parameters<typeof createFleetOperations>[0]).watch;
+    const onExit = vi.fn();
+    const unsubscribe = watch(4, 0, vi.fn(), onExit);
+    source.emit('exit', { projectId: 4, shellIndex: 0, generation: 'predecessor' });
+    expect(onExit).not.toHaveBeenCalled();
+    source.emit('exit', { projectId: 4, shellIndex: 0, generation: 'successor' });
+    expect(onExit).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
 
   describe('primary-session inspection and guarded stop', () => {
     function rig() {
@@ -1466,6 +1516,21 @@ describe('project env at every spawn site (AC10, AC11, AC14–AC16)', () => {
     expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(1);
     expect(rig.spawned(0).variant).toBe('subsequent');
     expect(rig.spawned(0).env).toStrictEqual({ API_URL: 'http://localhost:4000' });
+  });
+
+  it('does not treat a predecessor exit as failure of a new subsequent launch', async () => {
+    const rig = envRig();
+    rig.projects.setFirstLaunched(rig.a.id, new Date());
+    rig.ptyManager.liveShell.mockReturnValue({ pid: 42, generation: 'successor', agent: 'claude' });
+    rig.ptyManager.spawn.mockImplementationOnce(async () => {
+      const onExit = rig.ptyManager.on.mock.calls.filter((call) => call[0] === 'exit').at(-1)?.[1];
+      if (!onExit) throw new Error('missing launch exit listener');
+      onExit({ projectId: rig.a.id, shellIndex: 0, generation: 'predecessor', code: 1, uptimeMs: 100, earlyOutput: 'No conversation found to continue' });
+      onExit({ projectId: rig.a.id, shellIndex: 0, generation: 'successor', code: 0, uptimeMs: 10_000, earlyOutput: '' });
+    });
+    await rig.call('shells:launch', { projectId: rig.a.id });
+    expect(rig.ptyManager.spawn).toHaveBeenCalledTimes(1);
+    expect(rig.shells.list()).toHaveLength(1);
   });
 
   it('shells:launch no-session fallback passes the project var on the retry', async () => {

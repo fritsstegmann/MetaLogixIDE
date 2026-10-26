@@ -127,7 +127,10 @@ describe('PtyManager', () => {
     expect(mgr.stopIfGeneration(37, inspected ?? '')).toBe('replaced');
     expect(mgr.liveShell(37, 0)?.generation).toBe(replacement);
     await oldExit;
-    expect(exitEvents).toEqual([]);
+    expect(exitEvents).toEqual([
+      expect.objectContaining({ projectId: 37, shellIndex: 0, generation: inspected }),
+    ]);
+    expect(mgr.liveShell(37, 0)?.generation).toBe(replacement);
     await mgr.kill(37, 0);
   });
 

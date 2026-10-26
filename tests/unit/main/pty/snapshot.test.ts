@@ -316,6 +316,10 @@ describe('PtyManager.getSnapshot', () => {
 
   it('keeps a respawned shell and its terminal when the killed predecessor exits late', async () => {
     const oldExit = exitOf(mgr, 109);
+    const exits: Array<{ projectId: number; shellIndex: number; generation: string }> = [];
+    mgr.on('exit', (event: { projectId: number; shellIndex: number; generation: string }) => {
+      if (event.projectId === 109) exits.push(event);
+    });
     const first = collect(mgr, 109);
     await mgr.spawn(
       109,
@@ -324,6 +328,8 @@ describe('PtyManager.getSnapshot', () => {
         'process.on("SIGHUP", () => setTimeout(() => process.exit(0), 400)); process.stdout.write("FIRST-LIFE"); setTimeout(() => {}, 20000)',
       ),
     );
+    const oldGeneration = mgr.liveShell(109, 0)?.generation;
+    expect(oldGeneration).toEqual(expect.any(String));
     await first.until('FIRST-LIFE');
     await mgr.kill(109, 0);
     const out = collect(mgr, 109);
@@ -333,6 +339,10 @@ describe('PtyManager.getSnapshot', () => {
       nodeLaunch('process.stdout.write("SECOND-LIFE"); setTimeout(() => {}, 20000)'),
     );
     await oldExit;
+    expect(exits).toEqual([
+      expect.objectContaining({ projectId: 109, shellIndex: 0, generation: oldGeneration }),
+    ]);
+    expect(mgr.liveShell(109, 0)?.generation).not.toBe(oldGeneration);
     await out.until('SECOND-LIFE');
     expect(mgr.isAlive(109, 0)).toBe(true);
     expect(await mgr.getSnapshot(109, 0)).toContain('SECOND-LIFE');
