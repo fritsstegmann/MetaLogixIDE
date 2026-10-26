@@ -20,6 +20,7 @@ import {
   MODAL_CLASSES, MODAL_SURFACES, MODAL_TIER_Z, TOAST_Z, scrimTestId, type ModalSurface,
 } from '../../src/renderer/modal-glass';
 import { PERMISSION_MODE_TEST_IDS } from '../../src/renderer/permission-mode-copy';
+import { UNLOAD_SESSION_TESTIDS } from '../../src/renderer/unload-session-copy';
 import { launch, openProject, projectRow, type Launched } from './helpers/focus';
 import { alphaMatches, blurRadiusPx, computedColour, fmtColour, resolveToken } from './helpers/colour';
 
@@ -72,6 +73,10 @@ const DRIVERS: Record<string, { open: (win: Page) => Promise<void>; close: (win:
     close: (w) => clickScrimCorner(w, surface('rename-project')),
   },
   'shortcuts-help': { open: (w) => w.keyboard.press('ControlOrMeta+/'), close: (w) => w.keyboard.press('Escape') },
+  'unload-session': {
+    open: (w) => w.getByTestId('unload-current').click(),
+    close: (w) => w.getByTestId(UNLOAD_SESSION_TESTIDS.keep).click(),
+  },
 };
 const NON_BLOCKING = MODAL_SURFACES.filter((s) => s.tier !== 'blocking');
 
