@@ -232,7 +232,7 @@ describe('status dot consumers (AC8, AC9)', () => {
     vi.doMock('@renderer/hooks/useRoots', () => ({ useRoots: () => ({ roots: [], refresh: vi.fn() }) }));
     vi.doMock('@renderer/hooks/useProjects', () => ({ useProjects: () => ({ projects: [project], refresh: vi.fn() }) }));
     vi.doMock('@renderer/hooks/useRecents', () => ({ useRecents: () => ({ recents: [] }) }));
-    vi.doMock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: new Set([7]) }) }));
+    vi.doMock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: new Set([7]), primaryIds: new Set([7]) }) }));
     vi.doMock('@renderer/hooks/useAgentStates', () => ({
       useOverallAgentState: overallState,
       useProjectAgentState: projectState,
@@ -244,7 +244,7 @@ describe('status dot consumers (AC8, AC9)', () => {
       const { renderToStaticMarkup: render } = await import('react-dom/server');
       const html = render(h(Sidebar, {
         selectedProjectId: 7, selectedRemote: null, onSelectRemote: vi.fn(),
-        onSelect: vi.fn(), onEditEnv: vi.fn(), onProjectSettings: vi.fn(),
+        onSelect: vi.fn(), onUnloadSession: vi.fn(), onEditEnv: vi.fn(), onProjectSettings: vi.fn(),
       }));
       expect(html).toContain('In use');
       expect(projectState).toHaveBeenCalledWith(7);

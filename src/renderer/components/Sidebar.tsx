@@ -34,6 +34,7 @@ interface Props {
   selectedRemote: RemoteProjectSelection | null;
   onSelectRemote: (project: RemoteProjectSelection) => void;
   onSelect: (p: Project) => void;
+  onUnloadSession: (project: Project, opener: HTMLElement) => void;
   onNewProject?: () => void;
   /** Opens the environment variables editor for a project (context menu). */
   onEditEnv: (p: Project) => void;
@@ -42,11 +43,11 @@ interface Props {
 }
 
 /** Shows local folders followed by linked Fleet machines and their projects. */
-export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectRemote, onNewProject, onEditEnv, onProjectSettings, width }: Props) {
+export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectRemote, onUnloadSession, onNewProject, onEditEnv, onProjectSettings, width }: Props) {
   const { roots, refresh: refreshRoots } = useRoots();
   const { projects, refresh: refreshProjects } = useProjects();
   const { recents } = useRecents(10);
-  const { aliveIds } = useAliveShellIds();
+  const { aliveIds, primaryIds } = useAliveShellIds();
   const overallAgentState = useOverallAgentState();
   const [filter, setFilter] = useState('');
   const [fleet, setFleet] = useState<FleetState | null>(null);
@@ -228,6 +229,8 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
                 project={p}
                 selected={selectedProjectId === p.id}
                 alive
+                primaryAlive={primaryIds.has(p.id)}
+                onUnloadSession={onUnloadSession}
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
@@ -249,6 +252,8 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
                 project={p}
                 selected={selectedProjectId === p.id}
                 alive={aliveIds.has(p.id)}
+                primaryAlive={primaryIds.has(p.id)}
+                onUnloadSession={onUnloadSession}
                 onSelect={onSelect}
                 onRename={askRename}
                 onEditEnv={onEditEnv}
@@ -269,6 +274,8 @@ export function Sidebar({ selectedProjectId, selectedRemote, onSelect, onSelectR
               projects={grouped.get(r.id) ?? []}
               selectedProjectId={selectedProjectId}
               aliveIds={aliveIds}
+              primaryIds={primaryIds}
+              onUnloadSession={onUnloadSession}
               onSelect={onSelect}
               onRename={askRename}
               onEditEnv={onEditEnv}
@@ -522,6 +529,8 @@ function ProjectRow({
   project,
   selected,
   alive,
+  primaryAlive,
+  onUnloadSession,
   onSelect,
   onRename,
   onEditEnv,
@@ -531,6 +540,8 @@ function ProjectRow({
   project: Project;
   selected: boolean;
   alive: boolean;
+  primaryAlive: boolean;
+  onUnloadSession: (project: Project, opener: HTMLElement) => void;
   onSelect: (p: Project) => void;
   /** Lifted so the Rename dialog lives at Sidebar level and stays open across rerenders. */
   onRename: (p: Project) => void;
@@ -540,10 +551,9 @@ function ProjectRow({
 }) {
   const agentState = useProjectAgentState(project.id);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  async function unload(e: React.MouseEvent) {
+  function unload(e: React.MouseEvent<HTMLButtonElement>) {
     e.stopPropagation();
-    try { await api.invoke('shells:kill', { projectId: project.id, shellIndex: 0 }); }
-    catch (err) { console.error(err); }
+    onUnloadSession(project, e.currentTarget);
   }
   async function revealInFinder() {
     try { await api.invoke('files:reveal', { projectId: project.id, relPath: '' }); }
@@ -596,7 +606,7 @@ function ProjectRow({
     <div
       onContextMenu={onContextMenu}
       title={`${project.path}\n(right-click for options)`}
-      className={`group w-full h-[34px] flex items-center gap-2.5 px-2.5 text-sm rounded-lg transition-colors ${
+      className={`group w-full h-11 my-1 lg:h-[34px] lg:my-0 flex items-center gap-2.5 px-2.5 text-sm rounded-lg transition-colors ${
         selected ? 'bg-[--accent-soft] text-[--text] font-medium' : 'hover:bg-[--surface-hover]'
       }`}
     >
@@ -622,14 +632,14 @@ function ProjectRow({
         )}
         <span className="truncate">{project.name}</span>
       </button>
-      {alive && (
+      {primaryAlive && (
         <button
           onClick={unload}
           data-testid="row-unload"
-          className={`w-4 h-4 flex items-center justify-center rounded transition-colors ${
+          className={`w-11 h-11 lg:w-4 lg:h-4 flex shrink-0 items-center justify-center rounded transition-colors focus-visible:ring-2 focus-visible:ring-[--accent] ${
             selected
               ? 'text-[--text-muted] hover:text-[--danger] hover:bg-[--surface-hover] opacity-100'
-              : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--surface-hover] opacity-0 group-hover:opacity-100 focus:opacity-100'
+              : 'text-[--text-muted] hover:text-[--danger] hover:bg-[--surface-hover] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:focus:opacity-100'
           }`}
           title="Unload session (close shell)"
         >
@@ -672,6 +682,8 @@ function RootBlock({
   projects,
   selectedProjectId,
   aliveIds,
+  primaryIds,
+  onUnloadSession,
   onSelect,
   onRename,
   onEditEnv,
@@ -682,6 +694,8 @@ function RootBlock({
   selectedProjectId: number | null;
   aliveIds: Set<number>;
   onSelect: (p: Project) => void;
+  primaryIds: Set<number>;
+  onUnloadSession: (project: Project, opener: HTMLElement) => void;
   onRename: (p: Project) => void;
   onEditEnv: (p: Project) => void;
   onProjectSettings: (target: ProjectSettingsTarget) => void;
@@ -720,6 +734,8 @@ function RootBlock({
           selected={selectedProjectId === p.id}
           alive={aliveIds.has(p.id)}
           onSelect={onSelect}
+          primaryAlive={primaryIds.has(p.id)}
+          onUnloadSession={onUnloadSession}
           onRename={onRename}
           onEditEnv={onEditEnv}
           onProjectSettings={onProjectSettings}

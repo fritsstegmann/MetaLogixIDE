@@ -51,6 +51,7 @@ function inPlatform(platform: ShortcutPlatform, node: ReactNode): string {
 
 const paletteDeps: PaletteCommandDeps = {
   hasProject: true,
+  hasPrimary: true,
   sidebarOpen: true,
   openPalette: noop,
   openProjectSearch: noop,

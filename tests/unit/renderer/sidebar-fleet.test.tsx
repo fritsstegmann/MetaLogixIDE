@@ -14,6 +14,8 @@ interface Scenario {
   readonly refs: Array<{ current: unknown }>;
   readonly states: Map<number, unknown>;
   readonly effects: Array<() => unknown>;
+  aliveIds: Set<number>;
+  primaryIds: Set<number>;
   emit: ((next: FleetState) => void) | null;
   error: boolean;
   cursor: number;
@@ -25,7 +27,7 @@ const scenario = vi.hoisted((): Scenario => {
   const refs: Array<{ current: unknown }> = [];
   const effects: Array<() => unknown> = [];
   const emit: ((next: FleetState) => void) | null = null;
-  return { fleet, statuses, refs, states: new Map(), effects, emit, error: false, cursor: 0, refCursor: 0 };
+  return { fleet, statuses, refs, states: new Map(), effects, emit, error: false, cursor: 0, refCursor: 0, aliveIds: new Set(), primaryIds: new Set() };
 });
 vi.mock('react', async (original) => ({
   ...(await original<typeof ReactModule>()),
@@ -59,7 +61,7 @@ const root: Root = { id: 1, path: '/work', addedAt: '2024-01-01', sortOrder: 0 }
 vi.mock('@renderer/hooks/useRoots', () => ({ useRoots: () => ({ roots: [root], refresh: vi.fn() }) }));
 vi.mock('@renderer/hooks/useProjects', () => ({ useProjects: () => ({ projects: [local], refresh: vi.fn() }) }));
 vi.mock('@renderer/hooks/useRecents', () => ({ useRecents: () => ({ recents: [] }) }));
-vi.mock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: new Set<number>() }) }));
+vi.mock('@renderer/hooks/useAliveShellIds', () => ({ useAliveShellIds: () => ({ aliveIds: scenario.aliveIds, primaryIds: scenario.primaryIds }) }));
 vi.mock('@renderer/hooks/useAgentStates', () => ({ useOverallAgentState: () => 'idle', useProjectAgentState: () => 'idle' }));
 vi.mock('@renderer/components/SidebarHeader', () => ({ SidebarHeader: () => null }));
 const invoke = vi.hoisted(() => vi.fn());
@@ -80,6 +82,7 @@ const props = {
   onSelect,
   onSelectRemote,
   onEditEnv: vi.fn(),
+  onUnloadSession: vi.fn(),
   onProjectSettings: vi.fn(),
 };
 function nodes(node: unknown): ReactElement[] {
@@ -110,12 +113,15 @@ function clickButton(testId: string, label: string): void {
 beforeEach(() => {
   onSelect.mockClear();
   scenario.cursor = 0;
+  props.onUnloadSession.mockClear();
   scenario.refCursor = 0;
   scenario.states.clear();
   scenario.refs.length = 0;
   scenario.effects.length = 0;
   scenario.emit = null;
   scenario.error = false;
+  scenario.aliveIds.clear();
+  scenario.primaryIds.clear();
   invoke.mockReset();
   on.mockReset();
   invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'fleet:get-state' ? scenario.fleet : status));
@@ -129,6 +135,40 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => undefined });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe('local primary-session row actions', () => {
+  it('keeps a nonzero-only project In use without a destructive row X', () => {
+    scenario.aliveIds.add(local.id);
+    const html = markup();
+    expect(html).toContain('data-testid="section-in-use"');
+    expect(html).toContain('data-testid="project-row"');
+    expect(html).not.toContain('data-testid="row-unload"');
+  });
+
+  it('shows row X only while the primary session is live', () => {
+    scenario.aliveIds.add(local.id);
+    scenario.primaryIds.add(local.id);
+    expect(markup()).toContain('data-testid="row-unload"');
+  });
+
+  it('delegates row X with project identity and opener without selecting or killing', () => {
+    scenario.aliveIds.add(local.id);
+    scenario.primaryIds.add(local.id);
+    scenario.cursor = 0;
+    scenario.refCursor = 0;
+    const button = nodes(Sidebar(props)).find((node) => row(node, 'row-unload'));
+    expect(button).toBeDefined();
+    const opener = {};
+    const stopPropagation = vi.fn();
+    if (button && 'onClick' in button.props && typeof button.props.onClick === 'function') {
+      button.props.onClick({ stopPropagation, currentTarget: opener });
+    }
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(props.onUnloadSession).toHaveBeenCalledWith(local, opener);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith('shells:kill', expect.anything());
+  });
+});
 
 describe('Projects sidebar Fleet grouping', () => {
   it('renders each linked and offline machine as its own Projects-style section after local folders', () => {
