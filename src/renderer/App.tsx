@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar } from './components/Sidebar';
+import { UnloadSessionDialog } from './components/UnloadSessionDialog';
 import type { RemoteProjectSelection } from './components/Sidebar';
 import { StatusBar } from './components/StatusBar';
 import { TitleGroup } from './components/TitleGroup';
@@ -78,6 +79,7 @@ import { SPLIT_RATIO_DEFAULT, sanitizeRatio } from './split-ratio';
 import { shellChipLabel, stripShells } from './shell-label';
 import { useFrostedGlassAttributes } from './hooks/useFrostedGlassAttributes';
 import { useExternalDragGuard } from './hooks/useExternalDragGuard';
+import { isPrimaryVisible } from './unload-session';
 import type { SheetContent } from './frosted-chrome-contract';
 
 
@@ -282,6 +284,26 @@ function MainApp() {
     }));
   }, [setProjectStates]);
   const allProjectShells = useProjectShells(selected?.id ?? null);
+  const primaryAlive = allProjectShells.some((shell) => shell.shellIndex === 0);
+  const [unloadTarget, setUnloadTarget] = useState<Pick<Project, 'id' | 'name'> | null>(null);
+  const unloadTargetRef = useRef<Pick<Project, 'id' | 'name'> | null>(null);
+  const unloadOpenerRef = useRef<HTMLElement | null>(null);
+  const openUnloadSession = useCallback((project: Project, opener: HTMLElement | null) => {
+    if (unloadTargetRef.current) return;
+    unloadTargetRef.current = { id: project.id, name: project.name };
+    unloadOpenerRef.current = opener;
+    setUnloadTarget(unloadTargetRef.current);
+  }, []);
+  const closeUnloadSession = useCallback(() => {
+    unloadTargetRef.current = null;
+    setUnloadTarget(null);
+    requestAnimationFrame(() => {
+      const opener = unloadOpenerRef.current;
+      const fallback = document.querySelector<HTMLElement>('[data-testid="status-bar-palette-hint"]');
+      (opener?.isConnected ? opener : fallback)?.focus();
+      unloadOpenerRef.current = null;
+    });
+  }, []);
   const [sidebarOpen, setSidebarOpen] = usePersistedState<boolean>(
     'metaide.sidebarOpen',
     true,
@@ -342,10 +364,10 @@ function MainApp() {
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
-  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen' || unloadTarget !== null;
   const overlayOpen = paletteRequest != null || settingsOpen || newProjectOpen
     || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
-    || permissionMode.status === 'unchosen';
+    || permissionMode.status === 'unchosen' || unloadTarget !== null;
   useWindowTerminalFocus(overlayOpen);
   // A request issued while the palette is still open is refused by the overlay rule, so it waits for the close to commit.
   const focusAfterPaletteRef = useRef<number | null>(null);
@@ -406,6 +428,7 @@ function MainApp() {
 
   const commands = useMemo(() => buildPaletteCommands({
     hasProject: selected != null,
+    hasPrimary: primaryAlive && remoteProject === null,
     sidebarOpen,
     openPalette,
     openProjectSearch: () => setSearchOpen(true),
@@ -417,9 +440,9 @@ function MainApp() {
     openHelp: () => setHelpOpen(true),
     openNewProject: () => setNewProjectOpen(true),
     unloadSession: async () => {
-      if (!selected) return;
-      await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 });
-      toast('Session unloaded', { kind: 'success' });
+      if (selected && !remoteProject && primaryAlive) {
+        openUnloadSession(selected, document.querySelector<HTMLElement>('[data-testid="status-bar-palette-hint"]'));
+      }
     },
     popOutShell: async () => {
       if (selected) await api.invoke('windows:popout-shell', { projectId: selected.id, shellIndex: 0 });
@@ -434,7 +457,7 @@ function MainApp() {
     },
     keepAwake: paletteKeepAwake,
     platform,
-  }), [selected, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, paletteKeepAwake, platform]);
+  }), [selected, remoteProject, primaryAlive, openUnloadSession, sidebarOpen, openPalette, setActiveView, toggleSidebar, setMainTab, openNewTerminal, setThemeMode, setThemePalette, paletteKeepAwake, platform]);
 
   const refreshAlive = useCallback(async () => {
     const { shells } = await api.invoke('shells:alive-list', undefined as never);
@@ -848,12 +871,8 @@ function MainApp() {
     setSelected((current) => current?.id === project.id ? project : current);
   }
 
-  async function unloadCurrent() {
-    if (!selected) return;
-    try {
-      await api.invoke('shells:kill', { projectId: selected.id, shellIndex: 0 });
-      toast('Session unloaded', { kind: 'success' });
-    } catch (e) { console.error(e); }
+  function unloadCurrent(event: React.MouseEvent<HTMLButtonElement>) {
+    if (selected && primaryAlive) openUnloadSession(selected, event.currentTarget);
   }
 
   const mainSheetContent: SheetContent = mainTab === 'shell' ? 'shell' : 'other';
@@ -923,6 +942,7 @@ function MainApp() {
             <FoldPane key="sidebar" size="intrinsic" anchor="end" className={`fleet-projects-pane ${activeView === 'fleet' ? 'fleet-sheet-open' : ''}`} custom={sidebarFold.custom} onFoldComplete={sidebarFold.onFoldComplete}>
               <Sidebar
                 selectedProjectId={selected?.id ?? null}
+                onUnloadSession={openUnloadSession}
                 selectedRemote={remoteProject}
                 onSelectRemote={(target) => {
                   openRemote(target, null);
@@ -1095,14 +1115,15 @@ function MainApp() {
                   <span className="flex min-w-0 items-center gap-1.5 text-[--text] pl-2 pr-1 py-0.5 rounded-md bg-[--surface-active] text-[11px] max-w-[280px]" title={selected.path}>
                     <StatusDot state={selectedAgentState} />
                     <span className="truncate font-medium">{selected.name}</span>
-                    <button
+                    {primaryAlive && <button
                       onClick={unloadCurrent}
-                      className="ml-1 text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]/60 w-4 h-4 flex items-center justify-center rounded"
+                      className="ml-1 text-[--text-muted] hover:text-[--danger] hover:bg-[--panel]/60 w-11 h-11 lg:w-4 lg:h-4 flex shrink-0 items-center justify-center rounded focus-visible:ring-2 focus-visible:ring-[--accent]"
                       title="Unload session (close shell)"
+                      aria-label="Unload session (close shell)"
                       data-testid="unload-current"
                     >
                       <XIcon />
-                    </button>
+                    </button>}
                   </span>
                   <MetaprojectBoardButton project={selected} onRequestLink={() => setActiveView('chat')} />
                   <Tooltip label="Prompt library" shortcut={SHORTCUT_COPY.promptsShortcut(platform)}>
@@ -1191,6 +1212,11 @@ function MainApp() {
         onOpenPalette={() => openPalette('')}
         keepAwake={keepAwake}
       />
+      {unloadTarget && <UnloadSessionDialog key={unloadTarget.id} project={unloadTarget}
+        visible={isPrimaryVisible(unloadTarget.id, { selectedProjectId: selected?.id ?? null, mainTab, activeShellIndex, rightShellIndex })}
+        onClose={closeUnloadSession}
+        onStopped={() => { toast('Session unloaded', { kind: 'success' }); }}
+      />}
       {keepAwakeUntilOpen && keepAwake && (
         <KeepAwakeUntilDialog onStart={(endsAt) => { void keepAwake.startUntil(endsAt); }} onClose={() => setKeepAwakeUntilOpen(false)} />
       )}

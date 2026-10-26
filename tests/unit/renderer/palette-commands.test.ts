@@ -4,7 +4,7 @@ import { PALETTE_COPY, type PaletteCommand } from '@renderer/command-palette-con
 import { SETTINGS_NAV_ITEMS } from '@renderer/components/settings/nav-icons';
 import { KEEP_AWAKE_COPY, KEEP_AWAKE_PRESETS } from '@shared/keep-awake-contract';
 
-type DepFn = Exclude<keyof PaletteCommandDeps, 'hasProject' | 'sidebarOpen' | 'platform' | 'keepAwake'>;
+type DepFn = Exclude<keyof PaletteCommandDeps, 'hasProject' | 'hasPrimary' | 'sidebarOpen' | 'platform' | 'keepAwake'>;
 
 function deps(over: Partial<PaletteCommandDeps> = {}) {
   const fns = {
@@ -25,7 +25,7 @@ function deps(over: Partial<PaletteCommandDeps> = {}) {
     setThemePalette: vi.fn(),
     openSettings: vi.fn(),
   } satisfies Record<DepFn, unknown>;
-  return { fns, deps: { hasProject: true, sidebarOpen: true, ...fns, ...over } };
+  return { fns, deps: { hasProject: true, hasPrimary: true, sidebarOpen: true, ...fns, ...over } };
 }
 
 function byId(list: readonly PaletteCommand[], id: string): PaletteCommand {
@@ -177,6 +177,13 @@ describe('buildPaletteCommands', () => {
     const without = buildPaletteCommands(deps({ hasProject: false }).deps).map((c) => c.id);
     for (const id of NEEDS_PROJECT) expect(without, id).not.toContain(id);
     expect(without).toHaveLength(withProject.length - NEEDS_PROJECT.length);
+  });
+
+  it('hides unload when only nonzero shells are alive, without hiding other project commands', () => {
+    const list = buildPaletteCommands(deps({ hasPrimary: false }).deps).map((command) => command.id);
+    expect(list).not.toContain('shell.unload');
+    expect(list).toContain('shell.popout');
+    expect(list).toContain('term.new');
   });
 });
 

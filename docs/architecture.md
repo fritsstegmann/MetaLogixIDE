@@ -1212,6 +1212,44 @@ Rules:
   shell label names Claude or OMP, including idle. Project and global
   labels use generic text. Severity is blocked, then busy, then idle.
 
+### Local primary-session unload
+
+The local project-row X, selected-project header X, and palette Unload current session
+open one confirmation dialog. The action stops only shell index 0. Other shells,
+project records, files, and the selected project remain unchanged
+(`src/renderer/App.tsx:288-306,429-460,874-876`;
+`src/renderer/components/Sidebar.tsx:529-649`).
+
+The dialog inspects the live PTY generation and the agent state for shell 0.
+It warns when that agent is busy or needs input. It also warns when shell 0
+is shown in the Shell tab or visible split. The visibility check uses
+`viewedShellsFor`, which excludes other main tabs
+(`src/renderer/unload-session.ts:11-28`;
+`src/renderer/viewed-shells.ts:15-27`). A sub-agent has no independent
+status here; its work affects this warning only if the owning shell reports
+busy.
+
+`shells:inspect-primary` returns one generation or reports that shell 0 is
+gone. `shells:stop-primary` checks that generation and current work state
+before signalling it. A replacement session survives stale consent; newly
+busy work needs fresh consent. Failed status sampling blocks guarded unload
+instead of being interpreted as idle
+(`src/main/ipc/register.ts:731-750`;
+`src/main/agent-status/state-tracker.ts:92-101,138-166`;
+`src/main/pty/manager.ts:305-338`). A failure stays visible in the dialog
+for retry.
+
+`src/main/pty/manager.ts:141-150` still reports an old generation's exit after a replacement.
+`src/main/ipc/register.ts:1753-1759` does not forward that stale exit or remove
+the replacement's shell entry.
+
+The dialog makes the app chrome inert and blocks app-wide shortcuts while open
+(`src/renderer/components/UnloadSessionDialog.tsx:74-87`;
+`src/renderer/App.tsx:366-370`). `ToastStack` renders outside that inert chrome,
+so notifications remain announced and dismissible
+(`src/renderer/components/ToastStack.tsx:51-88`). Individual shell-tab stops
+and Fleet stops remain separate actions.
+
 ### Project and app-wide environment variables
 
 Each project can store environment variables. The app can also store
