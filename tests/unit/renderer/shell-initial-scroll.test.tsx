@@ -124,9 +124,9 @@ vi.mock('@xterm/xterm', () => ({
   },
 }));
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }));
-vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class {} }));
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }));
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: class {} }));
+vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: function Unicode11Addon() {} }));
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: function WebLinksAddon() {} }));
+vi.mock('@xterm/addon-search', () => ({ SearchAddon: function SearchAddon() {} }));
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class { onContextLoss() {} } }));
 vi.mock('@renderer/terminal-font-update', () => ({
   createTerminalFontUpdater: () => ({ apply: async () => undefined, dispose() {} }),
@@ -138,10 +138,11 @@ vi.mock('@renderer/fonts/terminal-font-weight-context', () => ({ useTerminalFont
 vi.mock('@renderer/shortcut-platform', () => ({ useShortcutPlatform: () => 'other' }));
 vi.mock('@renderer/hooks/useTerminalDrop', () => ({ useTerminalDrop: () => ({ overlay: null, handlers: {} }) }));
 vi.mock('@renderer/hooks/useTerminalPaste', () => ({ useTerminalPaste: () => async () => undefined }));
+const focusOpened = vi.hoisted(() => vi.fn());
 vi.mock('@renderer/hooks/useWindowTerminalFocus', () => ({
-  terminalFocus: { register: () => ({ opened() {}, used() {}, unregister() {} }) },
+  terminalFocus: { register: () => ({ opened: focusOpened, used() {}, unregister() {} }) },
 }));
-const stream = vi.hoisted(() => ({ onData: (_data: string) => undefined }));
+const stream = vi.hoisted((): { onData: (data: string) => void } => ({ onData: () => undefined }));
 vi.mock('@renderer/hooks/useShellStream', () => ({
   useShellStream: (_project: number, _shell: number, onData: (data: string) => void) => { stream.onData = onData; },
 }));
@@ -156,14 +157,18 @@ const flush = async () => { for (let index = 0; index < 12; index++) await Promi
 const host = {
   clientWidth: 640,
   clientHeight: 480,
+  style: { visibility: '' },
   addEventListener() {},
   removeEventListener() {},
 };
 function attachRefs(node: ReactNode): void {
   if (Array.isArray(node)) { for (const child of node) attachRefs(child); return; }
-  if (!isValidElement<{ children?: ReactNode }>(node)) return;
+  if (!isValidElement<{ children?: ReactNode; style?: { visibility?: string } }>(node)) return;
   const ref: unknown = 'ref' in node ? node.ref : null;
-  if (ref && typeof ref === 'object' && 'current' in ref) Reflect.set(ref, 'current', host);
+  if (ref && typeof ref === 'object' && 'current' in ref) {
+    Reflect.set(ref, 'current', host);
+    if (node.props.style?.visibility) host.style.visibility = node.props.style.visibility;
+  }
   attachRefs(node.props.children);
 }
 vi.stubGlobal('self', globalThis);
@@ -190,7 +195,9 @@ beforeEach(() => {
   runtime.reset();
   terminals.instances.length = 0;
   invoke.mockReset();
+  focusOpened.mockReset();
   frameCallbacks.length = 0;
+  host.style.visibility = '';
   vi.stubGlobal('self', globalThis);
   vi.stubGlobal('document', {
     documentElement: {},
@@ -213,16 +220,21 @@ describe('local shell initial snapshot viewport', () => {
     const term = await mount(snapshot.promise);
     expect(invoke).toHaveBeenCalledWith('shells:snapshot', { projectId: 5, shellIndex: 0 });
     expect(term.writes).toEqual([]);
+    expect(host.style.visibility).toBe('hidden');
+    expect(focusOpened).not.toHaveBeenCalled();
     const output = Array.from({ length: 48 }, (_, index) => `line ${index}\n`).join('');
     snapshot.resolve({ output });
     await flush();
     expect(term.writes).toEqual([output]);
     expect(term.buffer.active.baseY).toBe(0);
     expect(term.scrollToBottom).not.toHaveBeenCalled();
+    expect(host.style.visibility).toBe('hidden');
     term.finishWrite();
     expect(term.buffer.active.baseY).toBeGreaterThan(0);
     for (const callback of frameCallbacks.splice(0)) callback(0);
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+    expect(host.style.visibility).toBe('');
+    expect(focusOpened).toHaveBeenCalledOnce();
     term.userScroll(0);
     stream.onData('later update\n');
     term.finishWrite();
@@ -239,13 +251,18 @@ describe('local shell initial snapshot viewport', () => {
     await flush();
     expect(term.writes).toEqual([output, 'last live update\n']);
     expect(term.scrollToBottom).not.toHaveBeenCalled();
+    expect(host.style.visibility).toBe('hidden');
     term.finishWrite();
     expect(term.buffer.active).toBe(term.buffer.alternate);
     expect(term.scrollToBottom).not.toHaveBeenCalled();
+    expect(host.style.visibility).toBe('hidden');
+    expect(focusOpened).not.toHaveBeenCalled();
     term.finishWrite();
     for (const callback of frameCallbacks.splice(0)) callback(0);
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+    expect(host.style.visibility).toBe('');
+    expect(focusOpened).toHaveBeenCalledOnce();
     term.userScroll(0);
     stream.onData('later update\n');
     expect(term.writes).toEqual([output, 'last live update\n', 'later update\n']);
@@ -253,5 +270,23 @@ describe('local shell initial snapshot viewport', () => {
     for (const callback of frameCallbacks.splice(0)) callback(0);
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
     expect(term.buffer.active.viewportY).toBe(0);
+  });
+
+  it('buffers output that arrives while the initial snapshot is parsing, revealing only after its last parse', async () => {
+    const snapshot = Promise.withResolvers<{ output: string }>();
+    const term = await mount(snapshot.promise);
+    const output = Array.from({ length: 45 }, (_, index) => `old ${index}\n`).join('');
+    snapshot.resolve({ output });
+    await flush();
+    stream.onData('during replay\n');
+    expect(term.writes).toEqual([output]);
+    term.finishWrite();
+    expect(term.writes).toEqual([output, 'during replay\n']);
+    expect(host.style.visibility).toBe('hidden');
+    expect(term.scrollToBottom).not.toHaveBeenCalled();
+    term.finishWrite();
+    expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+    expect(host.style.visibility).toBe('');
+    expect(term.scrollToBottom).toHaveBeenCalledOnce();
   });
 });

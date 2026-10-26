@@ -6,7 +6,7 @@
  * routes copy/paste keys and write-only OSC 52 to the local clipboard, and reports status to its
  * owner. Each split pane has an independent attachment.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -48,6 +48,7 @@ interface Props {
   /** Bump to drop the subscription and reattach the same shell. */
   readonly epoch: number;
   readonly label: string;
+  readonly standby?: boolean;
   readonly onStatus: (status: RemotePaneStatus, shellIndex: number) => void;
   readonly control?: { current: RemoteTerminalPaneControl | null };
 }
@@ -97,17 +98,18 @@ export function RemoteTerminalPane({
   shellIndex,
   epoch,
   label,
+  standby = false,
   onStatus,
   control,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [viewportReady, setViewportReady] = useState(false);
   const terminalRef = useRef<Terminal | null>(null);
   const resizeRef = useRef<(() => void) | null>(null);
   const runningRef = useRef(false);
   const statusRef = useRef(onStatus);
   statusRef.current = onStatus;
-  const controlRef = useRef(control);
-  controlRef.current = control;
+  const handleRef = useRef<RemoteTerminalPaneControl | null>(null);
   const platform = useShortcutPlatform();
   const platformRef = useRef(platform);
   platformRef.current = platform;
@@ -119,6 +121,7 @@ export function RemoteTerminalPane({
 
   useEffect(() => {
     if (!hostRef.current) return;
+    setViewportReady(false);
     const host = hostRef.current;
     const font = fontRef.current;
     const report = (status: RemotePaneStatus) => statusRef.current(status, shellIndex);
@@ -192,10 +195,10 @@ export function RemoteTerminalPane({
           if (!active || exited) return;
           initialSettled = true;
           if (!userScrolled) term.scrollToBottom();
+          setViewportReady(true);
+          runningRef.current = true;
+          report({ kind: 'running' });
         });
-        runningRef.current = true;
-        report({ kind: 'running' });
-        term.focus();
       }
       if (event.kind === 'exit') {
         exited = true;
@@ -267,8 +270,7 @@ export function RemoteTerminalPane({
         if (active && runningRef.current) term.paste(text);
       },
     };
-    const owner = controlRef.current;
-    if (owner) owner.current = handle;
+    handleRef.current = handle;
     const subscribe = () => {
       void api
         .invoke('fleet:subscribe', { peerId, projectId, shellIndex })
@@ -333,11 +335,20 @@ export function RemoteTerminalPane({
       scrollListener.dispose();
       osc52.dispose();
       term.dispose();
-      if (owner?.current === handle) owner.current = null;
+      if (handleRef.current === handle) handleRef.current = null;
       if (resizeRef.current === resize) resizeRef.current = null;
       if (terminalRef.current === term) terminalRef.current = null;
     };
   }, [peerId, projectId, shellIndex, epoch]);
+
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (!control || !handle) return;
+    control.current = handle;
+    return () => {
+      if (control.current === handle) control.current = null;
+    };
+  }, [control, peerId, projectId, shellIndex, epoch]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -350,8 +361,14 @@ export function RemoteTerminalPane({
     resizeRef.current?.();
   }, [terminalFontFamily, fontSize, weight, boldWeight]);
 
+  useEffect(() => {
+    if (viewportReady && !standby) terminalRef.current?.focus();
+  }, [viewportReady, standby]);
+
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-3">
+    <div className={`min-h-0 min-w-0 flex-1 overflow-hidden p-3 ${standby ? 'absolute inset-0' : ''}`}
+      style={{ visibility: viewportReady && !standby ? 'visible' : 'hidden' }}
+      aria-hidden={!viewportReady || standby}>
       <div
         ref={hostRef}
         role="region"

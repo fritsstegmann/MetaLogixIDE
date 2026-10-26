@@ -160,7 +160,7 @@ function useDividerDrag(rowRef: RefObject<HTMLDivElement | null>, onRatioChange:
   return { dragging, startDrag: () => setDragging(true) };
 }
 
-/** Attaches only the shown remote PTYs (the left tab, plus the split's right shell); other shells stay alive on the peer. */
+/** Keeps the previous left attachment alive during tab handoff; split shells retain their independent pane. */
 export function RemoteTerminal({ project, available, onRefreshAvailability, focusShell = null, onShellsChange }: Props) {
   const { peerId, peerName, projectId, projectName } = project;
   const [session, setSession] = useState<Session>({ kind: 'starting' });
@@ -168,6 +168,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   const [shells, setShells] = useState<readonly FleetShell[]>([]);
   const [defaultCliName, setDefaultCliName] = useState<string | null>(null);
   const [attachmentEpoch, setAttachmentEpoch] = useState(0);
+  const [retained, setRetained] = useState<{ readonly shellIndex: number; readonly epoch: number; readonly ready: boolean } | null>(null);
   const [stopping, setStopping] = useState(false);
   const paneControl = useRef<RemoteTerminalPaneControl | null>(null);
   const generation = useRef(0);
@@ -198,6 +199,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     if (!available) return;
     const attempt = ++generation.current;
     setStopping(false);
+    setRetained(null);
     setSession({ kind: 'starting' });
     try {
       const result = kind === 'claude'
@@ -248,7 +250,10 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
       void api.invoke('fleet:profiles', { peerId, projectId }).then(({ defaultCliName }) => {
         if (active) setDefaultCliName(defaultCliName);
       }).catch(() => undefined);
-    } else setShellIndex(null);
+    } else {
+      setRetained(null);
+      setShellIndex(null);
+    }
     return () => { active = false; currentStatusRequest.current++; mounted.current = false; currentGeneration.current++; };
   }, [available, launch, peerId, peerName, projectId, refreshShells]);
 
@@ -258,13 +263,25 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     return () => clearInterval(timer);
   }, [available, refreshShells]);
 
+  const select = useCallback((index: number) => {
+    if (index === shellIndex) return;
+    if (retained?.shellIndex === index) {
+      setSession(retained.ready ? { kind: 'running', shellIndex: index } : { kind: 'connecting', shellIndex: index });
+      setRetained(null);
+    } else {
+      setRetained(retained ?? (shellIndex === null ? null : {
+        shellIndex, epoch: attachmentEpoch, ready: session.kind === 'running' && session.shellIndex === shellIndex,
+      }));
+      setSession({ kind: 'connecting', shellIndex: index });
+    }
+    setShellIndex(index);
+  }, [attachmentEpoch, retained, session, shellIndex]);
   useEffect(() => {
     if (!focusShell || handledFocus.current === focusShell.seq || !shells.some((shell) => shell.shellIndex === focusShell.shellIndex)) return;
     handledFocus.current = focusShell.seq;
     if (focusShell.shellIndex === shellIndex || focusShell.shellIndex === split.shellIndex) return;
-    setSession({ kind: 'connecting', shellIndex: focusShell.shellIndex });
-    setShellIndex(focusShell.shellIndex);
-  }, [focusShell, shells, shellIndex, split.shellIndex]);
+    select(focusShell.shellIndex);
+  }, [focusShell, shells, shellIndex, split.shellIndex, select]);
 
   const shownShellIndex = available ? shellIndex : null;
   useEffect(() => {
@@ -278,6 +295,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     try {
       await api.invoke('fleet:stop', { peerId, projectId, shellIndex: index });
       if (mounted.current && generation.current === attempt) {
+        if (index === shellIndex || index === retained?.shellIndex) setRetained(null);
         const remaining = shells.filter((shell) => shell.shellIndex !== index);
         setShells(remaining);
         if (shellIndex === index) {
@@ -306,18 +324,31 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
   }
 
   function onLeftStatus(status: RemotePaneStatus, index: number) {
+    if (index !== shellIndex) {
+      if (status.kind === 'running')
+        setRetained((current) => current?.shellIndex === index ? { ...current, ready: true } : current);
+      else
+        setRetained((current) => current?.shellIndex === index ? null : current);
+      return;
+    }
+    if ((status.kind === 'error' || status.kind === 'exited') && retained) {
+      toast(status.kind === 'error' ? status.message : 'Remote shell ended before it was ready', { kind: 'error' });
+      setShellIndex(retained.shellIndex);
+      setSession(retained.ready ? { kind: 'running', shellIndex: retained.shellIndex } : { kind: 'connecting', shellIndex: retained.shellIndex });
+      setRetained(null);
+      return;
+    }
+    if (status.kind === 'running' || status.kind === 'exited') setRetained(null);
     setSession(status.kind === 'error' ? status : { kind: status.kind, shellIndex: index });
   }
 
-  function select(index: number) {
-    if (index === shellIndex) return;
-    setSession({ kind: 'connecting', shellIndex: index });
-    setShellIndex(index);
-  }
 
   function moveSplitToTab() {
     const index = split.release();
-    if (index !== null) select(index);
+    if (index === null) return;
+    setRetained(null);
+    setSession({ kind: 'connecting', shellIndex: index });
+    setShellIndex(index);
   }
 
   function launchCustom(name: string, cmdLine: string, save: boolean) {
@@ -357,6 +388,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
           </span>
           {!available && <button type="button" className={BUTTON} onClick={onRefreshAvailability}>Refresh connection</button>}
           <button type="button" className={BUTTON} disabled={!available || session.kind === 'starting'} onClick={() => {
+            setRetained(null);
             if (shellIndex === null) void launch('claude');
             else { setSession({ kind: 'connecting', shellIndex }); setAttachmentEpoch((epoch) => epoch + 1); split.reconnect(); }
           }}>Reconnect terminal</button>
@@ -388,9 +420,15 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
       {available && session.kind === 'exited' && <p role="status" className="p-4 text-base">Remote terminal ended. Choose a CLI or reconnect to start a session.</p>}
       {available && shellIndex !== null && (
         <div ref={rowRef} className={`flex min-h-0 min-w-0 flex-1 ${right !== null ? 'p-2' : ''}`}>
-          <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${right !== null ? PANE_CARD : ''}`}>
+          <div className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${right !== null ? PANE_CARD : ''}`}>
             {right !== null && <SplitPaneHeader label={shellChipLabel(shells, shellIndex)} path={location} focused={false} dot={dot(shellIndex)} />}
-            <RemoteTerminalPane key="left" peerId={peerId} projectId={projectId} shellIndex={shellIndex} epoch={attachmentEpoch}
+            {retained && retained.shellIndex !== shellIndex && (
+              <RemoteTerminalPane key={`left:${retained.shellIndex}:${retained.epoch}`} peerId={peerId} projectId={projectId}
+                shellIndex={retained.shellIndex} epoch={retained.epoch} label={`Terminal for ${projectName} on ${peerName}`}
+                onStatus={onLeftStatus} />
+            )}
+            <RemoteTerminalPane key={`left:${shellIndex}:${attachmentEpoch}`} peerId={peerId} projectId={projectId}
+              shellIndex={shellIndex} epoch={attachmentEpoch} standby={retained !== null}
               label={`Terminal for ${projectName} on ${peerName}`} onStatus={onLeftStatus} control={paneControl} />
           </div>
           {right !== null && (
