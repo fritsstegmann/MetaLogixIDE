@@ -9,6 +9,7 @@ import type { AppFileDragPayload, ClipboardImageResult, ResolveAppFileResult, St
 import type { TasksDiscovery } from './tasks-contract';
 import type { FleetGitStatus, FleetShellRef, FleetState, FleetStatus, FleetTerminalEvent } from './fleet-contract';
 import type { KeepAwakeDarkenResult, KeepAwakeStartRequest, KeepAwakeStartResult, KeepAwakeState } from './keep-awake-contract';
+import type { PrimarySessionInspection, StopPrimarySessionRequest, StopPrimarySessionResult } from './unload-session-contract';
 
 /**
  * Single-character git status codes we bubble up. The two-position
@@ -101,6 +102,10 @@ export interface IpcContract {
    */
   'shells:set-default-cli':     { request: ProjectDefaultAgentRequest; response: { project: Project } };
   'shells:kill':        { request: { projectId: number; shellIndex: number };   response: { ok: true } };
+  /** One live local shell-zero generation and its recognized agent status; unavailable status rejects. */
+  'shells:inspect-primary': { request: { projectId: number }; response: PrimarySessionInspection };
+  /** Stops only the inspected generation; stale consent cannot stop a replacement or newly reported work. */
+  'shells:stop-primary': { request: StopPrimarySessionRequest; response: StopPrimarySessionResult };
   /** Repair a corrupted Claude session by stripping all thinking blocks from the most recent .jsonl session file. Backs up the original. */
   'claude:repair-session': { request: { projectId: number }; response: { repaired: number; blocksStripped: number; backup: string } | { repaired: 0; blocksStripped: 0; backup: null; reason: string } };
   'shells:resize':      { request: { projectId: number; shellIndex: number; cols: number; rows: number }; response: { ok: true } };

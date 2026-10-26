@@ -48,6 +48,7 @@ import { keepAwakeHandlers } from '@main/keep-awake/handlers';
 import { isInsideRoot, resolveInsideRoot } from '@main/domain/path-containment';
 import { decodeStoredSecret, encodeStoredSecret } from '@main/credential-encoding';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import type { StopPrimarySessionRequest } from '@shared/unload-session-contract';
 
 const GIT_DIFF_KINDS: ReadonlySet<GitDiffKind> = new Set(['staged', 'unstaged', 'untracked']);
 const execFileAsync = promisify(execFile);
@@ -88,6 +89,26 @@ function validatedConfigPatch(config: unknown): Partial<ProjectConfig> {
   return patch;
 }
 
+
+/** Validates a local guarded-unload target before reading PTY or tracker state. */
+function primaryProjectId(request: unknown): number {
+  if (typeof request !== 'object' || request === null || !('projectId' in request) ||
+    typeof request.projectId !== 'number' || !Number.isSafeInteger(request.projectId) || request.projectId <= 0)
+    throw new Error('invalid projectId');
+  return request.projectId;
+}
+
+/** Parses consent as a bounded opaque generation and an explicit work-risk acknowledgment. */
+function stopPrimaryRequest(request: unknown): StopPrimarySessionRequest {
+  const projectId = primaryProjectId(request);
+  if (typeof request !== 'object' || request === null || !('generation' in request) ||
+    typeof request.generation !== 'string' || request.generation.length > 128 ||
+    !/^[A-Za-z0-9-]+$/.test(request.generation))
+    throw new Error('invalid generation');
+  if (!('acknowledgedWorkRisk' in request) || typeof request.acknowledgedWorkRisk !== 'boolean')
+    throw new Error('invalid acknowledgedWorkRisk');
+  return { projectId, generation: request.generation, acknowledgedWorkRisk: request.acknowledgedWorkRisk };
+}
 export type Handler<C extends IpcChannelName> = (services: Services, req: IpcRequest<C>, event?: Electron.IpcMainInvokeEvent) => Promise<IpcResponse<C>>;
 type SendEvent = <E extends IpcEventName>(channel: E, payload: IpcEvents[E]) => void;
 
@@ -707,6 +728,27 @@ const handlers: { [C in IpcChannelName]: Handler<C> } = {
     return { project: result.project };
   },
   'shells:kill':   async (s, { projectId, shellIndex }) => { await s.ptyManager.kill(projectId, shellIndex); s.shells.remove(projectId, shellIndex); return { ok: true } as const; },
+  'shells:inspect-primary': async (s, request) => {
+    const projectId = primaryProjectId(request);
+    const live = s.ptyManager.liveShell(projectId, 0);
+    if (!live) return { kind: 'gone' };
+    if (!s.agentStatus) throw new Error('agent status not installed');
+    const status = s.agentStatus.readForGuard(projectId, 0, live.generation);
+    return { kind: 'live', generation: live.generation, ...status };
+  },
+  'shells:stop-primary': async (s, request) => {
+    const { projectId, generation, acknowledgedWorkRisk } = stopPrimaryRequest(request);
+    const live = s.ptyManager.liveShell(projectId, 0);
+    if (!live) return { kind: 'gone' };
+    if (live.generation !== generation) return { kind: 'replaced' };
+    if (!s.agentStatus) throw new Error('agent status not installed');
+    const { state } = s.agentStatus.readForGuard(projectId, 0, generation);
+    if (!acknowledgedWorkRisk && (state === 'busy' || state === 'blocked'))
+      return { kind: 'escalated' };
+    const kind = s.ptyManager.stopIfGeneration(projectId, generation);
+    if (kind === 'stopped') s.shells.remove(projectId, 0);
+    return { kind };
+  },
   /**
    * Repair a corrupted Claude session: find the project's session dir
    * (`~/.claude/projects/<encoded-path>/`), locate the most recently
@@ -1693,6 +1735,7 @@ export const CHANNEL_EMITS: Partial<Record<IpcChannelName, IpcEventName[]>> = {
   'shells:set-default-cli': ['projects:changed'],
   'projects:update-config': ['projects:changed'],
   'shells:kill':    ['alive-shells:changed'],
+  'shells:stop-primary': ['alive-shells:changed'],
   'shells:pin':     ['alive-shells:changed'],
 };
 

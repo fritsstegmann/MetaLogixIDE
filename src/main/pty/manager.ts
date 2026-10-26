@@ -70,15 +70,17 @@ export interface PtyManagerOptions {
 
 /** Owns live PTYs and generation-bound launch identities independent of process labels. */
 /**
- * Sends `signal` to the PTY's process group, falling back to the PTY itself. Windows has no
- * signals or process groups and node-pty throws if given one, so there it terminates the PTY
- * with a plain `kill()` and ignores `signal`. Never throws: the process may already be gone.
+ * Signals the PTY process group or falls back to its PTY; returns false only when neither
+ * could be signalled, including an exited process. Windows uses the PTY directly; never throws.
  */
-export function signalPty(pty: Pick<IPty, 'kill'>, pid: number, signal: 'SIGTERM' | 'SIGKILL', platform: NodeJS.Platform = process.platform): void {
+export function signalPty(pty: Pick<IPty, 'kill'>, pid: number, signal: 'SIGTERM' | 'SIGKILL', platform: NodeJS.Platform = process.platform): boolean {
   try {
-    if (platform === 'win32') { pty.kill(); return; }
+    if (platform === 'win32') { pty.kill(); return true; }
     try { process.kill(-pid, signal); } catch { pty.kill(signal); }
-  } catch { /* already gone */ }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class PtyManager extends EventEmitter {
@@ -137,6 +139,8 @@ export class PtyManager extends EventEmitter {
     pty.onData((data: string) => this.receive(entry, data));
     setTimeout(() => { entry.bufferOpen = false; entry.earlyBuffer = ''; }, EARLY_BUFFER_MS);
     pty.onExit(({ exitCode }: { exitCode: number }) => {
+      const current = this.entries.get(k);
+      if (current && current !== entry) return;
       const captured = entry.earlyBuffer;
       const uptimeMs = Date.now() - entry.startedAt;
       this.flushOutput(entry);
@@ -297,23 +301,40 @@ export class PtyManager extends EventEmitter {
     e.cols = cols; e.rows = rows;
   }
 
+  /** Signals only the current primary launch; missing and replaced generations never reach the PTY. */
+  stopIfGeneration(projectId: number, generation: string): 'stopped' | 'gone' | 'replaced' {
+    const k = key(projectId, 0);
+    const entry = this.entries.get(k);
+    if (!entry) return 'gone';
+    if (entry.generation !== generation) return 'replaced';
+    this.flushOutput(entry);
+    const current = this.entries.get(k);
+    if (!current) return 'gone';
+    if (current !== entry) return 'replaced';
+    this.stopEntry(k, entry, true);
+    return 'stopped';
+  }
+
+  /** Retains the existing index-based stop for individual shell and Fleet workflows. */
   async kill(projectId: number, shellIndex: number): Promise<void> {
-    const e = this.entries.get(key(projectId, shellIndex));
-    if (!e) return;
-    this.flushOutput(e);
-    // SIGHUP (node-pty default) is ignored by many processes including Claude CLI.
-    // Send SIGTERM to the whole process group so child processes also receive it,
-    // then escalate to SIGKILL after 3 s if the process is still alive.
-    const pid = e.pid;
-    signalPty(e.pty, pid, 'SIGTERM');
-    const killTimer = setTimeout(() => signalPty(e.pty, pid, 'SIGKILL'), 3000);
-    // The onExit handler fires when the process actually dies and calls
-    // releaseEntry; if somehow it never fires, clean up anyway.
-    const cleanup = () => { clearTimeout(killTimer); this.releaseEntry(key(projectId, shellIndex), e); };
-    e.pty.onExit(() => cleanup());
-    // Also release immediately from our tracking so isAlive() returns false
-    // and the UI tab disappears without waiting for the OS reap.
-    this.releaseEntry(key(projectId, shellIndex), e);
+    const k = key(projectId, shellIndex);
+    const entry = this.entries.get(k);
+    if (entry) {
+      this.flushOutput(entry);
+      this.stopEntry(k, entry);
+    }
+  }
+
+  private stopEntry(k: string, entry: Entry, guarded = false): void {
+    const pid = entry.pid;
+    if (!signalPty(entry.pty, pid, 'SIGTERM') && guarded)
+      throw new Error('unable to signal primary shell');
+    const killTimer = setTimeout(() => signalPty(entry.pty, pid, 'SIGKILL'), 3000);
+    entry.pty.onExit(() => {
+      clearTimeout(killTimer);
+      this.releaseEntry(k, entry);
+    });
+    this.releaseEntry(k, entry);
   }
 
   /** Records one PTY chunk and schedules its flush; per-chunk work stays O(chunk). */

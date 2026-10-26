@@ -52,7 +52,7 @@ function realSettings(): SettingsRepo {
 
 /** Minimal ptyManager stand-in: every method is a spy, so a test can assert nothing was spawned. */
 function fakePtyManager() {
-  return { on: vi.fn(), off: vi.fn(), spawn: vi.fn(async () => {}), kill: vi.fn(async () => {}), isAlive: vi.fn(() => false), resize: vi.fn(), write: vi.fn(), getScrollback: vi.fn(() => ''), getSnapshot: vi.fn(async () => ''), allPorts: vi.fn(() => []), liveShells: vi.fn(() => []) };
+  return { on: vi.fn(), off: vi.fn(), spawn: vi.fn(async () => {}), kill: vi.fn(async () => {}), stopIfGeneration: vi.fn<(_: number, __: string) => 'stopped' | 'gone' | 'replaced'>(() => 'gone'), liveShell: vi.fn<(_: number, __: number) => { pid: number; generation: string; agent: 'claude' | 'omp' | null } | null>(() => null), isAlive: vi.fn(() => false), resize: vi.fn(), write: vi.fn(), getScrollback: vi.fn(() => ''), getSnapshot: vi.fn(async () => ''), allPorts: vi.fn(() => []), liveShells: vi.fn(() => []) };
 }
 
 describe('registerIpc', () => {
@@ -64,7 +64,7 @@ describe('registerIpc', () => {
       'roots:list', 'roots:add', 'roots:remove', 'roots:rescan',
       'projects:list', 'projects:open', 'projects:pin', 'projects:hide',
       'projects:update-config', 'projects:recents',
-      'shells:launch', 'shells:kill', 'shells:resize', 'shells:write',
+      'shells:launch', 'shells:kill', 'shells:inspect-primary', 'shells:stop-primary', 'shells:resize', 'shells:write',
       'shells:alive-list', 'shells:pin',
       'settings:get', 'settings:set', 'settings:set-font', 'settings:set-app-env', 'settings:set-claude-permission-mode',
       'files:tree', 'app:ping', 'notifications:viewed-shells', 'agent-state:list',
@@ -91,6 +91,180 @@ describe('registerIpc', () => {
     const services = { agentStatus: null } as unknown as Parameters<typeof registerIpc>[1];
     registerIpc(ipc, services, () => {});
     await expect(ipc.handlers.get('agent-state:list')!({}, undefined)).rejects.toThrow('agent status not installed');
+  });
+
+  describe('primary-session inspection and guarded stop', () => {
+    function rig() {
+      const ipc = fakeIpcMain();
+      const ptyManager = fakePtyManager();
+      const shells = { remove: vi.fn() };
+      const list = vi.fn((): Array<{ projectId: number; shellIndex: number; agent: 'claude' | 'omp'; state: 'idle' | 'busy' | 'blocked' }> => []);
+      const readForGuard = vi.fn((projectId: number, shellIndex: number, generation: string) => {
+        if (ptyManager.liveShell(projectId, shellIndex)?.generation !== generation)
+          throw new Error('agent status unavailable');
+        const entry = list().find((item) => item.projectId === projectId && item.shellIndex === shellIndex);
+        return entry ? { agent: entry.agent, state: entry.state } : { agent: null, state: null };
+      });
+      const events: string[] = [];
+      const services = { ptyManager, agentStatus: { list, readForGuard }, shells } as unknown as Parameters<typeof registerIpc>[1];
+      registerIpc(ipc, services, (channel) => { events.push(channel); });
+      const call = (channel: string, request: unknown) => ipc.handlers.get(channel)!({}, request);
+      return { ptyManager, list, readForGuard, shells, events, call };
+    }
+
+    it('inspects only live shell zero and reads its recognized state, not a busy sibling', async () => {
+      const { ptyManager, list, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockReturnValue([
+        { projectId: 4, shellIndex: 0, agent: 'claude', state: 'idle' },
+        { projectId: 4, shellIndex: 1, agent: 'omp', state: 'busy' },
+        { projectId: 5, shellIndex: 0, agent: 'omp', state: 'blocked' },
+      ]);
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({
+        kind: 'live', generation: 'first', agent: 'claude', state: 'idle',
+      });
+      expect(ptyManager.liveShell).toHaveBeenCalledWith(4, 0);
+      expect(list).toHaveBeenCalledTimes(1);
+      ptyManager.liveShell.mockReturnValue({ pid: 32, generation: 'plain', agent: null });
+      list.mockReturnValue([]);
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({
+        kind: 'live', generation: 'plain', agent: null, state: null,
+      });
+      ptyManager.liveShell.mockReturnValue(null);
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({ kind: 'gone' });
+    });
+
+    it.each(['busy', 'blocked'] as const)('inspects shell-zero %s without sibling attribution', async (state) => {
+      const { ptyManager, list, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'target', agent: 'omp' });
+      list.mockReturnValue([
+        { projectId: 4, shellIndex: 1, agent: 'claude', state: 'busy' },
+        { projectId: 7, shellIndex: 0, agent: 'omp', state: 'blocked' },
+        { projectId: 4, shellIndex: 0, agent: 'omp', state },
+      ]);
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({
+        kind: 'live', generation: 'target', agent: 'omp', state,
+      });
+    });
+
+    it('distinguishes unrecognized shells from an unavailable status read', async () => {
+      const { ptyManager, list, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockReturnValue([]);
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({
+        kind: 'live', generation: 'first', agent: null, state: null,
+      });
+      list.mockImplementation(() => { throw new Error('tracker failed'); });
+      await expect(call('shells:inspect-primary', { projectId: 4 })).rejects.toThrow('tracker failed');
+      const ipc = fakeIpcMain();
+      registerIpc(ipc, { ptyManager, agentStatus: null } as unknown as Parameters<typeof registerIpc>[1], () => {});
+      await expect(ipc.handlers.get('shells:inspect-primary')!({}, { projectId: 4 })).rejects.toThrow('agent status not installed');
+      await expect(ipc.handlers.get('shells:stop-primary')!({}, {
+        projectId: 4, generation: 'first', acknowledgedWorkRisk: true,
+      })).rejects.toThrow('agent status not installed');
+    });
+
+    it('blocks unload on sampler failure and permits retry after a fresh status sample', async () => {
+      const { ptyManager, readForGuard, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      readForGuard.mockImplementationOnce(() => { throw new Error('agent status unavailable'); });
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: false })).rejects.toThrow('agent status unavailable');
+      expect(ptyManager.stopIfGeneration).not.toHaveBeenCalled();
+      readForGuard.mockReturnValue({ agent: 'claude', state: 'busy' });
+      await expect(call('shells:inspect-primary', { projectId: 4 })).resolves.toEqual({
+        kind: 'live', generation: 'first', agent: 'claude', state: 'busy',
+      });
+      expect(shells.remove).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed inspection and stop input before reading status or signalling', async () => {
+      const { ptyManager, list, call } = rig();
+      for (const projectId of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '4', null, undefined]) {
+        await expect(call('shells:inspect-primary', { projectId })).rejects.toThrow('invalid projectId');
+        await expect(call('shells:stop-primary', { projectId, generation: 'first', acknowledgedWorkRisk: false })).rejects.toThrow('invalid projectId');
+      }
+      await expect(call('shells:inspect-primary', null)).rejects.toThrow('invalid projectId');
+      await expect(call('shells:stop-primary', null)).rejects.toThrow('invalid projectId');
+      for (const generation of ['', ' ', 'x'.repeat(129), 42, null]) {
+        await expect(call('shells:stop-primary', { projectId: 4, generation, acknowledgedWorkRisk: false })).rejects.toThrow('invalid generation');
+      }
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: 'false' })).rejects.toThrow('invalid acknowledgedWorkRisk');
+      expect(ptyManager.liveShell).not.toHaveBeenCalled();
+      expect(ptyManager.stopIfGeneration).not.toHaveBeenCalled();
+      expect(list).not.toHaveBeenCalled();
+    });
+
+    it('stops matching generation once, removes only shell zero and broadcasts liveness', async () => {
+      const { ptyManager, list, shells, events, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockReturnValue([{ projectId: 4, shellIndex: 0, agent: 'claude', state: 'idle' }]);
+      ptyManager.stopIfGeneration.mockReturnValueOnce('stopped').mockReturnValueOnce('gone');
+      const request = { projectId: 4, generation: 'first', acknowledgedWorkRisk: false };
+      await expect(call('shells:stop-primary', request)).resolves.toEqual({ kind: 'stopped' });
+      expect(ptyManager.stopIfGeneration).toHaveBeenCalledWith(4, 'first');
+      expect(shells.remove).toHaveBeenCalledTimes(1);
+      expect(shells.remove).toHaveBeenCalledWith(4, 0);
+      expect(events).toEqual(['alive-shells:changed']);
+      await expect(call('shells:stop-primary', request)).resolves.toEqual({ kind: 'gone' });
+      expect(shells.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses replacement and newly busy or blocked shell without acknowledged work risk', async () => {
+      const { ptyManager, list, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockReturnValue([{ projectId: 4, shellIndex: 0, agent: 'claude', state: 'busy' }]);
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: false })).resolves.toEqual({ kind: 'escalated' });
+      list.mockReturnValue([{ projectId: 4, shellIndex: 0, agent: 'claude', state: 'blocked' }]);
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: false })).resolves.toEqual({ kind: 'escalated' });
+      ptyManager.liveShell.mockReturnValue({ pid: 32, generation: 'replacement', agent: 'claude' });
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: true })).resolves.toEqual({ kind: 'replaced' });
+      expect(ptyManager.stopIfGeneration).not.toHaveBeenCalled();
+      expect(shells.remove).not.toHaveBeenCalled();
+    });
+
+    it('rechecks actual PTY generation after status read before stopping', async () => {
+      const { ptyManager, list, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockImplementation(() => {
+        ptyManager.liveShell.mockReturnValue({ pid: 32, generation: 'replacement', agent: 'claude' });
+        return [{ projectId: 4, shellIndex: 0, agent: 'claude', state: 'idle' }];
+      });
+      ptyManager.stopIfGeneration.mockReturnValue('replaced');
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: false })).resolves.toEqual({ kind: 'replaced' });
+      expect(ptyManager.stopIfGeneration).toHaveBeenCalledWith(4, 'first');
+      expect(shells.remove).not.toHaveBeenCalled();
+    });
+
+    it('allows acknowledged busy work and refuses gone shells without changing persistence', async () => {
+      const { ptyManager, list, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'omp' });
+      list.mockReturnValue([{ projectId: 4, shellIndex: 0, agent: 'omp', state: 'busy' }]);
+      ptyManager.stopIfGeneration.mockReturnValue('stopped');
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: true })).resolves.toEqual({ kind: 'stopped' });
+      ptyManager.liveShell.mockReturnValue(null);
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: true })).resolves.toEqual({ kind: 'gone' });
+      expect(shells.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates a status failure and retains the ordinary shell kill route', async () => {
+      const { ptyManager, list, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'claude' });
+      list.mockImplementation(() => { throw new Error('tracker failed'); });
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: true })).rejects.toThrow('tracker failed');
+      expect(ptyManager.stopIfGeneration).not.toHaveBeenCalled();
+      await expect(call('shells:kill', { projectId: 4, shellIndex: 2 })).resolves.toEqual({ ok: true });
+      expect(ptyManager.kill).toHaveBeenCalledWith(4, 2);
+      expect(shells.remove).toHaveBeenCalledWith(4, 2);
+    });
+
+    it('does not remove shell persistence or report success when signalling fails', async () => {
+      const { ptyManager, list, shells, call } = rig();
+      ptyManager.liveShell.mockReturnValue({ pid: 31, generation: 'first', agent: 'omp' });
+      list.mockReturnValue([{ projectId: 4, shellIndex: 0, agent: 'omp', state: 'idle' }]);
+      ptyManager.stopIfGeneration.mockImplementation(() => { throw new Error('stop failed'); });
+      await expect(call('shells:stop-primary', { projectId: 4, generation: 'first', acknowledgedWorkRisk: false })).rejects.toThrow('stop failed');
+      expect(shells.remove).not.toHaveBeenCalled();
+    });
   });
 
   it('settings:set rejects key claude_permission_mode without writing', async () => {

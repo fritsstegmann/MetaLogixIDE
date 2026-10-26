@@ -24,6 +24,7 @@ interface Entry {
   agent: AgentKind | null;
   state: AgentState;
   lastOmpReportAt: number | null;
+  unavailable: boolean;
 }
 const OMP_LEASE_MS = 1500;
 const key = (shell: ShellKey): string => `${shell.projectId}:${shell.shellIndex}`;
@@ -49,6 +50,7 @@ export class AgentStatusTracker {
       agent: identity.agent,
       state: 'idle',
       lastOmpReportAt: null,
+      unavailable: identity.agent === 'claude' || (identity.agent === null && this.platform !== 'win32'),
     });
     if (identity.agent) this.publish(identity, identity.agent, 'idle');
   }
@@ -85,6 +87,17 @@ export class AgentStatusTracker {
         agent,
         state,
       }));
+  }
+
+  /** Reads one current PTY generation without interpreting a failed sampler as idle. */
+  readForGuard(projectId: number, shellIndex: number, generation: string): {
+    agent: AgentKind | null;
+    state: AgentState | null;
+  } {
+    const entry = this.entries.get(`${projectId}:${shellIndex}`);
+    if (!entry || entry.identity.generation !== generation || !this.current(entry) || entry.unavailable)
+      throw new Error('agent status unavailable');
+    return { agent: entry.agent, state: entry.agent ? entry.state : null };
   }
 
   /** Subscribes to changed identity/state and returns an unsubscribe function. */
@@ -125,12 +138,14 @@ export class AgentStatusTracker {
   private async refreshOne(entry: Entry): Promise<void> {
     if (!this.current(entry)) return;
     let recognized = entry.identity.agent === 'claude';
+    let unavailable = false;
     try {
       if (!recognized && this.platform !== 'win32')
         recognized = await this.observeForeground(entry.identity.pid);
     } catch {
       console.warn('[agent-status] foreground sample unavailable');
       recognized = false;
+      unavailable = true;
     }
     if (!this.current(entry)) return;
     let state: AgentState = 'idle';
@@ -143,9 +158,11 @@ export class AgentStatusTracker {
         state = classifyClaudeScreen(rows, title);
       } catch {
         console.warn('[agent-status] screen sample unavailable');
+        unavailable = true;
       }
     }
     if (!this.current(entry)) return;
+    entry.unavailable = unavailable;
     this.set(entry, recognized ? 'claude' : null, state);
   }
 
