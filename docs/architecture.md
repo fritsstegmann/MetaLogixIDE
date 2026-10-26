@@ -243,6 +243,11 @@ stay cheap and must never wait on a child process.
   `runGitCommand` (`src/main/git/run-git-command.ts`). Unlike `runGit` it
   adds no safety arguments, so hooks and credential helpers behave as in the
   user's terminal. A slow hook, push or clone no longer freezes the window.
+  When the caller supplies no input, the runner closes stdin without
+  writing an empty chunk. If git closes stdin before reading supplied input,
+  a broken pipe leaves git's exit status and stderr unchanged. Other stdin
+  write errors return a failure result
+  (`src/main/git/run-git-command.ts:33-63`).
 - **mise task listing is asynchronous.** `tasks:discover` and `tasks:run`
   list mise tasks through the async `execFile` in `listMiseTasks`
   (`src/main/domain/mise-cli.ts:48`). mise is killed after 5 s. A project
