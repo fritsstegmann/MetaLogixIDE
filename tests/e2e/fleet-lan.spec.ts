@@ -270,6 +270,39 @@ test('paired Electron instances show remote root folders and hand viewport contr
     await expect(notice).toBeVisible();
     const secondIndex = Number(await tabs.nth(1).getAttribute('data-shell-index'));
     expect(secondIndex, 'positive control: the existing second tab is distinct from shell 0').toBeGreaterThan(0);
+    const shellZeroOutput = async () => (await drivenWin.evaluate((id) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: 0 }), project.id)).output;
+    const oldInput = workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ })
+      .locator('.xterm-helper-textarea');
+    await workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ }).locator('.xterm').click();
+    await expect(oldInput).toBeFocused();
+    await driver.win.evaluate(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(
+        '[data-testid="remote-workspace"] [role="region"][aria-label^="Terminal for "] .xterm-helper-textarea',
+      );
+      if (!input || input !== document.activeElement) throw new Error('Shell 0 textarea is not focused');
+      Object.assign(window, { __handoffOldInput: input });
+    });
+    const enterOld = () => driver.win.evaluate(() => {
+      const input = (window as typeof window & { __handoffOldInput?: HTMLTextAreaElement }).__handoffOldInput;
+      if (!input?.isConnected) throw new Error('Retained shell 0 textarea was detached');
+      const enter = new KeyboardEvent('keydown', {
+        key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+      });
+      // xterm's keyboard parser uses the legacy numeric code for Enter.
+      Object.defineProperty(enter, 'keyCode', { value: 13 });
+      input.dispatchEvent(enter);
+      return enter.defaultPrevented;
+    });
+    const writable = `A_WRITABLE_${Date.now()}`;
+    await driver.win.keyboard.type(writable);
+    expect(await enterOld(), 'positive control: xterm processes the same targeted Enter before handoff').toBe(true);
+    await expect.poll(shellZeroOutput).toContain(`echo: ${writable}`);
+    const attempted = `A_BLOCKED_${Date.now()}`;
+    await driver.win.keyboard.type(attempted);
+    await expect.poll(shellZeroOutput).toContain(attempted);
+    const beforeHandoffInput = await shellZeroOutput();
+    expect(beforeHandoffInput, 'the attempted line has not yet been submitted').not.toContain(`echo: ${attempted}`);
     // Populate the already-running second PTY while shell 0 remains on
     // screen. Both markers must survive the driven screen mirror's snapshot.
     const newest = `REMOTE-NEWEST-${Date.now()}`;
@@ -308,6 +341,30 @@ test('paired Electron instances show remote root folders and hand viewport contr
         off,
       } });
     }, { projectId: project.id, target: secondIndex });
+    // Hold only B's real subscribe request in the driving main process.
+    // This keeps B attaching while the retained A subscription stays live.
+    await driver.app.evaluate(({ ipcMain }, { id, index }) => {
+      type Handler = (event: unknown, request: unknown) => unknown;
+      const handlers = (ipcMain as unknown as { _invokeHandlers?: Map<string, Handler> })._invokeHandlers;
+      const original = handlers?.get('fleet:subscribe');
+      if (!original) throw new Error('Fleet subscribe IPC handler unavailable');
+      // The project's ES2022 TS lib does not type Promise.withResolvers.
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const hold = { received: false, release: () => {
+        if (!release) throw new Error('Fleet subscribe hold was not initialized');
+        release();
+      } };
+      (globalThis as unknown as { __fleetSubscribeHold?: typeof hold }).__fleetSubscribeHold = hold;
+      ipcMain.removeHandler('fleet:subscribe');
+      ipcMain.handle('fleet:subscribe', async (event, request: { projectId?: number; shellIndex?: number }) => {
+        if (request?.projectId === id && request?.shellIndex === index) {
+          hold.received = true;
+          await gate;
+        }
+        return original(event, request);
+      });
+    }, { id: project.id, index: secondIndex });
     // Sample the replacement pane, not the retained shell-0 pane. Freeze
     // its first visible rAF before the click; later scroll settling cannot
     // turn a bad first frame green.
@@ -335,7 +392,24 @@ test('paired Electron instances show remote root folders and hand viewport contr
       };
       requestAnimationFrame(sample);
     });
-    await tabs.nth(1).click();
+    try {
+      await tabs.nth(1).click();
+      await expect.poll(() => driver.app.evaluate(() =>
+        (globalThis as unknown as { __fleetSubscribeHold?: { received: boolean } }).__fleetSubscribeHold?.received),
+      { message: 'second shell subscribe is held before its ready event' }).toBe(true);
+      expect(await driver.win.evaluate(() => (window as typeof window & {
+        __remoteFirstVisible?: { first: object | null };
+      }).__remoteFirstVisible?.first), 'second shell must not be visible during held handoff').toBeNull();
+      expect(await enterOld(), 'targeted keydown reached retained xterm during handoff').toBe(true);
+      // IPC round-trip fences the just-dispatched key before reading the
+      // driven PTY; the old shell remains subscribed but must reject input.
+      await driver.win.evaluate((peerId) => window.api.invoke('fleet:status', { peerId }), controllerPeer.id);
+      expect(await shellZeroOutput(), 'held handoff must not submit the pending command to shell 0')
+        .toBe(beforeHandoffInput);
+    } finally {
+      await driver.app.evaluate(() =>
+        (globalThis as unknown as { __fleetSubscribeHold?: { release: () => void } }).__fleetSubscribeHold?.release());
+    }
     await expect(workspace.locator('.xterm').first()).toBeVisible();
     await expect(workspace.locator('[data-shell-index]').filter({ hasText: 'Terminal' }).first())
       .toHaveAttribute('data-shell-index', String(secondIndex));
@@ -359,6 +433,15 @@ test('paired Electron instances show remote root folders and hand viewport contr
     }).__fleetControlWatch?.gap), 'no Fleet control gap while selecting the second tab').toBe(false);
     expect((await fleetPeer(driver.win, 'linked'))?.id, 'both apps remain paired').toBe(controllerPeer.id);
     expect((await fleetPeer(driven.win, 'linked'))?.id, 'driven app remains paired').toBe(driverBeacon.id);
+    const accepted = `B_READY_${Date.now()}`;
+    await workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ }).locator('.xterm').click();
+    await driver.win.keyboard.type(`echo ${accepted}`);
+    await driver.win.keyboard.press('Enter');
+    await expect.poll(async () => (await drivenWin.evaluate(({ id, index }) =>
+      window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }),
+    { id: project.id, index: secondIndex })).output.match(new RegExp(accepted, 'g'))?.length ?? 0,
+    { message: 'B accepts and executes input only after its viewport is ready' }).toBeGreaterThanOrEqual(2);
+    expect(await shellZeroOutput(), 'B input must not route into shell 0').not.toContain(accepted);
 
     // Split is an independent right-hand PTY, not a tab switch. Assert the
     // selected left shell by sending distinct commands to both real PTYs.
@@ -414,6 +497,10 @@ test('paired Electron instances show remote root folders and hand viewport contr
       __fleetControlWatch?: { gap: boolean };
     }).__fleetControlWatch?.gap), 'returning to shell 0 also keeps continuous remote control').toBe(false);
     await expect(driver.win.getByRole('button', { name: 'Paste', exact: true })).toBeEnabled();
+    // The unsent A line used for the handoff probe must not prefix the /size command.
+    await workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ }).locator('.xterm').click();
+    await driver.win.keyboard.press('Control+u');
+    expect(await shellZeroOutput(), 'clearing the pending line must not execute it').not.toContain(`echo: ${attempted}`);
     const wide = await remoteShellSize(driver.win, driven.win, project.id);
     await testInfo.attach('driving-instance-folders', { body: await driver.win.screenshot(), contentType: 'image/png' });
     await testInfo.attach('driven-instance-control-notice', { body: await driven.win.screenshot(), contentType: 'image/png' });
