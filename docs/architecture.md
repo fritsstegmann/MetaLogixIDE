@@ -117,11 +117,20 @@ its primary Claude command if there are no live shells. The header uses the
 local Shell tab styling, project pill and shell tab strip; each tab reflects
 the driven machine's live shell and agent state. The add-shell menu lists
 that machine's CLI profiles and supports profile launches, custom commands,
-plain shells, folder defaults and removal of saved folder profiles. Switching
-tabs detaches only the selected terminal stream; other PTYs stay alive on
-the remote machine. Stopping a tab terminates that remote PTY. Local-only
-Files/Diff/Env/project-settings views, split and popout controls are not
-shown for remote projects because Fleet does not expose those operations.
+plain shells, folder defaults and removal of saved folder profiles. A tab
+switch keeps the previous attachment subscribed until the replacement
+reports its parsed DOM viewport ready. During handoff, both terminal panes
+are hidden and input-disabled, and no shell is reported as shown; this
+prevents a command typed for the selected new tab from reaching the old PTY.
+The old stream detaches only when the new pane is ready. Other remote PTYs
+remain alive. A failed replacement returns to the previous tab
+(`src/renderer/components/RemoteTerminal.tsx:266-289,326-350,432-439`;
+`src/renderer/components/RemoteTerminalPane.tsx:247-292,386-392`).
+Stopping a tab terminates its remote PTY. Remote Split launches a plain
+shell in the right pane and keeps it out of the tab strip. **To tab** makes
+that shell the selected tab; closing the split stops it
+(`src/renderer/components/RemoteTerminal.tsx:85-121,398-443`).
+Files, Diff, Env, project-settings and popout remain local-only.
 Selecting a local folder restores its workspace; local and remote numeric
 project IDs remain separate.
 The selected remote machine refreshes its status while visible. The Fleet
@@ -155,11 +164,20 @@ when pending live output for one subscription exceeds 262,144 bytes. Neither
 limit permits partial terminal replay (`src/main/fleet/channel.ts:51-65`,
 `src/main/fleet/service.ts:1019-1024`).
 
-When a remote terminal first attaches or explicitly reattaches, its xterm
-shows the latest output after snapshot parsing completes. If the user scrolls
-up before that point, the attachment keeps the user's position. Later data
-and resizing do not force the viewport to the bottom
-(`src/renderer/components/RemoteTerminalPane.tsx:145-155,186-199`).
+On remote attachment, xterm parses the initial snapshot, then waits until
+its DOM scroll area exists and reflects the parsed buffer before revealing
+the pane or releasing the previous attachment. It starts at the active
+buffer's bottom unless the user deliberately scrolled up during replay;
+in that case it preserves the selected position. Later output and resizing
+do not force a scroll
+(`src/renderer/components/RemoteTerminalPane.tsx:156-158,189-215,382-389`).
+The local terminal also hides its host while snapshot and initially queued
+PTY output finish parsing. It scrolls the active buffer to the bottom, then
+waits for xterm's DOM scroll area and scroll position to match the parsed
+buffer before revealing the host and transferring focus. This avoids painting
+the traversal through older scrollback on reopen
+(`src/renderer/components/ShellTab.tsx:353-402`;
+`tests/e2e/terminal-project-switch-focus.spec.ts:477-557`).
 
 Fleet writes connection transitions to the existing application `main.log`.
 Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
@@ -225,6 +243,11 @@ stay cheap and must never wait on a child process.
   `runGitCommand` (`src/main/git/run-git-command.ts`). Unlike `runGit` it
   adds no safety arguments, so hooks and credential helpers behave as in the
   user's terminal. A slow hook, push or clone no longer freezes the window.
+  When the caller supplies no input, the runner closes stdin without
+  writing an empty chunk. If git closes stdin before reading supplied input,
+  a broken pipe leaves git's exit status and stderr unchanged. Other stdin
+  write errors return a failure result
+  (`src/main/git/run-git-command.ts:33-63`).
 - **mise task listing is asynchronous.** `tasks:discover` and `tasks:run`
   list mise tasks through the async `execFile` in `listMiseTasks`
   (`src/main/domain/mise-cli.ts:48`). mise is killed after 5 s. A project

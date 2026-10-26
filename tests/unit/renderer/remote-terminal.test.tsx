@@ -104,6 +104,13 @@ type FakeTerminal = {
   userScroll: (viewportY: number) => void;
 };
 const terminal = vi.hoisted(() => ({ instances: [] as FakeTerminal[] }));
+const viewportGate = vi.hoisted(() => ({
+  delayed: false,
+  missing: false,
+  scrollHeight: 300,
+  scrollTop: 0,
+  frames: [] as FrameRequestCallback[],
+}));
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     options: Record<string, unknown> = {};
@@ -127,7 +134,15 @@ vi.mock('@xterm/xterm', () => ({
     scrollToBottom = vi.fn(() => { this.buffer.active.viewportY = this.buffer.active.baseY; });
     constructor() { this.buffer.active = this.buffer.normal; terminal.instances.push(this); }
     loadAddon() {}
-    open() {}
+    open(host: object) {
+      const buffer = this.buffer;
+      const viewport = {
+        clientHeight: 300,
+        get scrollHeight() { return viewportGate.delayed ? viewportGate.scrollHeight : 300 + buffer.active.baseY * 16; },
+        get scrollTop() { return viewportGate.delayed ? viewportGate.scrollTop : buffer.active.viewportY * 16; },
+      };
+      Reflect.set(host, 'querySelector', (selector: string) => selector === '.xterm-viewport' && !viewportGate.missing ? viewport : null);
+    }
     write(value: string, callback?: () => void) {
       if (value) this.writes.push(value);
       this.callbacks.push(() => {
@@ -245,6 +260,15 @@ function mount(initial: ExtraProps = {}) {
     },
     panes() { draw(); return panes.length; },
     paneShells() { return nodes(draw()).filter((node) => node.type === RemoteTerminalPane).map((node) => (node.props as PaneProps).shellIndex); },
+    paneVisibility() {
+      draw();
+      return panes.map((pane) => {
+        const props: unknown = pane.props;
+        if (!props || typeof props !== 'object' || !('style' in props)) return undefined;
+        const style: unknown = props.style;
+        return style && typeof style === 'object' && 'visibility' in style ? style.visibility : undefined;
+      });
+    },
     find<P>(type: unknown): P[] { return nodes(draw()).filter((node) => node.type === type).map((node) => node.props as P); },
     offline() { available = false; return draw(); },
     props(next: ExtraProps) { extra = { ...extra, ...next }; return draw(); },
@@ -268,6 +292,16 @@ beforeEach(() => {
   remote.status = null;
   invoke.mockReset();
   toast.mockReset();
+  viewportGate.delayed = false;
+  viewportGate.missing = false;
+  viewportGate.scrollHeight = 300;
+  viewportGate.scrollTop = 0;
+  viewportGate.frames.length = 0;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    if (viewportGate.delayed) viewportGate.frames.push(callback);
+    else callback(0);
+    return viewportGate.frames.length;
+  });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('MutationObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('getComputedStyle', () => ({ getPropertyValue: () => '' }));
@@ -290,6 +324,9 @@ describe('RemoteTerminal', () => {
     app.draw();
     const instance = terminal.instances[0];
     expect(instance?.writes).toEqual(['\u001b[32mWelcome', ' next']);
+    instance?.finishWrite();
+    instance?.finishWrite();
+    app.draw();
     expect(app.visible()).not.toContain('Attaching terminal');
     instance?.data('pwd\r');
     await flush();
@@ -314,6 +351,9 @@ describe('RemoteTerminal', () => {
     resolve({ subscriptionId: 'sub-1' });
     await flush();
     expect(terminal.instances[0]?.writes).toEqual(['one', 'two']);
+    terminal.instances[0]?.finishWrite();
+    terminal.instances[0]?.finishWrite();
+    app.draw();
     expect(app.control('Paste').disabled).toBe(false);
     expect(invoke).toHaveBeenCalledWith('fleet:resize', { peerId: 'machine-b', projectId: 12, shellIndex: 2, cols: 80, rows: 24 });
   });
@@ -338,6 +378,7 @@ describe('RemoteTerminal', () => {
     expect(instance?.scrollToBottom).not.toHaveBeenCalled();
     instance?.finishWrite();
     expect(instance?.scrollToBottom).toHaveBeenCalledOnce();
+    app.draw();
     expect(instance?.parsed).toEqual([...chunks, '']);
     expect(instance?.buffer.active.viewportY).toBe(instance?.buffer.active.baseY);
     instance?.finishWrite();
@@ -354,6 +395,56 @@ describe('RemoteTerminal', () => {
     expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'pwd\r' });
   });
 
+  it('does not expose an ordinary scrollback attachment as ready before its first bottom viewport is settled', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    const instance = terminal.instances[0];
+    app.emit(event('snapshot', Array.from({ length: 40 }, (_, index) => `line ${index}\n`).join('')));
+    app.emit(event('data', 'first live update\n'));
+    app.emit(event('ready', ''));
+    app.draw();
+    expect(app.visible()).toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['hidden']);
+    expect(instance?.parsed).toEqual([]);
+    instance?.finishWrite();
+    instance?.finishWrite();
+    expect(app.visible()).toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['hidden']);
+    instance?.finishWrite();
+    expect(app.visible()).not.toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(instance?.buffer.active.viewportY).toBe(instance?.buffer.active.baseY);
+    instance?.userScroll(2);
+    app.emit(event('data', 'later update\n'));
+    instance?.finishWrite();
+    expect(instance?.buffer.active.viewportY).toBe(2);
+  });
+
+  it('does not expose an alternate-screen attachment as ready while its first frame is still parsing', async () => {
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    const instance = terminal.instances[0];
+    app.emit(event('snapshot', '\u001b[?1049h'));
+    app.emit(event('snapshot', '\u001b[Homp fullscreen'));
+    app.emit(event('ready', ''));
+    app.draw();
+    expect(app.visible()).toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['hidden']);
+    instance?.finishWrite();
+    instance?.finishWrite();
+    expect(app.visible()).toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['hidden']);
+    instance?.finishWrite();
+    expect(app.visible()).not.toContain('Attaching terminal');
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(instance?.buffer.active).toBe(instance?.buffer.alternate);
+    expect(instance?.buffer.active.viewportY).toBe(instance?.buffer.active.baseY);
+  });
+
   it('does not override a deliberate scrollback gesture before the snapshot completes', async () => {
     const app = mount();
     await flush();
@@ -365,6 +456,7 @@ describe('RemoteTerminal', () => {
     for (let index = 0; index < 29; index++) instance?.finishWrite();
     instance?.userScroll(0);
     for (let index = 29; index < 31; index++) instance?.callbacks.shift()?.();
+    app.draw();
     expect(instance?.buffer.active.viewportY).toBe(0);
     expect(instance?.scrollToBottom).not.toHaveBeenCalled();
     expect(instance?.focus).toHaveBeenCalledOnce();
@@ -403,6 +495,7 @@ describe('RemoteTerminal', () => {
     expect(current?.scrollToBottom).toHaveBeenCalledOnce();
     current?.finishWrite();
     expect(current?.parsed).toEqual([...chunks, '', 'queued update\n']);
+    app.draw();
     expect(current?.focus).toHaveBeenCalledOnce();
   });
 
@@ -522,27 +615,260 @@ describe('RemoteTerminal', () => {
     expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.objectContaining({ data: 'ignored' }));
   });
 
-  it('shows all peer shells as tabs and switches PTY subscriptions without relaunching Claude', async () => {
+  it('keeps the first shell attached while selecting an existing second shell, then releases it after the second is ready', async () => {
     remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
     const app = mount();
     await flush();
     app.draw();
     await flush();
-    expect(app.bar().shells.map(({ shellIndex, launchName }) => [shellIndex, launchName])).toEqual([[0, 'Claude'], [2, 'Terminal']]);
-    expect(app.bar().active).toBe(0);
-    expect(invoke).not.toHaveBeenCalledWith('fleet:launch-claude', expect.anything());
-    expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 0 });
     const first = terminal.instances[0];
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
     app.bar().onSelect(2);
     app.draw();
     await flush();
-    expect(first?.disposed).toBe(true);
-    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-1' });
     expect(invoke).toHaveBeenCalledWith('fleet:subscribe', { peerId: 'machine-b', projectId: 12, shellIndex: 2 });
-    app.emit(event('ready', ''));
-    terminal.instances[1]?.data('second shell\r');
+    expect(invoke).not.toHaveBeenCalledWith('fleet:launch-claude', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(first?.disposed).toBe(false);
+    app.emit({ ...event('data', 'still attached', 'sub-0'), shellIndex: 0 });
+    expect(first?.writes).toContain('still attached');
+    first?.finishWrite();
+    expect(app.visible()).toContain('Attaching terminal');
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    app.emit(event('snapshot', 'second shell', 'sub-2'));
+    app.emit(event('ready', '', 'sub-2'));
+    terminal.instances.at(-1)?.finishWrite();
+    terminal.instances.at(-1)?.finishWrite();
+    app.draw();
+    expect(app.bar().active).toBe(2);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    terminal.instances.at(-1)?.data('second shell\r');
     await flush();
     expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'second shell\r' });
+  });
+
+  it('does not send focused old-shell input or report the new shell as shown during handoff', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const onShellsChange = vi.fn();
+    const app = mount({ onShellsChange });
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    const first = terminal.instances[0];
+    first?.finishWrite();
+    app.draw();
+    first?.data('before switch\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', {
+      peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'before switch\r',
+    });
+
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
+    first?.data('must not execute\r');
+    await flush();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.objectContaining({ data: 'must not execute\r' }));
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    app.emit(event('ready', '', 'sub-2'));
+    const replacement = terminal.instances.at(-1);
+    replacement?.finishWrite();
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
+    replacement?.data('new shell\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', {
+      peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'new shell\r',
+    });
+  });
+
+  it('keeps the old controller until the replacement scroll area and bottom position are visible-ready', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? Promise.resolve({ subscriptionId: `sub-${request?.shellIndex}` })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+
+    viewportGate.delayed = true;
+    viewportGate.missing = true;
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    const replacement = terminal.instances.at(-1);
+    app.emit(event('snapshot', Array.from({ length: 40 }, (_, index) => `line ${index}\n`).join(''), 'sub-2'));
+    app.emit(event('ready', '', 'sub-2'));
+    replacement?.finishWrite();
+    replacement?.finishWrite();
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(app.control('Paste').disabled).toBe(true);
+    for (const callback of viewportGate.frames.splice(0)) callback(0);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+    viewportGate.missing = false;
+    for (const callback of viewportGate.frames.splice(0)) callback(16);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+
+    const bottom = (replacement?.buffer.active.baseY ?? 0) * 16;
+    expect(bottom).toBeGreaterThan(0);
+    viewportGate.scrollHeight = 300 + bottom;
+    for (const callback of viewportGate.frames.splice(0)) callback(32);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+    viewportGate.scrollTop = bottom;
+    for (const callback of viewportGate.frames.splice(0)) callback(48);
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(app.control('Paste').disabled).toBe(false);
+  });
+
+  it('reselects the previous tab during a pending second attachment without a control gap', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    app.bar().onSelect(0);
+    app.draw();
+    expect(app.paneShells()).toEqual([0]);
+    expect(app.bar().active).toBe(0);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-2' });
+    terminal.instances[0]?.data('kept shell\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'kept shell\r' });
+  });
+
+  it('restores the previous tab and attachment when the replacement subscription fails', async () => {
+    vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(async () => 'old shell\r') } });
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? Promise.reject(new Error('subscription denied')) : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    expect(app.paneShells()).toEqual([0]);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    expect(toast).toHaveBeenCalledWith('Could not attach remote terminal. Check the connection and retry.', { kind: 'error' });
+    expect(app.control('Paste').disabled).toBe(false);
+    app.control('Paste').onClick();
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'old shell\r' });
+  });
+
+  it('keeps the previous shell when the replacement exits before its initial viewport is ready', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? Promise.resolve({ subscriptionId: `sub-${request?.shellIndex}` })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    terminal.instances[0]?.finishWrite();
+    app.draw();
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    app.emit(event('exit', '0', 'sub-2'));
+    app.draw();
+    expect(app.bar().active).toBe(0);
+    expect(app.paneShells()).toEqual([0]);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-2' });
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+  });
+
+  it('releases the old attachment and a late replacement acknowledgment when the project unmounts mid-handoff', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.bar().onSelect(2);
+    app.draw();
+    runtime.unmount();
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-2' });
+  });
+
+  it('does not relaunch or reattach when the already selected second tab receives a refreshed shell list', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const app = mount({ focusShell: { shellIndex: 2, seq: 1 } });
+    await flush();
+    app.draw();
+    await flush();
+    const current = terminal.instances[0];
+    const subscriptions = invoke.mock.calls.filter(([channel]) => channel === 'fleet:subscribe').length;
+    app.bar().onSelect(2);
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    app.draw();
+    await flush();
+    app.draw();
+    expect(app.bar().active).toBe(2);
+    expect(current?.disposed).toBe(false);
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'fleet:subscribe')).toHaveLength(subscriptions);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:launch-claude', expect.anything());
   });
 
   it('launches saved and custom agents on the peer, not the controller, and selects each new tab', async () => {
@@ -691,6 +1017,8 @@ describe('RemoteTerminal', () => {
     app.draw();
     await flush();
     app.emit(event('ready', ''));
+    terminal.instances[0]?.finishWrite();
+    app.draw();
     const payload = `\u001b[31m${'🌍'.repeat(2400)}\u001b[0m`;
     terminal.instances[0]?.paste(payload);
     await flush();
@@ -796,6 +1124,8 @@ describe('RemoteTerminal', () => {
     app.draw();
     await flush();
     app.emit(event('ready', ''));
+    terminal.instances[0]?.finishWrite();
+    app.draw();
     const key: TerminalKeyEvent = {
       type: 'keydown', key: 'v', ctrlKey: true, shiftKey: true,
       altKey: false, metaKey: false, preventDefault: vi.fn(),
@@ -830,10 +1160,15 @@ describe('RemoteTerminal', () => {
     expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 0 });
     app.bar().onSelect(2);
     app.draw();
-    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
     const calls = onShellsChange.mock.calls.length;
     app.draw();
     expect(onShellsChange).toHaveBeenCalledTimes(calls);
+    await flush();
+    app.emit(event('ready', '', 'sub-1'));
+    terminal.instances.at(-1)?.finishWrite();
+    app.draw();
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
     app.offline();
     expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
   });
@@ -980,6 +1315,60 @@ describe('RemoteTerminal split', () => {
     expect(app.paneShells()).toEqual([0, 3]);
   });
 
+  it('keeps the selected left attachment during split launch, delayed right readiness, and an older status reply', async () => {
+    const stale = Promise.withResolvers<{ roots: never[]; projects: never[]; shells: FleetShell[] }>();
+    let poll: (() => void) | undefined;
+    vi.stubGlobal('setInterval', (callback: () => void) => { poll = callback; return 1; });
+    vi.stubGlobal('clearInterval', vi.fn());
+    const rightSubscription = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) => {
+      if (channel === 'fleet:launch') {
+        remote.shells = [...remote.shells, shellRow(3, 'Terminal')];
+        return Promise.resolve({ shellIndex: 3 });
+      }
+      if (channel === 'fleet:subscribe')
+        return request?.shellIndex === 3 ? rightSubscription.promise : Promise.resolve({ subscriptionId: `sub-${request?.shellIndex}` });
+      return Promise.resolve({ ok: true });
+    });
+    const app = mount();
+    await flush();
+    app.draw();
+    await flush();
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    const left = terminal.instances.at(-1);
+    app.emit(shellEvent(2, 'ready', ''));
+    left?.finishWrite();
+    app.draw();
+    remote.status = () => stale.promise;
+    poll?.();
+    remote.status = null;
+    app.bar().onToggleSplit?.();
+    expect(app.bar().active).toBe(2);
+    expect(left?.disposed).toBe(false);
+    await flush();
+    app.draw();
+    await flush();
+    expect(app.bar().active).toBe(2);
+    expect(app.paneShells()).toEqual([2, 3]);
+    expect(left?.disposed).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-2' });
+    stale.resolve({ roots: [], projects: [], shells: [shellRow(0, 'Claude'), shellRow(2, 'Pi')] });
+    await flush();
+    app.draw();
+    expect(app.bar().active).toBe(2);
+    expect(app.paneShells()).toEqual([2, 3]);
+    rightSubscription.resolve({ subscriptionId: 'sub-3' });
+    await flush();
+    app.emit(shellEvent(3, 'ready', ''));
+    terminal.instances.at(-1)?.finishWrite();
+    app.draw();
+    expect(app.bar().active).toBe(2);
+    expect(app.paneShells()).toEqual([2, 3]);
+    expect(left?.disposed).toBe(false);
+  });
+
   it('attaches each pane independently for output, input, resize and copy', async () => {
     vi.stubGlobal('navigator', { clipboard: { readText: vi.fn(async () => ''), writeText: vi.fn(async () => undefined) } });
     const app = await opened();
@@ -990,6 +1379,8 @@ describe('RemoteTerminal split', () => {
     app.emit(shellEvent(0, 'data', 'left only'));
     expect(right?.writes).toEqual(['right only']);
     expect(left?.writes).toEqual(['left only']);
+    right?.finishWrite();
+    left?.finishWrite();
     right?.data('ls\r');
     left?.data('pwd\r');
     await flush();
@@ -1103,6 +1494,9 @@ describe('RemoteTerminal split', () => {
     const app = await opened();
     app.emit(shellEvent(0, 'ready', ''));
     app.emit(shellEvent(3, 'ready', ''));
+    terminal.instances[0]?.finishWrite();
+    terminal.instances[1]?.finishWrite();
+    app.draw();
     app.draw();
     app.control('Paste').onClick();
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'header paste' }));
@@ -1115,8 +1509,13 @@ describe('RemoteTerminal split', () => {
     app.bar().onSelect(2);
     app.draw();
     await flush();
-    expect(app.paneShells()).toEqual([2, 3]);
+    expect(app.paneShells()).toEqual([0, 2, 3]);
     expect(right?.disposed).toBe(false);
+    expect(terminal.instances[0]?.disposed).toBe(false);
+    app.emit(shellEvent(2, 'ready', ''));
+    terminal.instances.at(-1)?.finishWrite();
+    app.draw();
+    expect(app.paneShells()).toEqual([2, 3]);
     expect(terminal.instances[0]?.disposed).toBe(true);
     expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-3' });
   });

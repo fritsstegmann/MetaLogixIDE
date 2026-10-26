@@ -24,18 +24,43 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 const nodeExecFile: ExecFileTextFn = (cmd, args, opts, cb) => execFile(cmd, args, opts, cb);
 
 /**
- * Run `git <args>` in `cwd`. Never rejects: a non-zero exit, a timeout or a spawn failure is
- * reported through `status`, `timedOut` and `stderr`. `exec` is injectable for tests only.
+ * Run `git <args>` in `cwd`. Never rejects: a non-zero exit, timeout, spawn failure or unrelated
+ * stdin error is reported through `status`, `timedOut` and `stderr`. An early git exit may close
+ * stdin before its input finishes writing; that broken pipe leaves git's own exit result authoritative.
+ * `exec` is injectable for tests only.
  */
 export function runGitCommand(cwd: string, args: readonly string[], opts: GitCommandOptions = {}, exec: ExecFileTextFn = nodeExecFile): Promise<GitCommandResult> {
   return new Promise((resolve) => {
+    let commandResult: GitCommandResult | null = null;
+    let stdinSettled = false;
+    let stdinError: Error | null = null;
+    const settle = () => {
+      if (!stdinSettled || commandResult === null) return;
+      resolve(stdinError
+        ? { stdout: '', stderr: stdinError.message, status: null, timedOut: false }
+        : commandResult);
+    };
     const child = exec('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: opts.timeout ?? 0 }, (error, stdout, stderr) => {
       const timedOut = error?.killed === true;
       const status = error ? (typeof error.code === 'number' ? error.code : null) : 0;
       const spawnError = error && status === null && !timedOut ? error.message : '';
-      resolve({ stdout, stderr: stderr || spawnError, status, timedOut });
+      commandResult = { stdout, stderr: stderr || spawnError, status, timedOut };
+      settle();
     });
-    child.stdin?.end(opts.input ?? '');
+    const stdin = child.stdin;
+    if (!stdin) {
+      stdinSettled = true;
+      settle();
+      return;
+    }
+    const markSettled = () => { stdinSettled = true; settle(); };
+    stdin.once('finish', markSettled);
+    stdin.once('close', markSettled);
+    stdin.on('error', (error: Error) => {
+      if (!('code' in error && error.code === 'EPIPE')) stdinError = error;
+      markSettled();
+    });
+    stdin.end(opts.input);
   });
 }
 
