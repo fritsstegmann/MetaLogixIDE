@@ -48,6 +48,7 @@ const KIND_STYLES: Record<ToastKind, { border: string; accent: string; stripe: s
   error:   { border: 'border-[color:var(--danger)]/40', accent: 'text-[--danger]',    stripe: 'bg-[--danger]',             Icon: ErrorIcon },
 };
 
+/** Keeps notifications interactive above modal chrome by rendering outside the inert app root. */
 export function ToastStack() {
   const { toasts, dismiss } = useToasts();
   const entries = useExitingToasts(toasts);

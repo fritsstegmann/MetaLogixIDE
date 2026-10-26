@@ -1747,6 +1747,7 @@ function eventPayload<E extends IpcEventName>(name: E): IpcEvents[E] {
   return {} as IpcEvents[E];
 }
 
+/** Registers IPC handlers and forwards PTY exits only when no newer generation owns the shell. */
 export function registerIpc(ipcMain: IpcMain, services: Services, sendEvent: SendEvent, windowHooks?: WindowHooks): void {
   if (services.ptyManager) {
     services.ptyManager.on('data', (ev: IpcEvents['pty:data']) => sendEvent('pty:data', ev));

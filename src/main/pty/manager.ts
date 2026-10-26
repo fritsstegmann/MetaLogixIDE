@@ -106,10 +106,9 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Spawn the PTY for (projectId, shellIndex). Size precedence: explicit
-   * `cols`/`rows`, then the last size passed to `resize` for this shell,
-   * then 100x30. The `spawnDecorator`, when set, rewrites the launch just
-   * before spawning; `launch` itself is never modified.
+   * Spawns a PTY for one project shell. Explicit size overrides the last requested size;
+   * otherwise the PTY starts at 100x30. The optional decorator changes only this launch.
+   * Each process emits an internal generation-tagged exit, even after a replacement starts.
    */
   async spawn(projectId: number, shellIndex: number, launch: ResolvedLaunch, cols?: number, rows?: number): Promise<{ pid: number }> {
     const k = key(projectId, shellIndex);

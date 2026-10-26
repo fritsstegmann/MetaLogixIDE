@@ -1236,8 +1236,19 @@ busy work needs fresh consent. Failed status sampling blocks guarded unload
 instead of being interpreted as idle
 (`src/main/ipc/register.ts:731-750`;
 `src/main/agent-status/state-tracker.ts:92-101,138-166`;
-`src/main/pty/manager.ts:302-341`). A failure stays visible in the dialog
-for retry. Individual shell-tab stops and Fleet stops remain separate actions.
+`src/main/pty/manager.ts:305-338`). A failure stays visible in the dialog
+for retry.
+
+`src/main/pty/manager.ts:141-150` still reports an old generation's exit after a replacement.
+`src/main/ipc/register.ts:1753-1759` does not forward that stale exit or remove
+the replacement's shell entry.
+
+The dialog makes the app chrome inert and blocks app-wide shortcuts while open
+(`src/renderer/components/UnloadSessionDialog.tsx:74-87`;
+`src/renderer/App.tsx:366-370`). `ToastStack` renders outside that inert chrome,
+so notifications remain announced and dismissible
+(`src/renderer/components/ToastStack.tsx:51-88`). Individual shell-tab stops
+and Fleet stops remain separate actions.
 
 ### Project and app-wide environment variables
 
