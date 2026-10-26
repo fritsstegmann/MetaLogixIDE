@@ -153,11 +153,13 @@ vi.mock('@renderer/api', () => ({ api: { invoke, on: () => () => undefined } }))
 
 const fleet = { enabled: true, peers: [], port: 43872, controls: [] } satisfies FleetState;
 const frameCallbacks: Array<FrameRequestCallback> = [];
+const viewport = { clientHeight: 480, scrollHeight: 480, scrollTop: 0 };
 const flush = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
 const host = {
   clientWidth: 640,
   clientHeight: 480,
   style: { visibility: '' },
+  querySelector: (selector: string) => selector === '.xterm-viewport' ? viewport : null,
   addEventListener() {},
   removeEventListener() {},
 };
@@ -198,6 +200,9 @@ beforeEach(() => {
   focusOpened.mockReset();
   frameCallbacks.length = 0;
   host.style.visibility = '';
+  viewport.clientHeight = 480;
+  viewport.scrollHeight = 480;
+  viewport.scrollTop = 0;
   vi.stubGlobal('self', globalThis);
   vi.stubGlobal('document', {
     documentElement: {},
@@ -231,7 +236,14 @@ describe('local shell initial snapshot viewport', () => {
     expect(host.style.visibility).toBe('hidden');
     term.finishWrite();
     expect(term.buffer.active.baseY).toBeGreaterThan(0);
+    expect(host.style.visibility, 'parser completion must not reveal an unsynchronized DOM viewport').toBe('hidden');
     for (const callback of frameCallbacks.splice(0)) callback(0);
+    expect(host.style.visibility, 'xterm has not yet synchronized the scroll area').toBe('hidden');
+    viewport.scrollHeight = viewport.clientHeight + term.buffer.active.baseY * 20;
+    for (const callback of frameCallbacks.splice(0)) callback(16);
+    expect(host.style.visibility, 'scrollbar overflow alone is not a settled bottom position').toBe('hidden');
+    viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+    for (const callback of frameCallbacks.splice(0)) callback(32);
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
     expect(host.style.visibility).toBe('');
     expect(focusOpened).toHaveBeenCalledOnce();
@@ -286,6 +298,10 @@ describe('local shell initial snapshot viewport', () => {
     expect(term.scrollToBottom).not.toHaveBeenCalled();
     term.finishWrite();
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+    expect(host.style.visibility).toBe('hidden');
+    viewport.scrollHeight = viewport.clientHeight + term.buffer.active.baseY * 20;
+    viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+    for (const callback of frameCallbacks.splice(0)) callback(0);
     expect(host.style.visibility).toBe('');
     expect(term.scrollToBottom).toHaveBeenCalledOnce();
   });

@@ -366,9 +366,11 @@ export function RemoteTerminalPane({
   }, [viewportReady, standby]);
 
   return (
-    <div className={`min-h-0 min-w-0 flex-1 overflow-hidden p-3 ${standby ? 'absolute inset-0' : ''}`}
+    <div
+      className={`min-h-0 min-w-0 flex-1 overflow-hidden p-3 ${standby ? 'absolute inset-0' : ''}`}
       style={{ visibility: viewportReady && !standby ? 'visible' : 'hidden' }}
-      aria-hidden={!viewportReady || standby}>
+      aria-hidden={!viewportReady || standby}
+    >
       <div
         ref={hostRef}
         role="region"

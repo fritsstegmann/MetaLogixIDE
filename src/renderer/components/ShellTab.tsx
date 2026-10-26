@@ -358,11 +358,25 @@ function LocalShellTab({
       const settleReplay = () => {
         if (termRef.current !== term || disposed) return;
         term.scrollToBottom();
-        snapshotReady.current = true;
-        const host = termHostRef.current;
-        if (host) host.style.visibility = '';
-        focusReg.opened();
-        requestAnimationFrame(() => synchronizeGeometry());
+        // xterm synchronizes the DOM scroll area in a later animation frame.
+        // Keep the host hidden until that scroll area and scrollTop agree with
+        // the parsed buffer, so no intermediate viewport can be painted.
+        const revealWhenSettled = () => {
+          if (termRef.current !== term || disposed) return;
+          const host = termHostRef.current;
+          const viewport = host?.querySelector<HTMLElement>('.xterm-viewport');
+          const maximum = viewport ? viewport.scrollHeight - viewport.clientHeight : 0;
+          if (!host || !viewport || viewport.clientHeight === 0 ||
+            (term.buffer.active.baseY > 0 && (maximum <= 0 || viewport.scrollTop < maximum - 1))) {
+            requestAnimationFrame(revealWhenSettled);
+            return;
+          }
+          snapshotReady.current = true;
+          host.style.visibility = '';
+          focusReg.opened();
+          requestAnimationFrame(() => synchronizeGeometry());
+        };
+        requestAnimationFrame(revealWhenSettled);
       };
       const finishReplay = () => {
         if (termRef.current !== term || disposed) return;

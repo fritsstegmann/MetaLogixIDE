@@ -164,12 +164,13 @@ On remote attachment, xterm parses the initial snapshot before the pane
 becomes visible. It scrolls to the active buffer's bottom unless the user
 scrolled up first. Later output and resizing do not force a scroll
 (`src/renderer/components/RemoteTerminalPane.tsx:156-158,189-202,368-377`).
-The local terminal also hides its host until snapshot and initially queued
-PTY output finish parsing. It then scrolls the active buffer to the bottom
-before reveal (`src/renderer/components/ShellTab.tsx:353-389,669-671`).
-The initial OMP browser test still sees zero scrollable overflow on its first
-visible frame after a remount. It sees the full scrollback later
-(`tests/e2e/terminal-project-switch-focus.spec.ts:467-557`).
+The local terminal also hides its host while snapshot and initially queued
+PTY output finish parsing. It scrolls the active buffer to the bottom, then
+waits for xterm's DOM scroll area and scroll position to match the parsed
+buffer before revealing the host and transferring focus. This avoids painting
+the traversal through older scrollback on reopen
+(`src/renderer/components/ShellTab.tsx:353-402`;
+`tests/e2e/terminal-project-switch-focus.spec.ts:477-557`).
 
 Fleet writes connection transitions to the existing application `main.log`.
 Entries start with `[fleet]` and use `reason=` and `peer=` fields. Look for
