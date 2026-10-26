@@ -364,7 +364,7 @@ function MainApp() {
   const { mode: themeMode, effective: effectiveTheme, cycle: cycleTheme, setMode: setThemeMode, setPalette: setThemePalette } = useTheme();
   const permissionMode = useClaudePermissionMode();
   const shortcutsBlockedRef = useRef(true);
-  shortcutsBlockedRef.current = permissionMode.status !== 'chosen';
+  shortcutsBlockedRef.current = permissionMode.status !== 'chosen' || unloadTarget !== null;
   const overlayOpen = paletteRequest != null || settingsOpen || newProjectOpen
     || helpOpen || (searchOpen && selected != null) || promptsOpen || scrollbackOpen
     || permissionMode.status === 'unchosen' || unloadTarget !== null;

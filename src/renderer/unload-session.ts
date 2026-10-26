@@ -22,6 +22,18 @@ export function consentRisk(inspection: PrimarySessionInspection, visible: boole
   };
 }
 
+/** Combines fresh shell-specific inspection with a reported in-flight agent warning. */
+export function currentSessionRisk(
+  inspection: PrimarySessionInspection,
+  visible: boolean,
+  signal: 'idle' | 'busy' | 'blocked',
+): SessionRisk {
+  if (inspection.kind === 'gone') return consentRisk(inspection, visible);
+  const reported = inspection.agent !== null && (signal === 'busy' || signal === 'blocked')
+    ? signal : inspection.state;
+  return consentRisk({ ...inspection, state: reported }, visible);
+}
+
 /** Neutral consent cannot authorize an agent that started work or a terminal that became visible. */
 export function needsFreshConsent(before: SessionRisk, after: SessionRisk): boolean {
   return (!before.work && after.work) || (!before.visible && after.visible);

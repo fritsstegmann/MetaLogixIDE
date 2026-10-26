@@ -1,10 +1,13 @@
 /** Contract tests for one inspected local primary session and visible-shell risk. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { consentRisk, isPrimaryVisible, needsFreshConsent } from '@renderer/unload-session';
+import { consentRisk, currentSessionRisk, isPrimaryVisible, needsFreshConsent } from '@renderer/unload-session';
 import type { PrimarySessionInspection } from '@shared/unload-session-contract';
 import { createElement, createRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { UnloadSessionState } from '@renderer/components/UnloadSessionDialog';
+import type { UnloadSessionState } from '@renderer/hooks/useUnloadSessionWorkflow';
+import { useUnloadSessionWorkflow } from '@renderer/hooks/useUnloadSessionWorkflow';
+import { UnloadSessionDialogView } from '@renderer/components/UnloadSessionDialog';
+import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 
 const live = (state: 'idle' | 'busy' | 'blocked' | null): PrimarySessionInspection => ({
   kind: 'live', generation: 'launch-a', agent: state === null ? null : 'claude', state,
@@ -28,6 +31,11 @@ describe('local primary-session consent', () => {
     expect(consentRisk(live('blocked'), false)).toEqual({ work: true, input: true, visible: false });
     expect(consentRisk(live('idle'), true)).toEqual({ work: false, input: false, visible: true });
     expect(consentRisk({ kind: 'gone' }, true)).toEqual({ work: false, input: false, visible: false });
+  });
+  it('does not turn an unidentified primary into an agent warning from another shell', () => {
+    expect(currentSessionRisk(live(null), false, 'blocked')).toEqual({ work: false, input: false, visible: false });
+    expect(currentSessionRisk(live('idle'), false, 'busy')).toEqual({ work: true, input: false, visible: false });
+    expect(currentSessionRisk(live('idle'), false, 'blocked')).toEqual({ work: true, input: true, visible: false });
   });
 
   it('requires new explicit consent only for newly reported work or newly visible terminal', () => {
@@ -58,8 +66,6 @@ vi.mock('react', async (original) => ({
 const invoke = vi.hoisted(() => vi.fn());
 const on = vi.hoisted(() => vi.fn<(channel: string, listener: () => void) => () => void>(() => () => {}));
 vi.mock('@renderer/api', () => ({ api: { invoke, on } }));
-const { useAliveShellIds } = await import('@renderer/hooks/useAliveShellIds');
-const { useUnloadSessionWorkflow, UnloadSessionDialogView } = await import('@renderer/components/UnloadSessionDialog');
 
 describe('primary-shell liveness subscription', () => {
   beforeEach(() => { rt.reset(); invoke.mockReset(); on.mockClear(); });

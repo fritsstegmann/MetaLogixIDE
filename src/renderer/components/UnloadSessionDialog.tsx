@@ -1,108 +1,14 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { Project } from '@shared/types';
-import type { PrimarySessionInspection } from '@shared/unload-session-contract';
-import { api } from '@renderer/api';
-import { consentRisk, needsFreshConsent, type SessionRisk } from '@renderer/unload-session';
 import { UNLOAD_SESSION_COPY as COPY, UNLOAD_SESSION_TESTIDS as IDS } from '@renderer/unload-session-copy';
 import { useShellAgentState } from '@renderer/hooks/useAgentStates';
 import { useDialogFocus } from '@renderer/hooks/useDialogFocus';
+import { useUnloadSessionWorkflow, type UnloadSessionState } from '@renderer/hooks/useUnloadSessionWorkflow';
+import type { SessionRisk } from '@renderer/unload-session';
 import { ModalFrame } from './ModalFrame';
 
 type Target = Pick<Project, 'id' | 'name'>;
-/** Distinguishes a live inspected generation from an unreadable, replaced or exited session. */
-export type UnloadSessionState =
-  | { readonly kind: 'loading' }
-  | { readonly kind: 'ready'; readonly inspection: Extract<PrimarySessionInspection, { kind: 'live' }>; readonly consent: SessionRisk; readonly error: string | null }
-  | { readonly kind: 'pending'; readonly inspection: Extract<PrimarySessionInspection, { kind: 'live' }>; readonly consent: SessionRisk }
-  | { readonly kind: 'error'; readonly message: string }
-  | { readonly kind: 'gone' }
-  | { readonly kind: 'replaced' };
-
-/** Inspects on opening and pins each confirmation to the inspected project and launch generation. */
-export function useUnloadSessionWorkflow(
-  target: Target,
-  visible: boolean,
-  signal: 'idle' | 'busy' | 'blocked',
-  onClose: () => void,
-  onStopped: () => void,
-): { readonly state: UnloadSessionState; readonly risk: SessionRisk; readonly confirm: () => Promise<void>; readonly retry: () => Promise<void> } {
-  const [state, setState] = useState<UnloadSessionState>({ kind: 'loading' });
-  const pending = useRef(false);
-  const active = useRef(true);
-  const visibleRef = useRef(visible);
-  const signalRef = useRef(signal);
-  visibleRef.current = visible;
-  signalRef.current = signal;
-
-  useEffect(() => {
-    active.current = true;
-    void api.invoke('shells:inspect-primary', { projectId: target.id }).then((inspection) => {
-      if (!active.current) return;
-      if (inspection.kind === 'gone') { setState({ kind: 'gone' }); return; }
-      setState({ kind: 'ready', inspection, consent: consentRisk(inspection, visibleRef.current), error: null });
-    }).catch(() => { if (active.current) setState({ kind: 'error', message: COPY.inspectionFailed }); });
-    return () => { active.current = false; };
-  }, [target.id]);
-
-  const inspection = state.kind === 'ready' || state.kind === 'pending' ? state.inspection : { kind: 'gone' as const };
-  const reportedState = inspection.kind === 'live' && (signal === 'busy' || signal === 'blocked') && inspection.agent !== null
-    ? signal : inspection.kind === 'live' ? inspection.state : null;
-  const risk = consentRisk(inspection.kind === 'live' ? { ...inspection, state: reportedState } : inspection, visible);
-
-  async function retry(): Promise<void> {
-    if (pending.current) return;
-    pending.current = true;
-    setState({ kind: 'loading' });
-    try {
-      const next = await api.invoke('shells:inspect-primary', { projectId: target.id });
-      if (!active.current) return;
-      if (next.kind === 'gone') setState({ kind: 'gone' });
-      else setState({ kind: 'ready', inspection: next, consent: consentRisk(next, visibleRef.current), error: null });
-    } catch {
-      if (active.current) setState({ kind: 'error', message: COPY.inspectionFailed });
-    } finally { pending.current = false; }
-  }
-
-  async function confirm(): Promise<void> {
-    if (state.kind !== 'ready' || pending.current) return;
-    pending.current = true;
-    setState({ kind: 'pending', inspection: state.inspection, consent: state.consent });
-    try {
-      const next = await api.invoke('shells:inspect-primary', { projectId: target.id });
-      if (!active.current) return;
-      if (next.kind === 'gone') { setState({ kind: 'gone' }); return; }
-      if (next.generation !== state.inspection.generation) { setState({ kind: 'replaced' }); return; }
-      const nextRisk = consentRisk(next, visibleRef.current);
-      const currentRisk = {
-        work: nextRisk.work || (next.agent !== null && signalRef.current !== 'idle'),
-        input: nextRisk.input || (next.agent !== null && signalRef.current === 'blocked'),
-        visible: nextRisk.visible,
-      };
-      if (needsFreshConsent(state.consent, currentRisk)) {
-        setState({ kind: 'ready', inspection: next, consent: currentRisk, error: COPY.escalated });
-        return;
-      }
-      const outcome = await api.invoke('shells:stop-primary', {
-        projectId: target.id, generation: state.inspection.generation,
-        acknowledgedWorkRisk: currentRisk.work,
-      });
-      if (!active.current) return;
-      if (outcome.kind === 'stopped') { onStopped(); onClose(); }
-      else if (outcome.kind === 'escalated') {
-        const refreshed = await api.invoke('shells:inspect-primary', { projectId: target.id });
-        if (!active.current) return;
-        if (refreshed.kind === 'gone') { setState({ kind: 'gone' }); return; }
-        if (refreshed.generation !== state.inspection.generation) { setState({ kind: 'replaced' }); return; }
-        setState({ kind: 'ready', inspection: refreshed, consent: consentRisk(refreshed, visibleRef.current), error: COPY.escalated });
-      } else setState({ kind: outcome.kind });
-    } catch {
-      if (active.current) setState({ kind: 'error', message: COPY.stopFailed });
-    } finally { pending.current = false; }
-  }
-
-  return { state, risk, confirm, retry };
-}
 
 interface ViewProps {
   readonly name: string;
