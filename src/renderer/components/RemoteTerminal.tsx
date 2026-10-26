@@ -30,7 +30,7 @@ export interface RemoteShellFocus {
   readonly seq: number;
 }
 
-/** The project's live shell count and the shell on screen, null while none is attached or the peer is offline. */
+/** Live shell count and the shell currently shown; null while offline or while a new selection attaches. */
 export interface RemoteShellsState {
   readonly count: number;
   readonly shownShellIndex: number | null;
@@ -283,7 +283,7 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     select(focusShell.shellIndex);
   }, [focusShell, shells, shellIndex, split.shellIndex, select]);
 
-  const shownShellIndex = available ? shellIndex : null;
+  const shownShellIndex = available && !retained ? shellIndex : null;
   useEffect(() => {
     onShellsChange?.({ count: shells.length, shownShellIndex });
   }, [onShellsChange, shells.length, shownShellIndex]);
@@ -323,21 +323,28 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
     }
   }
 
+  function onRetainedStatus(status: RemotePaneStatus, index: number) {
+    setRetained((current) => {
+      if (current?.shellIndex !== index) return current;
+      return status.kind === 'running' ? { ...current, ready: true } : null;
+    });
+  }
+
+  function restoreAfterFailedHandoff(status: RemotePaneStatus) {
+    if (status.kind === 'running' || !retained) return false;
+    toast(status.kind === 'error' ? status.message : 'Remote shell ended before it was ready', { kind: 'error' });
+    setShellIndex(retained.shellIndex);
+    setSession(retained.ready ? { kind: 'running', shellIndex: retained.shellIndex } : { kind: 'connecting', shellIndex: retained.shellIndex });
+    setRetained(null);
+    return true;
+  }
+
   function onLeftStatus(status: RemotePaneStatus, index: number) {
     if (index !== shellIndex) {
-      if (status.kind === 'running')
-        setRetained((current) => current?.shellIndex === index ? { ...current, ready: true } : current);
-      else
-        setRetained((current) => current?.shellIndex === index ? null : current);
+      onRetainedStatus(status, index);
       return;
     }
-    if ((status.kind === 'error' || status.kind === 'exited') && retained) {
-      toast(status.kind === 'error' ? status.message : 'Remote shell ended before it was ready', { kind: 'error' });
-      setShellIndex(retained.shellIndex);
-      setSession(retained.ready ? { kind: 'running', shellIndex: retained.shellIndex } : { kind: 'connecting', shellIndex: retained.shellIndex });
-      setRetained(null);
-      return;
-    }
+    if (restoreAfterFailedHandoff(status)) return;
     if (status.kind === 'running' || status.kind === 'exited') setRetained(null);
     setSession(status.kind === 'error' ? status : { kind: status.kind, shellIndex: index });
   }
@@ -424,8 +431,8 @@ export function RemoteTerminal({ project, available, onRefreshAvailability, focu
             {right !== null && <SplitPaneHeader label={shellChipLabel(shells, shellIndex)} path={location} focused={false} dot={dot(shellIndex)} />}
             {retained && retained.shellIndex !== shellIndex && (
               <RemoteTerminalPane key={`left:${retained.shellIndex}:${retained.epoch}`} peerId={peerId} projectId={projectId}
-                shellIndex={retained.shellIndex} epoch={retained.epoch} label={`Terminal for ${projectName} on ${peerName}`}
-                onStatus={onLeftStatus} />
+                shellIndex={retained.shellIndex} epoch={retained.epoch} standby
+                label={`Terminal for ${projectName} on ${peerName}`} onStatus={onLeftStatus} />
             )}
             <RemoteTerminalPane key={`left:${shellIndex}:${attachmentEpoch}`} peerId={peerId} projectId={projectId}
               shellIndex={shellIndex} epoch={attachmentEpoch} standby={retained !== null}

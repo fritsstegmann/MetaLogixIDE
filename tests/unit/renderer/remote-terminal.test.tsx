@@ -653,6 +653,53 @@ describe('RemoteTerminal', () => {
     expect(invoke).toHaveBeenCalledWith('fleet:write', { peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'second shell\r' });
   });
 
+  it('does not send focused old-shell input or report the new shell as shown during handoff', async () => {
+    remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
+    const second = Promise.withResolvers<{ subscriptionId: string }>();
+    invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
+      channel === 'fleet:subscribe'
+        ? request?.shellIndex === 2 ? second.promise : Promise.resolve({ subscriptionId: 'sub-0' })
+        : Promise.resolve({ ok: true }));
+    const onShellsChange = vi.fn();
+    const app = mount({ onShellsChange });
+    await flush();
+    app.draw();
+    await flush();
+    app.emit({ ...event('ready', '', 'sub-0'), shellIndex: 0 });
+    const first = terminal.instances[0];
+    first?.finishWrite();
+    app.draw();
+    first?.data('before switch\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', {
+      peerId: 'machine-b', projectId: 12, shellIndex: 0, data: 'before switch\r',
+    });
+
+    app.bar().onSelect(2);
+    app.draw();
+    await flush();
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
+    first?.data('must not execute\r');
+    await flush();
+    expect(invoke).not.toHaveBeenCalledWith('fleet:write', expect.objectContaining({ data: 'must not execute\r' }));
+    expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
+
+    second.resolve({ subscriptionId: 'sub-2' });
+    await flush();
+    app.emit(event('ready', '', 'sub-2'));
+    const replacement = terminal.instances.at(-1);
+    replacement?.finishWrite();
+    app.draw();
+    expect(app.paneVisibility()).toEqual(['visible']);
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
+    replacement?.data('new shell\r');
+    await flush();
+    expect(invoke).toHaveBeenCalledWith('fleet:write', {
+      peerId: 'machine-b', projectId: 12, shellIndex: 2, data: 'new shell\r',
+    });
+  });
+
   it('keeps the old controller until the replacement scroll area and bottom position are visible-ready', async () => {
     remote.shells = [shellRow(0, 'Claude'), shellRow(2, 'Terminal')];
     invoke.mockImplementation((channel: string, request?: { shellIndex?: number }) =>
@@ -678,20 +725,20 @@ describe('RemoteTerminal', () => {
     replacement?.finishWrite();
     replacement?.finishWrite();
     app.draw();
-    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
     expect(invoke).not.toHaveBeenCalledWith('fleet:unsubscribe', { peerId: 'machine-b', subscriptionId: 'sub-0' });
     expect(app.control('Paste').disabled).toBe(true);
     for (const callback of viewportGate.frames.splice(0)) callback(0);
-    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
     viewportGate.missing = false;
     for (const callback of viewportGate.frames.splice(0)) callback(16);
-    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
 
     const bottom = (replacement?.buffer.active.baseY ?? 0) * 16;
     expect(bottom).toBeGreaterThan(0);
     viewportGate.scrollHeight = 300 + bottom;
     for (const callback of viewportGate.frames.splice(0)) callback(32);
-    expect(app.paneVisibility()).toEqual(['visible', 'hidden']);
+    expect(app.paneVisibility()).toEqual(['hidden', 'hidden']);
     viewportGate.scrollTop = bottom;
     for (const callback of viewportGate.frames.splice(0)) callback(48);
     app.draw();
@@ -1113,10 +1160,15 @@ describe('RemoteTerminal', () => {
     expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 0 });
     app.bar().onSelect(2);
     app.draw();
-    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
     const calls = onShellsChange.mock.calls.length;
     app.draw();
     expect(onShellsChange).toHaveBeenCalledTimes(calls);
+    await flush();
+    app.emit(event('ready', '', 'sub-1'));
+    terminal.instances.at(-1)?.finishWrite();
+    app.draw();
+    expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: 2 });
     app.offline();
     expect(onShellsChange).toHaveBeenLastCalledWith({ count: 2, shownShellIndex: null });
   });

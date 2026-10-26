@@ -48,6 +48,7 @@ interface Props {
   /** Bump to drop the subscription and reattach the same shell. */
   readonly epoch: number;
   readonly label: string;
+  /** Keeps the subscription live but hides the pane and prevents input during a tab handoff. */
   readonly standby?: boolean;
   readonly onStatus: (status: RemotePaneStatus, shellIndex: number) => void;
   readonly control?: { current: RemoteTerminalPaneControl | null };
@@ -108,6 +109,8 @@ export function RemoteTerminalPane({
   const resizeRef = useRef<(() => void) | null>(null);
   const runningRef = useRef(false);
   const statusRef = useRef(onStatus);
+  const standbyRef = useRef(standby);
+  standbyRef.current = standby;
   statusRef.current = onStatus;
   const handleRef = useRef<RemoteTerminalPaneControl | null>(null);
   const platform = useShortcutPlatform();
@@ -245,11 +248,11 @@ export function RemoteTerminalPane({
       pending.push(event);
     });
     const dataListener = term.onData((data) => {
-      if (!active || !runningRef.current) return;
+      if (!active || !runningRef.current || standbyRef.current) return;
       for (const chunk of terminalChunks(data)) {
         writeQueue = writeQueue
           .then(async () => {
-            if (active && runningRef.current)
+            if (active && runningRef.current && !standbyRef.current)
               await api.invoke('fleet:write', { peerId, projectId, shellIndex, data: chunk });
           })
           .catch(() => {
@@ -273,7 +276,7 @@ export function RemoteTerminalPane({
         writeClipboard: (text) => navigator.clipboard.writeText(text),
         readClipboard: () => navigator.clipboard.readText(),
         paste: (text) => {
-          if (active && runningRef.current) term.paste(text);
+          if (active && runningRef.current && !standbyRef.current) term.paste(text);
         },
         onClipboardError,
       }),
@@ -283,9 +286,9 @@ export function RemoteTerminalPane({
       onError: onClipboardError,
     });
     const handle: RemoteTerminalPaneControl = {
-      isRunning: () => active && runningRef.current,
+      isRunning: () => active && runningRef.current && !standbyRef.current,
       paste: (text) => {
-        if (active && runningRef.current) term.paste(text);
+        if (active && runningRef.current && !standbyRef.current) term.paste(text);
       },
     };
     handleRef.current = handle;
