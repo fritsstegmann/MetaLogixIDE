@@ -55,6 +55,7 @@ function announceTo(receiver: FleetService, remote: FleetService, name: string) 
 it('streams a remote Claude shell through one authenticated subscription and cancels on revoke', async () => {
   let output: ((data: string) => void) | undefined;
   let exit: (() => void) | undefined;
+  let screen = '\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m';
   const launchClaude = vi.fn(async () => ({ shellIndex: 0 }));
   const resize = vi.fn(async () => {});
   const remoteOps: FleetOperations = {
@@ -77,7 +78,7 @@ it('streams a remote Claude shell through one authenticated subscription and can
       exit = onExit;
       return () => { output = undefined; exit = undefined; };
     },
-    terminalSnapshot: async () => '\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m',
+    terminalSnapshot: async () => screen,
     gitStatus: async () => ({ isRepo: false, branch: null, dirty: false, ahead: 0, behind: 0, changedCount: 0 }),
     snapshot: async () => ({ output: '', alive: true }),
   };
@@ -136,6 +137,14 @@ it('streams a remote Claude shell through one authenticated subscription and can
   await vi.waitFor(() => expect(events.some((event) => event.kind === 'ready')).toBe(true));
   expect(events.filter((event) => event.kind === 'snapshot').map((event) => event.data).join('')).toBe('\x1b[31m' + '🙂'.repeat(3000) + '\x1b[0m');
   expect(events.every((event) => event.subscriptionId === subscriptionId)).toBe(true);
+  screen = 'during-snapshot recovered after burst';
+  output?.('x'.repeat(300_000));
+  await vi.waitFor(() => expect(events.some((event) =>
+    event.kind === 'snapshot' && event.data.startsWith('\x1bc\x1b[3J') &&
+    event.data.includes('recovered after burst'))).toBe(true));
+  expect(a.state().peers.find(({ id }) => id === peer.id)?.status).toBe('linked');
+  output?.('post-burst');
+  await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ kind: 'data', data: 'post-burst' }));
   const remoteSessions: unknown = Reflect.get(b, 'sessions');
   if (!(remoteSessions instanceof Map)) throw new Error('Remote sessions missing');
   const remoteSession: unknown = remoteSessions.get(local.id);
