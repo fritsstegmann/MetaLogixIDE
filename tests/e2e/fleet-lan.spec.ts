@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { once } from 'node:events';
 import type * as Keytar from 'keytar';
 import { aliveShells, closeApp, launch } from './helpers/claude-harness';
+import { terminalProbes } from './helpers/terminal-probe';
 import type {} from '../../src/renderer/api';
 
 test('fleet requires local opt-in and rejects unlinked remote shell control', async () => {
@@ -198,7 +199,7 @@ async function remoteShellSize(controller: Page, driven: Page, projectId: number
 }
 
 test('paired Electron instances show remote root folders and hand viewport control back on detach', async ({}, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const driver = await launch([]);
   let driven: Awaited<ReturnType<typeof launch>> | undefined;
   try {
@@ -443,6 +444,45 @@ test('paired Electron instances show remote root folders and hand viewport contr
     { message: 'B accepts and executes input only after its viewport is ready' }).toBeGreaterThanOrEqual(2);
     expect(await shellZeroOutput(), 'B input must not route into shell 0').not.toContain(accepted);
 
+    // Generate >262,144 bytes inside the driven PTY, never in browser JS.
+    // The split marker is absent from the echoed command, so observing it
+    // proves the shell reached the end of the burst.
+    await expect.poll(async () => (await terminalProbes(driver.win))
+      .some(({ screen }) => screen.includes(accepted)),
+    { message: 'positive control: the attached remote xterm displays ordinary PTY output' }).toBe(true);
+    const burstToken = Date.now().toString(36);
+    const burstMarker = `FLEET_BURST_${burstToken}`;
+    await drivenWin.evaluate(({ id, index, token }) =>
+      window.api.invoke('shells:write', {
+        projectId: id, shellIndex: index,
+        data: `i=0; while [ "$i" -lt 4096 ]; do printf '%080d\\n' "$i"; i=$((i + 1)); done; printf 'FLEET_BURST_%s\\n' '${token}'\r`,
+      }),
+    { id: project.id, index: secondIndex, token: burstToken });
+    await expect.poll(() => drivenWin.evaluate(async ({ id, index, marker }) =>
+      (await window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index })).output.includes(marker),
+    { id: project.id, index: secondIndex, marker: burstMarker }),
+    { message: 'driven PTY finishes at least 331,776 bytes of output', timeout: 60_000 }).toBe(true);
+    await expect.poll(async () => (await terminalProbes(driver.win))
+      .some(({ screen }) => screen.includes(burstMarker)),
+    { message: 'newest burst marker reaches the attached remote xterm', timeout: 60_000 }).toBe(true);
+    expect((await fleetPeer(driver.win, 'linked'))?.id, 'controller stays linked after the output burst')
+      .toBe(controllerPeer.id);
+    expect((await fleetPeer(drivenWin, 'linked'))?.id, 'driven instance stays linked after the output burst')
+      .toBe(driverBeacon.id);
+    const afterBurst = `AFTER_BURST_${Date.now()}`;
+    await workspace.getByRole('region', { name: /Terminal for Driven Fleet Project on/ }).locator('.xterm').click();
+    await driver.win.keyboard.type(`echo ${afterBurst}`);
+    await driver.win.keyboard.press('Enter');
+    await expect.poll(() => drivenWin.evaluate(async ({ id, index, marker }) =>
+      (await window.api.invoke('shells:snapshot', { projectId: id, shellIndex: index }))
+        .output.match(new RegExp(marker, 'g'))?.length ?? 0,
+    { id: project.id, index: secondIndex, marker: afterBurst }),
+    { message: 'remote input executes after the burst', timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+    await expect.poll(async () => (await terminalProbes(driver.win))
+      .some(({ screen }) => screen.includes(afterBurst)),
+    { message: 'remote xterm displays post-burst command output', timeout: 30_000 }).toBe(true);
+    expect((await fleetPeer(driver.win, 'linked'))?.id, 'post-burst input keeps the controller linked')
+      .toBe(controllerPeer.id);
     // Split is an independent right-hand PTY, not a tab switch. Assert the
     // selected left shell by sending distinct commands to both real PTYs.
     const beforeSplit = (await aliveShells(driven.win)).filter((shell) => shell.projectId === project.id).map((shell) => shell.shellIndex);

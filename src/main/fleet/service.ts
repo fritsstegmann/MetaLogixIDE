@@ -27,6 +27,7 @@ import {
   ROOT_PAGE_SIZE,
   STATUS_PAGE_SIZE,
   type NoticeKind,
+  MAX_FRAME,
   type StatusPage,
   type WireMessage,
 } from './protocol';
@@ -95,8 +96,11 @@ interface TerminalSubscription {
   offset: number;
   ready: boolean;
   exited: boolean;
-  readonly pending: WireMessage[];
+  readonly pending: Extract<WireMessage, { type: 'terminal' }>[];
   pendingBytes: number;
+  revision: number;
+  refreshing: boolean;
+  refreshAgain: boolean;
   deadline?: NodeJS.Timeout;
 }
 interface Session {
@@ -1042,8 +1046,26 @@ export class FleetService {
 
   private queueOutput(session: Session, subscription: TerminalSubscription, kind: 'data' | 'exit', data: string): void {
     if (session.incoming.get(subscription.id) !== subscription) return;
+    if (subscription.exited) return;
+    if (kind === 'exit') {
+      if (subscription.refreshing) {
+        subscription.revision++;
+        subscription.refreshing = false;
+        subscription.snapshot = '';
+        subscription.offset = 0;
+      }
+      subscription.refreshAgain = false;
+      subscription.exited = true;
+      this.notify();
+      return;
+    }
     if (subscription.pendingBytes + Buffer.byteLength(data, 'utf8') > 262_144) {
-      session.channel.close('pressure');
+      if (subscription.refreshing || (subscription.snapshot !== null &&
+        subscription.offset > 0 && subscription.offset < subscription.snapshot.length)) {
+        subscription.pending.length = 0;
+        subscription.pendingBytes = 0;
+        subscription.refreshAgain = true;
+      } else this.refreshTerminal(session, subscription);
       return;
     }
     for (let offset = 0; offset < data.length;) {
@@ -1054,12 +1076,39 @@ export class FleetService {
       subscription.pendingBytes += Buffer.byteLength(chunk, 'utf8');
       offset = end;
     }
-    if (kind === 'exit') {
-      subscription.exited = true;
-      this.notify();
-      subscription.pending.push({ type: 'terminal', id: subscription.id,
-        projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
-    }
+  }
+
+  private refreshTerminal(session: Session, subscription: TerminalSubscription): void {
+    subscription.pending.length = 0;
+    subscription.pendingBytes = 0;
+    subscription.snapshot = null;
+    subscription.offset = 0;
+    subscription.refreshing = true;
+    const revision = ++subscription.revision;
+    queueMicrotask(() => {
+      if (session.incoming.get(subscription.id) !== subscription || subscription.exited) return;
+      void Promise.resolve()
+        .then(() => this.options.operations.terminalSnapshot(subscription.projectId, subscription.shellIndex))
+        .then((output) => {
+          if (session.incoming.get(subscription.id) !== subscription ||
+            subscription.revision !== revision) return;
+          if (!output && !this.options.operations.isAlive(subscription.projectId, subscription.shellIndex)) {
+            this.failSubscription(session, subscription);
+          } else if (Buffer.byteLength(output, 'utf8') > 4_194_304) {
+            this.failSubscription(session, subscription);
+          } else if (subscription.refreshAgain) {
+            subscription.refreshAgain = false;
+            this.refreshTerminal(session, subscription);
+          } else {
+            clearTimeout(subscription.deadline);
+            subscription.snapshot = `\x1bc\x1b[3J${output}`;
+            subscription.refreshing = false;
+          }
+        }, () => {
+          if (session.incoming.get(subscription.id) === subscription &&
+            subscription.revision === revision) this.failSubscription(session, subscription);
+        });
+    });
   }
 
   private chunkEnd(data: string, offset: number): number {
@@ -1073,15 +1122,25 @@ export class FleetService {
 
   private failSubscription(session: Session, subscription: TerminalSubscription): void {
     if (session.incoming.get(subscription.id) !== subscription) return;
-    this.removeSubscription(session, subscription.id);
     if (this.sessions.get(session.id) !== session || !this.trust.enabled ||
-      this.trust.revoked.includes(session.id)) return;
-    try {
-      session.channel.send({ type: 'terminal', id: subscription.id,
-        projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
-    } catch {
-      session.channel.close();
+      this.trust.revoked.includes(session.id)) {
+      this.removeSubscription(session, subscription.id);
+      return;
     }
+    clearTimeout(subscription.deadline);
+    const unsubscribe = subscription.unsubscribe;
+    subscription.unsubscribe = () => {};
+    unsubscribe();
+    subscription.revision++;
+    subscription.refreshing = false;
+    subscription.refreshAgain = false;
+    subscription.pending.length = 0;
+    subscription.pendingBytes = 0;
+    subscription.snapshot = '';
+    subscription.offset = 0;
+    subscription.ready = true;
+    subscription.exited = true;
+    this.notify();
   }
 
   private acceptSubscription(session: Session, projectId: number, shellIndex: number, id: string): { subscriptionId: string } {
@@ -1094,6 +1153,7 @@ export class FleetService {
     const subscription: TerminalSubscription = {
       id, projectId, shellIndex, unsubscribe: () => {}, snapshot: null,
       offset: 0, ready: false, exited: false, pending: [], pendingBytes: 0,
+      revision: 0, refreshing: false, refreshAgain: false,
     };
     session.incoming.set(id, subscription);
     this.notify();
@@ -1103,12 +1163,15 @@ export class FleetService {
     subscription.unsubscribe = unsubscribe;
     subscription.deadline = setTimeout(() => this.failSubscription(session, subscription), 10_000);
     void snapshot.then((output) => {
-      if (session.incoming.get(id) !== subscription) return;
+      if (session.incoming.get(id) !== subscription || subscription.revision !== 0) return;
       clearTimeout(subscription.deadline);
       if (Buffer.byteLength(output, 'utf8') > 4_194_304)
         this.failSubscription(session, subscription);
       else subscription.snapshot = output;
-    }, () => this.failSubscription(session, subscription));
+    }, () => {
+      if (session.incoming.get(id) === subscription && subscription.revision === 0)
+        this.failSubscription(session, subscription);
+    });
     session.streamTimer ??= setInterval(() => this.drainStreams(session), 20);
     return { subscriptionId: id };
   }
@@ -1126,6 +1189,12 @@ export class FleetService {
     for (let index = 0; index < slot; index++) subscribers.next();
     const subscription = subscribers.next().value;
     if (!subscription || subscription.snapshot === null) return;
+    if (subscription.refreshAgain && subscription.snapshot === '' && !subscription.exited) {
+      subscription.refreshAgain = false;
+      this.refreshTerminal(session, subscription);
+      return;
+    }
+    if (session.channel.socket.writableLength > 65_536 - MAX_FRAME) return;
     let frame: WireMessage;
     if (subscription.offset < subscription.snapshot.length) {
       const end = this.chunkEnd(subscription.snapshot, subscription.offset);
@@ -1140,9 +1209,13 @@ export class FleetService {
         shellIndex: subscription.shellIndex, kind: 'ready', data: '' };
     } else {
       const pending = subscription.pending.shift();
-      if (!pending) return;
-      frame = pending;
-      if (pending.type === 'terminal') subscription.pendingBytes -= Buffer.byteLength(pending.data, 'utf8');
+      if (pending) {
+        frame = pending;
+        subscription.pendingBytes -= Buffer.byteLength(pending.data, 'utf8');
+      } else if (subscription.exited) {
+        frame = { type: 'terminal', id: subscription.id, projectId: subscription.projectId,
+          shellIndex: subscription.shellIndex, kind: 'exit', data: '' };
+      } else return;
     }
     try {
       session.channel.send(frame);
