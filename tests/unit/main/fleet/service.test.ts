@@ -223,6 +223,109 @@ it('paces terminal frames while a peer socket is stalled without removing its su
   }
 });
 
+it('keeps the last remote screen when a PTY exits before burst capture can finish', async () => {
+  let resolveCapture!: (value: string) => void;
+  const capture = new Promise<string>((resolve) => { resolveCapture = resolve; });
+  const fleet = service('Local', { ...operations(), terminalSnapshot: () => capture });
+  const peerId = 'b'.repeat(64);
+  const sent: string[] = [];
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [{ id: peerId, name: 'Peer' }], revoked: [] });
+  const socket = new Duplex({
+    read() {},
+    write(chunk: Buffer, _encoding, done) { sent.push(chunk.toString()); done(); },
+  });
+  Reflect.set(socket, 'setKeepAlive', () => socket);
+  try {
+    const attach: unknown = Reflect.get(fleet, 'attachSession');
+    const queueOutput: unknown = Reflect.get(fleet, 'queueOutput');
+    const drainStreams: unknown = Reflect.get(fleet, 'drainStreams');
+    if (typeof attach !== 'function' || typeof queueOutput !== 'function' ||
+      typeof drainStreams !== 'function') throw new Error('Terminal stream seam unavailable');
+    Reflect.apply(attach, fleet, [socket, peerId, false]);
+    const sessions = Reflect.get(fleet, 'sessions') as Map<string, unknown>;
+    const session = sessions.get(peerId);
+    if (!session) throw new Error('Session unavailable');
+    const incoming = Reflect.get(session, 'incoming') as Map<string, unknown>;
+    const subscription = { id: 'c'.repeat(32), projectId: 1, shellIndex: 0,
+      snapshot: '', offset: 0, ready: true, pending: [], pendingBytes: 0,
+      revision: 0, refreshing: false, refreshAgain: false, unsubscribe: vi.fn(), exited: false };
+    incoming.set(subscription.id, subscription);
+    Reflect.apply(queueOutput, fleet, [session, subscription, 'data', 'visible before exit']);
+    Reflect.apply(drainStreams, fleet, [session]);
+    Reflect.apply(queueOutput, fleet, [session, subscription, 'data', 'x'.repeat(262_145)]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Reflect.apply(queueOutput, fleet, [session, subscription, 'exit', '']);
+    resolveCapture('');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Reflect.apply(drainStreams, fleet, [session]);
+    const frames = sent.flatMap((part) => part.trim().split('\n'))
+      .map((part) => JSON.parse(part) as unknown)
+      .filter((frame): frame is { type: string; kind: string; data: string } =>
+        !!frame && typeof frame === 'object' && 'type' in frame && frame.type === 'terminal' &&
+        'kind' in frame && typeof frame.kind === 'string' && 'data' in frame && typeof frame.data === 'string');
+    expect(frames.map((frame) => frame.kind)).toEqual(['data', 'exit']);
+    expect(frames[0]?.data).toBe('visible before exit');
+    expect(frames.some((frame) => frame.data.includes('\x1bc'))).toBe(false);
+    expect(socket.destroyed).toBe(false);
+    expect(incoming.has(subscription.id)).toBe(false);
+  } finally {
+    resolveCapture('');
+    await fleet.stop();
+  }
+});
+
+it('ends an oversized attachment after socket drain without losing its peer', async () => {
+  const fleet = service('Local', { ...operations(), terminalSnapshot: async () => 's'.repeat(4_194_305) });
+  const peerId = 'b'.repeat(64);
+  let releaseWrite: (() => void) | undefined;
+  const sent: string[] = [];
+  Reflect.set(fleet, 'started', true);
+  Reflect.set(fleet, 'trust', { enabled: true, trusted: [{ id: peerId, name: 'Peer' }], revoked: [] });
+  const socket = new Duplex({
+    read() {},
+    write(chunk: Buffer, _encoding, done) {
+      sent.push(chunk.toString());
+      if (!releaseWrite) releaseWrite = done;
+      else done();
+    },
+  });
+  Reflect.set(socket, 'setKeepAlive', () => socket);
+  const unsubscribe = vi.fn();
+  try {
+    const attach: unknown = Reflect.get(fleet, 'attachSession');
+    const queueOutput: unknown = Reflect.get(fleet, 'queueOutput');
+    const drainStreams: unknown = Reflect.get(fleet, 'drainStreams');
+    if (typeof attach !== 'function' || typeof queueOutput !== 'function' ||
+      typeof drainStreams !== 'function') throw new Error('Terminal stream seam unavailable');
+    Reflect.apply(attach, fleet, [socket, peerId, false]);
+    const sessions = Reflect.get(fleet, 'sessions') as Map<string, unknown>;
+    const session = sessions.get(peerId);
+    if (!session) throw new Error('Session unavailable');
+    const incoming = Reflect.get(session, 'incoming') as Map<string, unknown>;
+    const subscription = { id: 'c'.repeat(32), projectId: 1, shellIndex: 0,
+      snapshot: null, offset: 0, ready: false, pending: [], pendingBytes: 0,
+      revision: 0, refreshing: false, refreshAgain: false, unsubscribe, exited: false };
+    incoming.set(subscription.id, subscription);
+    socket.write('x'.repeat(65_500 - socket.writableLength));
+    Reflect.apply(queueOutput, fleet, [session, subscription, 'data', 'x'.repeat(262_145)]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(socket.destroyed).toBe(false);
+    expect(sessions.has(peerId)).toBe(true);
+    expect(incoming.has(subscription.id)).toBe(true);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    releaseWrite?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    Reflect.apply(drainStreams, fleet, [session]);
+    expect(incoming.has(subscription.id)).toBe(false);
+    expect(JSON.parse(sent.at(-1) ?? '{}')).toMatchObject({ type: 'terminal', kind: 'exit' });
+    expect(socket.destroyed).toBe(false);
+  } finally {
+    releaseWrite?.();
+    await fleet.stop();
+  }
+});
+
 it('does not log a reconnect as connected when a queued dial becomes ineligible', async () => {
   const fleet = service('Local');
   const peerId = 'b'.repeat(64);

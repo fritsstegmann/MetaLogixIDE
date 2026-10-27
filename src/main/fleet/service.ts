@@ -1046,7 +1046,15 @@ export class FleetService {
 
   private queueOutput(session: Session, subscription: TerminalSubscription, kind: 'data' | 'exit', data: string): void {
     if (session.incoming.get(subscription.id) !== subscription) return;
+    if (subscription.exited) return;
     if (kind === 'exit') {
+      if (subscription.refreshing) {
+        subscription.revision++;
+        subscription.refreshing = false;
+        subscription.refreshAgain = false;
+        subscription.snapshot = '';
+        subscription.offset = 0;
+      }
       subscription.exited = true;
       this.notify();
       return;
@@ -1077,7 +1085,7 @@ export class FleetService {
     subscription.refreshing = true;
     const revision = ++subscription.revision;
     queueMicrotask(() => {
-      if (session.incoming.get(subscription.id) !== subscription) return;
+      if (session.incoming.get(subscription.id) !== subscription || subscription.exited) return;
       void Promise.resolve()
         .then(() => this.options.operations.terminalSnapshot(subscription.projectId, subscription.shellIndex))
         .then((output) => {
@@ -1111,15 +1119,25 @@ export class FleetService {
 
   private failSubscription(session: Session, subscription: TerminalSubscription): void {
     if (session.incoming.get(subscription.id) !== subscription) return;
-    this.removeSubscription(session, subscription.id);
     if (this.sessions.get(session.id) !== session || !this.trust.enabled ||
-      this.trust.revoked.includes(session.id)) return;
-    try {
-      session.channel.send({ type: 'terminal', id: subscription.id,
-        projectId: subscription.projectId, shellIndex: subscription.shellIndex, kind: 'exit', data: '' });
-    } catch {
-      session.channel.close();
+      this.trust.revoked.includes(session.id)) {
+      this.removeSubscription(session, subscription.id);
+      return;
     }
+    clearTimeout(subscription.deadline);
+    const unsubscribe = subscription.unsubscribe;
+    subscription.unsubscribe = () => {};
+    unsubscribe();
+    subscription.revision++;
+    subscription.refreshing = false;
+    subscription.refreshAgain = false;
+    subscription.pending.length = 0;
+    subscription.pendingBytes = 0;
+    subscription.snapshot = '';
+    subscription.offset = 0;
+    subscription.ready = true;
+    subscription.exited = true;
+    this.notify();
   }
 
   private acceptSubscription(session: Session, projectId: number, shellIndex: number, id: string): { subscriptionId: string } {

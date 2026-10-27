@@ -152,19 +152,22 @@ the local view returns when the attachment ends or the link closes. Input
 and resize are bounded. Unsubscribe, terminal exit, link loss or revocation
 release PTY listeners and clear the control notice. Frames are limited to
 16 KiB, paced at 50 per second per peer, with at most four active
-attachments in each direction per connection. An initial screen over 4 MiB
-ends only that attachment. When pending live output exceeds 262,144 bytes,
-Fleet discards the pending output for that attachment and captures the
-current screen again. It sends a terminal reset before the replacement
-snapshot, then sends later output in order. A second burst during capture
-starts another capture. This bounds memory without dropping the peer link
-(`src/main/fleet/service.ts:1047-1101,1123-1198`).
+attachments in each direction per connection. An initial or replacement
+screen over 4 MiB ends only that attachment; its exit frame waits for socket
+headroom. When pending live output exceeds 262,144 bytes, Fleet discards the
+pending output for that attachment and captures the current screen again.
+It sends a terminal reset before a valid replacement snapshot, then sends
+later output in order. A second burst during capture starts another capture.
+If the PTY exits before capture completes, Fleet keeps the controller's
+last visible screen instead of sending an empty reset, then ends the
+attachment. This bounds memory without dropping the peer link
+(`src/main/fleet/service.ts`).
 `FleetChannel.send` accepts a temporary socket write stall. Node buffers that
 write and delivers it when the socket drains. Fleet waits to send terminal
 frames until its 65,536-byte socket write budget has one full frame of
 headroom. The channel still closes if any frame exceeds 16 KiB or any
-write exceeds the socket budget (`src/main/fleet/service.ts:1162-1169`,
-`src/main/fleet/channel.ts:51-65`).
+write exceeds the socket budget (`src/main/fleet/service.ts`,
+`src/main/fleet/channel.ts`).
 
 On remote attachment, xterm parses the initial snapshot, then waits until
 its DOM scroll area exists and reflects the parsed buffer before revealing
