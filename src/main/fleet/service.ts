@@ -1091,7 +1091,9 @@ export class FleetService {
         .then((output) => {
           if (session.incoming.get(subscription.id) !== subscription ||
             subscription.revision !== revision) return;
-          if (Buffer.byteLength(output, 'utf8') > 4_194_304) {
+          if (!output && !this.options.operations.isAlive(subscription.projectId, subscription.shellIndex)) {
+            this.failSubscription(session, subscription);
+          } else if (Buffer.byteLength(output, 'utf8') > 4_194_304) {
             this.failSubscription(session, subscription);
           } else if (subscription.refreshAgain) {
             subscription.refreshAgain = false;

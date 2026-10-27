@@ -223,10 +223,14 @@ it('paces terminal frames while a peer socket is stalled without removing its su
   }
 });
 
-it('keeps the last remote screen when a PTY exits before burst capture can finish', async () => {
+it.each([
+  { order: 'exit before capture settles', disposeFirst: false },
+  { order: 'dispose before exit notification', disposeFirst: true },
+])('keeps the last remote screen on $order', async ({ disposeFirst }) => {
+  let alive = true;
   let resolveCapture!: (value: string) => void;
   const capture = new Promise<string>((resolve) => { resolveCapture = resolve; });
-  const fleet = service('Local', { ...operations(), terminalSnapshot: () => capture });
+  const fleet = service('Local', { ...operations(), isAlive: () => alive, terminalSnapshot: () => capture });
   const peerId = 'b'.repeat(64);
   const sent: string[] = [];
   Reflect.set(fleet, 'started', true);
@@ -255,9 +259,11 @@ it('keeps the last remote screen when a PTY exits before burst capture can finis
     Reflect.apply(drainStreams, fleet, [session]);
     Reflect.apply(queueOutput, fleet, [session, subscription, 'data', 'x'.repeat(262_145)]);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    Reflect.apply(queueOutput, fleet, [session, subscription, 'exit', '']);
+    if (disposeFirst) alive = false;
+    else Reflect.apply(queueOutput, fleet, [session, subscription, 'exit', '']);
     resolveCapture('');
     await new Promise<void>((resolve) => setImmediate(resolve));
+    if (disposeFirst) Reflect.apply(queueOutput, fleet, [session, subscription, 'exit', '']);
     Reflect.apply(drainStreams, fleet, [session]);
     const frames = sent.flatMap((part) => part.trim().split('\n'))
       .map((part) => JSON.parse(part) as unknown)

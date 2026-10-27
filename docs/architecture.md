@@ -158,9 +158,10 @@ headroom. When pending live output exceeds 262,144 bytes, Fleet discards the
 pending output for that attachment and captures the current screen again.
 It sends a terminal reset before a valid replacement snapshot, then sends
 later output in order. A second burst during capture starts another capture.
-If the PTY exits before capture completes, Fleet keeps the controller's
-last visible screen instead of sending an empty reset, then ends the
-attachment. This bounds memory without dropping the peer link
+If the PTY exits during capture, or is stopped and its snapshot is no longer
+available before exit notification, Fleet keeps the controller's last
+visible screen instead of sending an empty reset, then ends the attachment.
+This bounds memory without dropping the peer link
 (`src/main/fleet/service.ts`).
 `FleetChannel.send` accepts a temporary socket write stall. Node buffers that
 write and delivers it when the socket drains. Fleet waits to send terminal
