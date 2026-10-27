@@ -1051,16 +1051,17 @@ export class FleetService {
       if (subscription.refreshing) {
         subscription.revision++;
         subscription.refreshing = false;
-        subscription.refreshAgain = false;
         subscription.snapshot = '';
         subscription.offset = 0;
       }
+      subscription.refreshAgain = false;
       subscription.exited = true;
       this.notify();
       return;
     }
     if (subscription.pendingBytes + Buffer.byteLength(data, 'utf8') > 262_144) {
-      if (subscription.refreshing) {
+      if (subscription.refreshing || (subscription.snapshot !== null &&
+        subscription.offset > 0 && subscription.offset < subscription.snapshot.length)) {
         subscription.pending.length = 0;
         subscription.pendingBytes = 0;
         subscription.refreshAgain = true;
@@ -1188,6 +1189,11 @@ export class FleetService {
     for (let index = 0; index < slot; index++) subscribers.next();
     const subscription = subscribers.next().value;
     if (!subscription || subscription.snapshot === null) return;
+    if (subscription.refreshAgain && subscription.snapshot === '' && !subscription.exited) {
+      subscription.refreshAgain = false;
+      this.refreshTerminal(session, subscription);
+      return;
+    }
     if (session.channel.socket.writableLength > 65_536 - MAX_FRAME) return;
     let frame: WireMessage;
     if (subscription.offset < subscription.snapshot.length) {
