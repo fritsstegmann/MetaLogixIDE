@@ -12,7 +12,6 @@
 import Fuse, { type IFuseOptions } from 'fuse.js';
 import {
   GROUP_ORDER,
-  PALETTE_JUMP_MAX,
   PALETTE_COPY,
   PALETTE_FILE_CAP,
   PALETTE_ROW_CAP,
@@ -75,13 +74,20 @@ function rankProjects(projects: readonly Project[], text: string): readonly Proj
   return [...matched.filter(byName), ...matched.filter((p) => !byName(p))];
 }
 
+/** Live project rows in the shared In use order (the Sidebar's and Ctrl+1–9's); ids it lacks keep list order after it. */
+function inUseOrder<R extends { project: Project }>(rows: readonly R[], order: readonly number[]): R[] {
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return [...rows].sort((a, b) => (rank.get(a.project.id) ?? order.length) - (rank.get(b.project.id) ?? order.length));
+}
+
 function projectGroups(text: string, input: PaletteSearchInput): PaletteGroup[] {
   const rows = rankProjects(input.projects, text).map(
     (project): PaletteRow & { kind: 'project' } => ({ kind: 'project', project, current: project.id === input.currentProjectId }),
   );
   const running = (row: { project: Project }): boolean => input.aliveIds.has(row.project.id);
   const remote = matchRemote(input.remoteInUse, text).map((session): PaletteRow => ({ kind: 'remote', session }));
-  const groups = [group('running', [...rows.filter(running), ...remote]), group('projects', rows.filter((r) => !running(r)))];
+  const local = rows.filter(running);
+  const groups = [group('running', [...(text ? local : inUseOrder(local, input.localInUse)), ...remote]), group('projects', rows.filter((r) => !running(r)))];
   const best = rows[0];
   return text && best && !running(best) ? groups.reverse() : groups;
 }
@@ -121,24 +127,6 @@ export const searchPalette: SearchPalette = (parsed, input) => {
   const groups = [...projectGroups(text, input), ...commandGroups(text, input)];
   return view(parsed, capGroups(groups, PALETTE_ROW_CAP), { kind: 'no-results', query: text });
 };
-
-/**
- * The flat row index Ctrl+<digit> opens: the digit-th row of the In use group (1-based, up to
- * `PALETTE_JUMP_MAX`), or `null` when the key is not a bare Ctrl+1–9 or that row does not exist.
- */
-export function inUseJumpIndex(
-  view: PaletteView,
-  e: { readonly key: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean },
-): number | null {
-  if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || !/^[1-9]$/.test(e.key)) return null;
-  const n = Number(e.key);
-  let start = 0;
-  for (const g of view.groups) {
-    if (g.id === 'running') return n <= Math.min(g.rows.length, PALETTE_JUMP_MAX) ? start + n - 1 : null;
-    start += g.rows.length;
-  }
-  return null;
-}
 
 export type HighlightStep = { readonly kind: 'move'; readonly index: number } | { readonly kind: 'pick' } | { readonly kind: 'close' };
 

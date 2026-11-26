@@ -3,8 +3,9 @@
  * on it. On other platforms the shell owns every unshifted Ctrl+letter and Ctrl+\ except Ctrl+F
  * (terminal find) and Ctrl+K (command palette); an explicit allow-list of Ctrl chords goes to the
  * app, and Ctrl+Shift+C/V copy and paste. On mac only ⌘F is taken; everything else keeps xterm's
- * default handling. The allow-list is explicit so chords xterm still maps (Ctrl+[, Ctrl+3–8,
- * Ctrl+Shift+- as ^_) stay with the shell.
+ * default handling. The allow-list is explicit so chords xterm still maps (Ctrl+[, Ctrl+Shift+- as
+ * ^_) stay with the shell. On every platform bare Ctrl+1–9 go to the app (the global In use jump,
+ * `in-use-jump.ts`), so the shell no longer receives xterm's Ctrl+3–8 control characters.
  */
 import { sanitizeTerminalCopy } from '@shared/sanitize-terminal-copy';
 import type {
@@ -17,6 +18,7 @@ import type {
   TerminalTabActionFn,
 } from './shortcut-contract';
 import { chordKey, isPrimaryMod } from './shortcut-match';
+import { inUseJumpNumber } from './in-use-jump';
 
 const OTHER_ROUTES: ReadonlyMap<string, TerminalKeyRoute> = new Map<string, TerminalKeyRoute>([
   ['f', 'app'],
@@ -43,7 +45,11 @@ function routeMac(e: ShortcutKeyLike): TerminalKeyRoute {
 
 /** Who handles a key pressed while a terminal is focused on `platform`. */
 export const routeTerminalKey: RouteTerminalKeyFn = (e, platform) =>
-  platform === 'mac' ? routeMac(e) : routeOther(e);
+  isInUseJump(e) ? 'app' : platform === 'mac' ? routeMac(e) : routeOther(e);
+
+function isInUseJump(e: ShortcutKeyLike): boolean {
+  return inUseJumpNumber(e) !== null;
+}
 
 function copySelection(deps: TerminalKeyHandlerDeps): void {
   if (!deps.hasSelection()) return;

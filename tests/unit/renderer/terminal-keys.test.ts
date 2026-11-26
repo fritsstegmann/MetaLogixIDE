@@ -27,6 +27,28 @@ const key = (k: string, mods: Mods = {}): ShortcutKeyLike => ({
 const ctrl = (k: string, mods: Mods = {}): ShortcutKeyLike => key(k, { ctrlKey: true, ...mods });
 const ctrlShift = (k: string): ShortcutKeyLike => ctrl(k, { shiftKey: true });
 
+describe('routeTerminalKey — global In use jump', () => {
+  it('sends bare Ctrl+1–9 to the app on every platform, including chords xterm maps to control characters', () => {
+    for (const platform of ['other', 'mac'] as const) {
+      for (const d of ['1', '3', '8', '9']) expect(routeTerminalKey(ctrl(d), platform)).toBe('app');
+    }
+  });
+
+  it('leaves Ctrl+0, Ctrl+Shift/Alt/Meta+digit and plain digits with the terminal', () => {
+    expect(routeTerminalKey(ctrl('0'), 'other')).toBe('app'); // terminal zoom reset, unchanged
+    expect(routeTerminalKey(ctrl('0'), 'mac')).toBe('default');
+    expect(routeTerminalKey(ctrl('3', { shiftKey: true }), 'other')).toBe('default');
+    expect(routeTerminalKey(ctrl('3', { altKey: true }), 'other')).toBe('default');
+    expect(routeTerminalKey(key('3', { metaKey: true }), 'mac')).toBe('default');
+    expect(routeTerminalKey(key('3'), 'other')).toBe('default');
+  });
+
+  it('stops xterm from handling Ctrl+3 so the keydown reaches the app', () => {
+    const handler = createTerminalKeyHandler({ platform: 'other' } as TerminalKeyHandlerDeps);
+    expect(handler({ ...ctrl('3'), preventDefault: vi.fn() } as unknown as TerminalKeyEvent)).toBe(false);
+  });
+});
+
 describe('routeTerminalKey on other platforms', () => {
   it.each(['r', 'p', 'b', 't', 'c', '\\', 'a', 'd', 'l', 'u', 'w', 'z'])(
     'sends unshifted Ctrl+%s to the shell (AC10)',
@@ -75,7 +97,6 @@ describe('routeTerminalKey on other platforms', () => {
 
   it('leaves keys xterm still maps, and other shifted chords, to default', () => {
     expect(routeTerminalKey(ctrl('['), 'other')).toBe('default');
-    expect(routeTerminalKey(ctrl('3'), 'other')).toBe('default');
     expect(routeTerminalKey(ctrl('_', { shiftKey: true }), 'other')).toBe('default');
     expect(routeTerminalKey(ctrlShift('A'), 'other')).toBe('default');
     expect(routeTerminalKey(ctrlShift('R'), 'other')).toBe('default');

@@ -216,6 +216,30 @@ it('does not let a pending OS file open replace a later Fleet notice', async () 
   expect(stored('metaide.mainTab')).toBe('shell');
 });
 
+it('global Ctrl+1 opens the first In use project from a remote pane; a number past the list does nothing', async () => {
+  await mount({ activity: true, tab: 'shell' });
+  await act(async () => {
+    for (const listener of bridge.listeners.get('p2p:focus-remote-shell') ?? []) {
+      listener({ deviceId: 'tower', deviceName: 'Tower', projectId: 1, projectName: 'Remote', shellIndex: 0 });
+    }
+  });
+  expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
+  const before = bridge.calls.length;
+  let canceled = false;
+  await act(async () => {
+    canceled = !window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+  expect(canceled).toBe(true);
+  expect(bridge.calls.slice(before).map(({ channel }) => channel)).not.toContain('projects:open');
+  expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', ctrlKey: true, bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(bridge.calls.slice(before)).toContainEqual({ channel: 'projects:open', payload: { id: 1 } });
+  expect(document.querySelector('[data-testid="remote-project-pane"]')).toBeNull();
+});
+
 describe('App activity-log switch', () => {
   it('shows the Activity tab button when on and hides it when off (AC8)', async () => {
     await mount({ activity: true, tab: 'shell' });

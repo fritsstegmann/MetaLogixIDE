@@ -76,6 +76,8 @@ export const SHORTCUTS = {
   help: { mod: true, key: '/' },
   newProject: { mod: true, shift: true, key: 'N' },
   newTerminal: { mod: true, key: 'T' },
+  /** Ctrl+1 to Ctrl+9 on every platform (`in-use-jump.ts`); the registry holds the first. */
+  inUseJump: { ctrl: true, key: '1' },
   newTerminalWindow: { mod: true, shift: true, key: 'T' },
   findInTerminal: { mod: true, key: 'F' },
   scrollbackSearch: { mod: true, shift: true, key: 'O' },

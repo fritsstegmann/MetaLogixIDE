@@ -72,7 +72,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const actions = useMemo<RowActions>(() => ({ onSelect, onUnloadSession, onRename: setRenameTarget, onEditEnv, onProjectSettings }),
     [onSelect, onUnloadSession, onEditEnv, onProjectSettings]);
-  const { switcher, names: fleetNames } = useFleetState();
+  const { switcher, names: fleetNames, localInUse } = useFleetState();
 
   return (
     <aside
@@ -86,7 +86,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
         <SidebarHeader filter={filter} onFilterChange={setFilter} onNewProject={onNewProject}
           roots={roots} refreshRoots={refreshRoots} refreshProjects={refreshProjects} />
       </div>
-      <SidebarLists switcher={switcher} fleetNames={fleetNames} projects={projects} roots={roots} filter={filter}
+      <SidebarLists switcher={switcher} fleetNames={fleetNames} localInUse={localInUse} projects={projects} roots={roots} filter={filter}
         selectedProjectId={selectedProjectId} actions={actions} onOpenPane={onOpenPane} />
       {/* Empty space below the list (and the gap above it) drags the window. */}
       <div aria-hidden className="drag flex-1 min-h-0 -mt-7 -mb-5" data-testid="sidebar-drag-fill" />
@@ -103,6 +103,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
 interface ListsProps {
   switcher: MachineSwitcher;
   fleetNames: FleetProjectNames;
+  localInUse: readonly number[];
   projects: Project[];
   roots: Root[];
   filter: string;
@@ -117,9 +118,9 @@ interface ListsProps {
  * machine, with In use inside it). Always rendered in the same place so the local list's state, In
  * use order included, survives dot switches.
  */
-function SidebarLists({ switcher, fleetNames, projects, roots, filter, selectedProjectId, actions, onOpenPane }: ListsProps) {
+function SidebarLists({ switcher, fleetNames, localInUse, projects, roots, filter, selectedProjectId, actions, onOpenPane }: ListsProps) {
   const { banded, remote, framing, panelProps, listClass } = switcherLayout(switcher);
-  const { local, remoteInUse, inUseIds } = useInUseRows(switcher, fleetNames, projects, filter);
+  const { local, remoteInUse, inUseIds } = useInUseRows(switcher, fleetNames, localInUse, projects, filter);
   const row: LocalRow = (p, alive) => (
     <ProjectRow key={p.id} project={p} selected={selectedProjectId === p.id} alive={alive} primaryAlive={local.primaryIds.has(p.id)} {...actions} />
   );
@@ -151,8 +152,8 @@ const NO_IDS: ReadonlySet<number> = new Set();
  * the shared section, and the project ids those rows show per machine, which a remote list's Recents
  * leaves out (AC36, AC39).
  */
-function useInUseRows(switcher: MachineSwitcher, fleetNames: FleetProjectNames, projects: Project[], filter: string) {
-  const local = useLocalSections(projects, filter);
+function useInUseRows(switcher: MachineSwitcher, fleetNames: FleetProjectNames, localInUse: readonly number[], projects: Project[], filter: string) {
+  const local = useLocalSections(projects, localInUse, filter);
   const remoteInUse = useMemo(
     () => remoteInUseRows(switcher.machines, switcher.shells, fleetNames, filter),
     [switcher.machines, switcher.shells, fleetNames, filter],
@@ -179,27 +180,21 @@ function MachineBand({ switcher }: { switcher: MachineSwitcher }) {
 }
 
 /**
- * This machine's In use / Recents / per-root lists, filtered by name. In use keeps a stable order:
- * each project keeps the sequence number it was first seen alive with, so clicking a row (which
- * reshuffles `projects` by last-opened time) does not move it; a shell that exits drops its number
- * and lands at the bottom when it comes back.
+ * This machine's In use / Recents / per-root lists, filtered by name. In use follows the shared
+ * order from `FleetStateProvider`: each project keeps the sequence number it was first seen alive
+ * with, so clicking a row (which reshuffles `projects` by last-opened time) does not move it; a shell
+ * that exits drops its number and lands at the bottom when it comes back. Ctrl+1–9 use the same order.
  */
-function useLocalSections(projects: Project[], filter: string) {
+function useLocalSections(projects: Project[], localInUse: readonly number[], filter: string) {
   const { recents } = useRecents(10);
   const { aliveIds, primaryIds } = useAliveShellIds();
-  const inUseSeq = useRef<Map<number, number>>(new Map());
-  const inUseNextSeq = useRef(1);
-  useEffect(() => {
-    const map = inUseSeq.current;
-    for (const id of aliveIds) if (!map.has(id)) map.set(id, inUseNextSeq.current++);
-    for (const id of [...map.keys()]) if (!aliveIds.has(id)) map.delete(id);
-  }, [aliveIds]);
 
+  // `localInUse` is the shared In use order (FleetStateProvider), the same one Ctrl+1–9 number.
   const inUse = useMemo(() => {
-    const seq = inUseSeq.current;
-    const sorted = projects.filter((p) => aliveIds.has(p.id)).sort((a, b) => (seq.get(a.id) ?? 0) - (seq.get(b.id) ?? 0));
-    return filterByName(sorted, filter);
-  }, [projects, aliveIds, filter]);
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    const ordered = localInUse.map((id) => byId.get(id)).filter((p): p is Project => p !== undefined);
+    return filterByName(ordered, filter);
+  }, [projects, localInUse, filter]);
 
   const grouped = useMemo(() => {
     const byRoot = new Map<number, Project[]>();

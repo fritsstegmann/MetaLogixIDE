@@ -94,7 +94,9 @@ import { isPrimaryVisible } from './unload-session';
 import { resolveFileTarget } from './agent-file-targets';
 import { useAgentFileFollow } from './hooks/useAgentFileFollow';
 import type { SheetContent } from './frosted-chrome-contract';
-import { FleetStateProvider } from './p2p/FleetStateProvider';
+import { FleetStateProvider, useFleetState } from './p2p/FleetStateProvider';
+import { inUseJumpNumber } from './in-use-jump';
+import { remotePaneRequest } from './palette-run';
 import { WorkspaceHeaderSlotContext } from './components/WorkspaceHeaderSlot';
 
 
@@ -176,6 +178,11 @@ function MainApp() {
   const [remotePane, setRemotePane] = useState<OpenPaneRequest | null>(null);
   const remotePaneRef = useRef(remotePane);
   remotePaneRef.current = remotePane;
+  // Ctrl+1–9 (global): open the nth In use session from the shared list the Sidebar and palette number.
+  const { inUseTargets } = useFleetState();
+  const inUseTargetsRef = useRef(inUseTargets);
+  inUseTargetsRef.current = inUseTargets;
+  const jumpToInUseRef = useRef<(n: number) => void>(() => undefined);
   // The header row a remote project pane portals its tabs, shell strip and actions into (same layout as the local header).
   const [remoteHeaderSlot, setRemoteHeaderSlot] = useState<HTMLElement | null>(null);
   const localWorkspaceProject = remotePane ? null : selected;
@@ -676,6 +683,12 @@ function MainApp() {
     };
     function onKey(e: KeyboardEvent) {
       if (shortcutsBlockedRef.current) return;
+      const jump = inUseJumpNumber(e);
+      if (jump !== null) {
+        e.preventDefault();
+        jumpToInUseRef.current(jump);
+        return;
+      }
       const palette = paletteKeyAction(e, paletteOpenRef.current, platform);
       if (palette.kind === 'swallow') return;
       if (palette.kind === 'toggle' || palette.kind === 'open') {
@@ -768,6 +781,13 @@ function MainApp() {
     }
     return selectedIt && selectionRequestRef.current === requestId;
   }
+  jumpToInUseRef.current = (n) => {
+    const target = inUseTargetsRef.current[n - 1];
+    if (!target) return;
+    setPaletteRequest(null);
+    if (target.kind === 'local') void pick({ id: target.projectId });
+    else openPane(remotePaneRequest(target.row));
+  };
 
   /**
    * Opens a file a terminal path or hover preview found in another project: records it as pending for that project,

@@ -45,9 +45,6 @@ export type PaletteGroupId = 'running' | 'projects' | PaletteCategory | 'files';
 /** Fixed group order (AC6). Files mode has a single `files` group. */
 export const GROUP_ORDER: readonly PaletteGroupId[] = ['running', 'projects', 'Go', 'Project', 'View', 'Shell', 'Theme', 'App', 'Settings'];
 
-/** Ctrl+1 to Ctrl+<this> open the matching In use row while the palette is open. */
-export const PALETTE_JUMP_MAX = 9;
-
 /** Most rows rendered in the all, projects and commands modes (AC13). */
 export const PALETTE_ROW_CAP = 50;
 /** Most rows rendered in files mode (AC34). */
@@ -116,6 +113,8 @@ export interface PaletteSearchInput {
   readonly aliveIds: ReadonlySet<number>;
   /** The paired machines' live projects; they follow this machine's rows in the `running` group. */
   readonly remoteInUse: readonly RemoteInUseRow[];
+  /** This machine's live project ids in the shared In use order; the `running` group keeps it on an empty query. */
+  readonly localInUse: readonly number[];
   /** Already filtered for project-dependent commands (AC12). */
   readonly commands: readonly PaletteCommand[];
   readonly files: PaletteFilesState;
@@ -174,7 +173,7 @@ export const PALETTE_COPY = {
   current: 'Current',
   /** Generic severity for a running project, irrespective of its agents. */
   projectStatus: AGGREGATE_STATE_LABEL,
-  /** The key that opens the nth In use row (1-based), e.g. "⌃1" on mac and "Ctrl+1" elsewhere. */
+  /** The global key that opens the nth In use session (1-based), e.g. "⌃1" on mac and "Ctrl+1" elsewhere. */
   jumpKey: (n: number, platform: ShortcutPlatform): string => formatShortcut({ ctrl: true, key: String(n) }, platform),
   /** Accessible-name suffix on a paired machine's row, naming the machine. */
   remoteLabel: (deviceName: string) => `on ${deviceName}`,

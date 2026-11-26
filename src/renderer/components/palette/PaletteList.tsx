@@ -7,11 +7,12 @@
  */
 import type { ReactNode } from 'react';
 import type { Root } from '@shared/types';
-import { PALETTE_COPY, PALETTE_JUMP_MAX, PALETTE_TESTIDS, type PaletteEmpty, type PaletteGroup, type PaletteRow, type PaletteView } from '@renderer/command-palette-contract';
+import { PALETTE_COPY, PALETTE_TESTIDS, type PaletteEmpty, type PaletteGroup, type PaletteRow, type PaletteView } from '@renderer/command-palette-contract';
 import { CommandRow } from './CommandRow';
 import { FileRow } from './FileRow';
 import { ProjectRow } from './ProjectRow';
 import { RemoteSessionRow } from './RemoteSessionRow';
+import { inUseTargetKey } from '@renderer/in-use-jump';
 
 /** The DOM id of the option at `index`, shared by the list and the combobox's `aria-activedescendant`. */
 export function optionId(idPrefix: string, index: number): string {
@@ -54,9 +55,12 @@ function RowContent({ row, active, aliveIds, rootsById, jump }: RowContentProps)
   return <ProjectRow project={project} root={rootsById.get(project.rootId)} current={row.current} active={active} alive={aliveIds.has(project.id)} jump={jump} />;
 }
 
-/** The Ctrl+<n> number of row `r` in group `id`: In use rows 1 to `PALETTE_JUMP_MAX` only. */
-function jumpNumber(id: PaletteGroup['id'], r: number): number | undefined {
-  return id === 'running' && r < PALETTE_JUMP_MAX ? r + 1 : undefined;
+/** The global Ctrl+<n> number of an In use row, from the shared numbering; none outside In use or past nine. */
+function jumpNumber(id: PaletteGroup['id'], row: PaletteRow, jumps: ReadonlyMap<string, number>): number | undefined {
+  if (id !== 'running') return undefined;
+  if (row.kind === 'project') return jumps.get(inUseTargetKey({ kind: 'local', projectId: row.project.id }));
+  if (row.kind === 'remote') return jumps.get(inUseTargetKey({ kind: 'remote', row: row.session }));
+  return undefined;
 }
 
 /** Project groups show their row count after the heading. */
@@ -104,11 +108,13 @@ interface PaletteListProps {
   readonly idPrefix: string;
   readonly aliveIds: ReadonlySet<number>;
   readonly rootsById: ReadonlyMap<number, Root>;
+  /** Global Ctrl+1–9 numbers by `inUseTargetKey`. */
+  readonly jumpNumbers: ReadonlyMap<string, number>;
   readonly onHover: (index: number) => void;
   readonly onPick: (index: number) => void;
 }
 
-export function PaletteList({ view, activeIndex, idPrefix, aliveIds, rootsById, onHover, onPick }: PaletteListProps): React.JSX.Element {
+export function PaletteList({ view, activeIndex, idPrefix, aliveIds, rootsById, jumpNumbers, onHover, onPick }: PaletteListProps): React.JSX.Element {
   const starts = view.groups.map((_, g) => view.groups.slice(0, g).reduce((n, prev) => n + prev.rows.length, 0));
   return (
     <>
@@ -135,7 +141,7 @@ export function PaletteList({ view, activeIndex, idPrefix, aliveIds, rootsById, 
                   onHover={() => onHover(index)}
                   onPick={() => onPick(index)}
                 >
-                  <RowContent row={row} active={index === activeIndex} aliveIds={aliveIds} rootsById={rootsById} jump={jumpNumber(group.id, r)} />
+                  <RowContent row={row} active={index === activeIndex} aliveIds={aliveIds} rootsById={rootsById} jump={jumpNumber(group.id, row, jumpNumbers)} />
                 </PaletteOption>
               );
             })}

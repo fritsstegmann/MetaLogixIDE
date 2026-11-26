@@ -18,6 +18,7 @@ const SHORTCUT_GROUPS: ReadonlyArray<{ readonly title: string; readonly rows: re
   { title: 'Go', rows: [
     { keys: [SHORTCUTS.palette, SHORTCUTS.paletteCommands], label: 'Command palette' },
     { keys: [SHORTCUTS.findFile], label: 'Find file in project' },
+    { keys: [SHORTCUTS.inUseJump], label: 'Open In use session (1–9)' },
     { keys: [SHORTCUTS.findInProject], label: 'Find in project' },
   ] },
   { title: 'Views', rows: [

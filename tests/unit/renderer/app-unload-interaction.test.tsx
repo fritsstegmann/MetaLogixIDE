@@ -36,6 +36,7 @@ vi.mock('@renderer/api', () => ({
       bridge.calls.push({ channel, payload });
       if (channel === 'projects:open') return { project: project(payload?.id ?? 1) };
       if (channel === 'p2p:fleet-list') return { fleet: [] };
+      if (channel === 'projects:list') return { projects: [project(1)] };
       if (channel === 'shells:alive-list') return { shells: bridge.shells };
       if (channel === 'shells:inspect-primary') {
         return bridge.shells.some((shell) => shell.projectId === payload?.projectId && shell.shellIndex === 0)

@@ -4,8 +4,8 @@
  * opens it (null = closed); every new `request.seq` resets the query to `request.seed` with the
  * caret at the end and the highlight on the first row. It records the focused element on open and,
  * on close, restores it as `restoresOpenerOnClose` decides (AC2). Picks go to `onPickProject`,
- * `onPickCurrent`, `onPickRemote` (a paired machine's In use row) or `onPickFile`; Ctrl+1–9 picks the
- * nth In use row; commands run after `onClose`, with an error toast if they fail (AC16).
+ * `onPickCurrent`, `onPickRemote` (a paired machine's In use row) or `onPickFile`; In use rows
+ * show their global Ctrl+1–9 key (App handles the key itself); commands run after `onClose`, with an error toast if they fail (AC16).
  */
 import { useEffect, useId, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import {
@@ -15,9 +15,9 @@ import {
   type PaletteMode,
   type PaletteRequest,
   type PaletteRow,
-  type PaletteView,
 } from '@renderer/command-palette-contract';
-import { remoteInUseRows, type RemoteInUseRow } from '@renderer/fleet-in-use';
+import type { RemoteInUseRow } from '@renderer/fleet-in-use';
+import { inUseJumpNumbers } from '@renderer/in-use-jump';
 import { useAliveShellIds } from '@renderer/hooks/useAliveShellIds';
 import { usePaletteFiles } from '@renderer/hooks/usePaletteFiles';
 import { useProjects } from '@renderer/hooks/useProjects';
@@ -26,7 +26,7 @@ import { toast } from '@renderer/hooks/useToasts';
 import { parsePaletteQuery } from '@renderer/palette-query';
 import { restoresOpenerOnClose, runPaletteRow } from '@renderer/palette-run';
 import { useFleetStateOrNull } from '@renderer/p2p/FleetStateProvider';
-import { inUseJumpIndex, searchPalette, stepHighlight } from '@renderer/palette-search';
+import { searchPalette, stepHighlight } from '@renderer/palette-search';
 import { ModalFrame } from './ModalFrame';
 import { SearchIcon } from './palette/category-icons';
 import { PaletteFooter } from './palette/PaletteFooter';
@@ -88,48 +88,43 @@ interface PaletteViewDeps {
 }
 
 const NO_REMOTE: readonly RemoteInUseRow[] = [];
+const NO_LOCAL: readonly number[] = [];
 
-/** The paired machines' live projects from the shared fleet state; none outside `FleetStateProvider`. */
-function useRemoteInUse(): readonly RemoteInUseRow[] {
+/** The shared In use list (order, remote sessions, Ctrl+1–9 numbers); empty outside `FleetStateProvider`. */
+function useSharedInUse() {
   const fleet = useFleetStateOrNull();
-  return useMemo(
-    () => (fleet ? remoteInUseRows(fleet.switcher.machines, fleet.switcher.shells, fleet.names, '') : NO_REMOTE),
-    [fleet],
-  );
+  const jumpNumbers = useMemo(() => inUseJumpNumbers(fleet?.inUseTargets ?? []), [fleet?.inUseTargets]);
+  return { remoteInUse: fleet?.remoteInUse ?? NO_REMOTE, localInUse: fleet?.localInUse ?? NO_LOCAL, jumpNumbers };
 }
 
 /** Every provider (projects refreshed on open, alive shells here and on paired machines, roots, lazily loaded files) searched into a view. */
 function usePaletteView({ open, query, commands, currentProjectId }: PaletteViewDeps) {
   const { projects, refresh } = useProjects();
   const { aliveIds } = useAliveShellIds();
-  const remoteInUse = useRemoteInUse();
+  const { remoteInUse, localInUse, jumpNumbers } = useSharedInUse();
   const { roots } = useRoots();
   const rootsById = useMemo(() => new Map(roots.map((r) => [r.id, r])), [roots]);
   const parsed = useMemo(() => parsePaletteQuery(query), [query]);
   const files = usePaletteFiles(open, parsed.mode === 'files', currentProjectId);
   const view = useMemo(
-    () => searchPalette(parsed, { projects, currentProjectId, aliveIds, remoteInUse, commands, files }),
-    [parsed, projects, currentProjectId, aliveIds, remoteInUse, commands, files],
+    () => searchPalette(parsed, { projects, currentProjectId, aliveIds, remoteInUse, localInUse, commands, files }),
+    [parsed, projects, currentProjectId, aliveIds, remoteInUse, localInUse, commands, files],
   );
   useEffect(() => {
     if (open) refresh().catch((e: unknown) => console.error('[palette] projects:list failed', e));
   }, [open, refresh]);
-  return { view, aliveIds, rootsById };
+  return { view, aliveIds, rootsById, jumpNumbers };
 }
 
 interface PaletteActionsDeps extends Pick<CommandPaletteProps, 'onClose' | 'onPickProject' | 'onPickCurrent' | 'onPickFile' | 'onPickRemote'> {
-  readonly view: PaletteView;
+  readonly rows: readonly PaletteRow[];
   readonly activeIndex: number;
   readonly setActive: (index: number) => void;
   readonly picked: PickedRef;
 }
 
-/**
- * `pick(index)` runs a row, recording its kind for the close-time focus decision; `onKeyDown` drives
- * the highlight (AC3, AC14) and opens the nth In use row on Ctrl+<n>.
- */
-function usePaletteActions({ view, activeIndex, setActive, picked, ...handlers }: PaletteActionsDeps) {
-  const { rows } = view;
+/** `pick(index)` runs a row, recording its kind for the close-time focus decision; `onKeyDown` drives the highlight (AC3, AC14). */
+function usePaletteActions({ rows, activeIndex, setActive, picked, ...handlers }: PaletteActionsDeps) {
   const pick = (index: number): void => {
     const row = rows[index];
     if (!row) return;
@@ -137,13 +132,6 @@ function usePaletteActions({ view, activeIndex, setActive, picked, ...handlers }
     void runPaletteRow(row, { ...handlers, onCommandError: reportCommandError });
   };
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    const jump = e.nativeEvent.isComposing ? null : inUseJumpIndex(view, e);
-    if (jump !== null) {
-      e.preventDefault();
-      e.stopPropagation();
-      pick(jump);
-      return;
-    }
     const step = e.nativeEvent.isComposing ? null : stepHighlight(e.key, activeIndex, rows.length);
     if (!step) return;
     e.preventDefault();
@@ -209,13 +197,13 @@ export function CommandPalette({ request, commands, currentProject, onClose, ...
   const idPrefix = useId();
   const picked = useRestoreFocus(open);
   const { query, setQuery, active, setActive, inputRef } = useSeededQuery(request);
-  const { view, aliveIds, rootsById } = usePaletteView({ open, query, commands, currentProjectId: currentProject?.id ?? null });
+  const { view, aliveIds, rootsById, jumpNumbers } = usePaletteView({ open, query, commands, currentProjectId: currentProject?.id ?? null });
   const activeIndex = Math.min(active, Math.max(view.rows.length - 1, 0));
   const activeId = view.rows.length > 0 ? optionId(idPrefix, activeIndex) : undefined;
   useEffect(() => {
     if (activeId) document.getElementById(activeId)?.scrollIntoView({ block: 'nearest' });
   }, [activeId]);
-  const { pick, onKeyDown } = usePaletteActions({ view, activeIndex, setActive, picked, onClose, ...picks });
+  const { pick, onKeyDown } = usePaletteActions({ rows: view.rows, activeIndex, setActive, picked, onClose, ...picks });
 
   if (!open) return null;
 
@@ -241,7 +229,7 @@ export function CommandPalette({ request, commands, currentProject, onClose, ...
           onQuery={(q) => { setQuery(q); setActive(0); }}
           onKeyDown={onKeyDown}
         />
-        <PaletteList view={view} activeIndex={activeIndex} idPrefix={idPrefix} aliveIds={aliveIds} rootsById={rootsById} onHover={setActive} onPick={pick} />
+        <PaletteList view={view} activeIndex={activeIndex} idPrefix={idPrefix} aliveIds={aliveIds} rootsById={rootsById} jumpNumbers={jumpNumbers} onHover={setActive} onPick={pick} />
         <PaletteFooter />
       </div>
     </ModalFrame>

@@ -8,7 +8,7 @@
  * `stepHighlight` (AC3, AC14).
  */
 import { describe, it, expect } from 'vitest';
-import { inUseJumpIndex, searchPalette, stepHighlight } from '@renderer/palette-search';
+import { searchPalette, stepHighlight } from '@renderer/palette-search';
 import type { RemoteInUseRow } from '@renderer/fleet-in-use';
 import { parsePaletteQuery } from '@renderer/palette-query';
 import {
@@ -56,7 +56,7 @@ const READY_FILES: PaletteFilesState = {
 };
 
 function input(over: Partial<PaletteSearchInput> = {}): PaletteSearchInput {
-  return { projects: PROJECTS, currentProjectId: null, aliveIds: new Set(), remoteInUse: [], commands: COMMANDS, files: READY_FILES, ...over };
+  return { projects: PROJECTS, currentProjectId: null, aliveIds: new Set(), remoteInUse: [], localInUse: [], commands: COMMANDS, files: READY_FILES, ...over };
 }
 
 function view(raw: string, over: Partial<PaletteSearchInput> = {}): PaletteView {
@@ -105,44 +105,14 @@ describe('searchPalette — paired machines in In use', () => {
   });
 });
 
-describe('inUseJumpIndex', () => {
-  const ctrl = (key: string, over: Partial<{ metaKey: boolean; altKey: boolean; shiftKey: boolean; ctrlKey: boolean }> = {}) =>
-    ({ key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, ...over });
-
-  it('maps Ctrl+n to the nth In use row, local rows first, then remote', () => {
-    const v = view('', { aliveIds: new Set([2]), remoteInUse: REMOTE });
-    expect(label(v.rows[inUseJumpIndex(v, ctrl('1'))!]!)).toBe('p:tools');
-    expect(label(v.rows[inUseJumpIndex(v, ctrl('2'))!]!)).toBe('r:studio/api');
-    expect(label(v.rows[inUseJumpIndex(v, ctrl('4'))!]!)).toBe('r:laptop/notes');
-    expect(inUseJumpIndex(v, ctrl('5'))).toBeNull();
+describe('searchPalette — shared In use order', () => {
+  it('orders this machine\'s live rows by the shared In use order on an empty query, unknown ids last', () => {
+    const v = view('', { aliveIds: new Set([1, 2, 3]), localInUse: [2, 3] });
+    expect(v.groups[0]?.rows.map(label)).toEqual(['p:tools', 'p:zebra', 'p:alpha-tools']);
   });
 
-  it('offsets into In use when Projects is listed first', () => {
-    const v = view('#beta', { projects: [project(2, 'beta', '/t/beta')], remoteInUse: [remote('box', 5, 'beta-api')] });
-    expect(groupIds(v)).toEqual(['projects', 'running']);
-    expect(inUseJumpIndex(v, ctrl('1'))).toBe(1);
-    expect(label(v.rows[1]!)).toBe('r:box/beta-api');
-  });
-
-  it('ignores anything but a bare Ctrl+1–9', () => {
-    const v = view('', { aliveIds: new Set([1, 2, 3]) });
-    expect(inUseJumpIndex(v, ctrl('1', { ctrlKey: false }))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('1', { metaKey: true }))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('1', { altKey: true }))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('1', { shiftKey: true }))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('0'))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('a'))).toBeNull();
-    expect(inUseJumpIndex(v, ctrl('10'))).toBeNull();
-  });
-
-  it('returns null when there is no In use group', () => {
-    expect(inUseJumpIndex(view(''), ctrl('1'))).toBeNull();
-  });
-
-  it('reaches only the first nine In use rows', () => {
-    const many = Array.from({ length: 12 }, (_, i) => remote('box', i + 1, `p${String(i + 1).padStart(2, '0')}`));
-    const v = view('', { remoteInUse: many });
-    expect(label(v.rows[inUseJumpIndex(v, ctrl('9'))!]!)).toBe('r:box/p09');
+  it('keeps match order with a query, whatever the shared order', () => {
+    expect(view('tools', { aliveIds: new Set([1, 2]), localInUse: [1, 2] }).groups[0]?.rows.map(label)).toEqual(['p:tools', 'p:alpha-tools']);
   });
 });
 

@@ -29,7 +29,7 @@ interface ProjectRowProps {
   readonly current: boolean;
   readonly active: boolean;
   readonly alive: boolean;
-  /** 1-based position in the In use group when Ctrl+<n> opens it; absent past `PALETTE_JUMP_MAX` or outside In use. */
+  /** The global Ctrl+<n> that opens this In use project (`in-use-jump.ts`); absent outside In use or past nine. */
   readonly jump?: number;
 }
 
