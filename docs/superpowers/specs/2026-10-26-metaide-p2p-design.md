@@ -274,6 +274,19 @@ type Frame =
 - `shells.launch(projectId, forceFirst?)` — same contract as local
   `shells:launch` IPC
 - `shells.kill(projectId, shellIndex)`
+- `shells.cliProfiles(projectId)` → `{ profiles: [{ name, scope, icon? }], defaultName }`; the
+  host's saved CLI profiles for the viewer's add-tab menu. Names, scopes and icons only: a
+  profile's command and environment never leave the host.
+- `shells.launchProfile(projectId, profileName)` → `{ shellIndex }`; opens a tab running a saved
+  profile, resolved on the host by name. No raw command is accepted.
+- `shells.launchPlain(projectId)` → `{ shellIndex }`; opens a tab with the host's login shell.
+- `shells.removeCliProfile(projectId, name)`; removes a project-scoped profile (global profiles
+  are left alone).
+- `shells.setDefaultCli(projectId, name | null)` → `{ defaultName }`; sets or clears the
+  project's auto-launch profile.
+
+These tab methods need no workspace grant: any paired desktop that may open shells may open and
+close tabs. An older host answers `unknown_method`, and the viewer's menu says so.
 
 **Notices (agent notifications for the IDE instance in use)** — added
 2026-11-17, see `docs/architecture.md` ("Claude notifications")

@@ -15,11 +15,29 @@ vi.mock('../ActivityTab', () => ({ ActivityTab: ({ onOpenTarget }: { onOpenTarge
 import { RemoteProjectPane } from '../RemoteProjectPane';
 import { WorkspaceDestinations } from '../WorkspaceDestinations';
 import { WorkspaceHeaderSlotContext } from '../WorkspaceHeaderSlot';
+import { SHELL_TAB_TEST_ID } from '@shared/agent-state';
+import { RemoteShellCommandsContext, type RemoteShellCommands } from '../RemoteShellCommands';
+
+/** The shell tab chips (the same ShellTabsBar chips local projects use). */
+const chips = (): HTMLElement[] => screen.queryAllByTestId(SHELL_TAB_TEST_ID);
+const findChips = (): Promise<HTMLElement[]> => screen.findAllByTestId(SHELL_TAB_TEST_ID);
+const findChip = async (name: string | RegExp): Promise<HTMLElement> => waitFor(() => {
+  const found = chips().find((c) => (typeof name === 'string' ? c.textContent === name : name.test(c.textContent ?? '')));
+  if (!found) throw new Error(`no chip ${String(name)}`);
+  return found;
+});
+const isActive = (c: HTMLElement): boolean => c.className.includes('bg-[--surface-active]');
 
 let alive: unknown[] = [];
 
 beforeEach(() => {
   cleanup();
+  // The shell tab strip (ShellTabsBar) reads prefers-reduced-motion; jsdom has no matchMedia.
+  vi.stubGlobal('matchMedia', () => Object.assign(new EventTarget(), { matches: false }));
+  // ChipStrip fades chips in and out with the Web Animations API, which jsdom lacks.
+  Element.prototype.animate = function animate() {
+    return { finished: Promise.resolve(), cancel() {}, finish() {}, onfinish: null, addEventListener() {} } as unknown as Animation;
+  };
   alive = [];
   invoke.mockReset();
   invoke.mockImplementation(async (_ch: string, a: { method?: string }) => {
@@ -42,11 +60,12 @@ describe('RemoteProjectPane', () => {
       </WorkspaceHeaderSlotContext.Provider>);
       await screen.findByTestId('shell-tab');
       const pane = screen.getByTestId('remote-project-pane');
-      const strip = await screen.findByTestId('remote-shell-tabs');
+      const strip = await waitFor(() => { const el = header.querySelector<HTMLElement>('.shell-tabs-bar'); if (!el) throw new Error('no strip'); return el; });
       // Positive control: everything still renders, just in the header row rather than inside the pane.
       expect(within(header.querySelector<HTMLElement>('.workspace-destinations')!).getByRole('button', { name: 'Shell' }).getAttribute('aria-current')).toBe('page');
       expect(header.querySelector('.workspace-project-actions')?.textContent).toContain('alpha @ Tower');
-      expect(strip.closest('.shell-tabs-bar')?.parentElement).toBe(header);
+      expect(strip.parentElement).toBe(header);
+      await waitFor(() => expect(strip.querySelectorAll(`[data-testid="${SHELL_TAB_TEST_ID}"]`)).toHaveLength(2));
       expect(pane.contains(strip)).toBe(false);
       expect(pane.querySelector('.workspace-destinations')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Files' }));
@@ -113,7 +132,7 @@ describe('RemoteProjectPane', () => {
   test('returning from Files restores the picked remote session and does not relaunch it', async () => {
     alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }, { projectId: 7, shellIndex: 3, launchArgv: ['opencode'] }];
     render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
-    fireEvent.click(await screen.findByRole('tab', { name: 'Opencode' }));
+    fireEvent.click(await findChip('Opencode'));
     fireEvent.click(screen.getByRole('button', { name: 'Files' }));
     expect(screen.getByTestId('files-panel')).toBeTruthy();
     expect(screen.queryByTestId('shell-tab')).toBeNull();
@@ -213,15 +232,16 @@ describe('RemoteProjectPane', () => {
       { projectId: 9, shellIndex: 0, launchArgv: ['codex'] }, // another project: not a tab here
     ];
     render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
-    const tabs = await screen.findAllByRole('tab');
+    await waitFor(() => expect(chips()).toHaveLength(3));
+    const tabs = chips();
     expect(tabs.map((t) => t.textContent)).toEqual(['Claude', 'Opencode', 'Terminal']);
     // The launched shell is selected first.
-    expect(tabs.map((t) => t.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
+    expect(tabs.map(isActive)).toEqual([true, false, false]);
     expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('2');
 
-    fireEvent.click(screen.getByRole('tab', { name: /Opencode/ }));
+    fireEvent.click(await findChip(/Opencode/));
     expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('3');
-    expect(screen.getByRole('tab', { name: /Opencode/ }).getAttribute('aria-selected')).toBe('true');
+    expect(isActive(await findChip(/Opencode/))).toBe(true);
   });
 
   test('a terminal where an agent was started by hand is labelled as that agent; repeats are numbered', async () => {
@@ -231,25 +251,26 @@ describe('RemoteProjectPane', () => {
       { projectId: 7, shellIndex: 5, launchArgv: ['claude'], agent: null },
     ];
     render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
-    const tabs = await screen.findAllByRole('tab');
-    expect(tabs.map((t) => t.textContent)).toEqual(['Claude 1', 'opencode', 'Claude 2']);
+    await waitFor(() => expect(chips()).toHaveLength(3));
+    expect(chips().map((t) => t.textContent)).toEqual(['Claude 1', 'opencode', 'Claude 2']);
   });
 
-  test('falls back to the launched shell when the picked one is gone; no tab strip before the host lists shells', async () => {
+  test('falls back to the launched shell when the picked one is gone; no chips (only +) before the host lists shells', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
       await screen.findByTestId('shell-tab');
-      expect(screen.queryByTestId('remote-shell-tabs')).toBeNull();
+      expect(chips()).toHaveLength(0);
+      expect(screen.getByTestId('tabbar-new-shell')).toBeTruthy();
 
       alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }, { projectId: 7, shellIndex: 3, launchArgv: ['opencode'] }];
       await vi.advanceTimersByTimeAsync(3000);
-      fireEvent.click(await screen.findByRole('tab', { name: 'Opencode' }));
+      fireEvent.click(await findChip('Opencode'));
       expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('3');
 
       alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }];
       await vi.advanceTimersByTimeAsync(3000);
-      await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(1));
+      await waitFor(() => expect(chips()).toHaveLength(1));
       expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('2');
     } finally {
       vi.useRealTimers();
@@ -262,7 +283,7 @@ describe('RemoteProjectPane', () => {
     const { unmount } = render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
     await screen.findByTestId('shell-tab');
     expect(viewing().at(-1)).toEqual({ deviceId: 'tower', projectId: 7, shellIndex: 2 });
-    fireEvent.click(await screen.findByRole('tab', { name: 'Opencode' }));
+    fireEvent.click(await findChip('Opencode'));
     await waitFor(() => expect(viewing().at(-1)).toEqual({ deviceId: 'tower', projectId: 7, shellIndex: 3 }));
     unmount();
     expect(viewing().at(-1)).toBeNull();
@@ -271,10 +292,125 @@ describe('RemoteProjectPane', () => {
   test('opens on the tab a fleet notice names, and on another when a later notice names that', async () => {
     alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }, { projectId: 7, shellIndex: 3, launchArgv: ['opencode'] }, { projectId: 7, shellIndex: 4, launchArgv: ['$SHELL'] }];
     const { rerender } = render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" initialShellIndex={3} />);
-    await screen.findAllByRole('tab');
+    await findChips();
     await waitFor(() => expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('3'));
     rerender(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" initialShellIndex={4} />);
     await waitFor(() => expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('4'));
+  });
+
+  describe('terminal tab controls on the host', () => {
+    /** Host fixture: alive shells, saved profiles, and every tab RPC recorded. */
+    function host(opts: { profilesFail?: boolean } = {}) {
+      alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }, { projectId: 7, shellIndex: 3, launchArgv: ['opencode'] }];
+      let next = 6;
+      let defaultName: string | null = 'claude';
+      invoke.mockImplementation(async (_ch: string, a: { method?: string; params?: Record<string, unknown> }) => {
+        switch (a?.method) {
+          case 'shells.launch': return { result: { shellIndex: 2 } };
+          case 'shells.alive': return { result: alive };
+          case 'workspace.info': throw new Error('unknown_method');
+          case 'shells.cliProfiles':
+            if (opts.profilesFail) throw new Error('unknown_method');
+            return { result: { profiles: [{ name: 'claude', scope: 'global', icon: '🤖' }, { name: 'mine', scope: 'project' }], defaultName } };
+          case 'shells.launchProfile': case 'shells.launchPlain': return { result: { shellIndex: next++ } };
+          case 'shells.kill': return { result: { ok: true } };
+          case 'shells.setDefaultCli': defaultName = (a.params?.name as string | null) ?? null; return { result: { defaultName } };
+          case 'shells.removeCliProfile': return { result: { ok: true } };
+          default: return {};
+        }
+      });
+    }
+    const rpc = (method: string) => invoke.mock.calls.filter(([, a]) => a?.method === method).map(([, a]) => a.params);
+
+    async function openMenu() {
+      render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
+      await waitFor(() => expect(chips()).toHaveLength(2));
+      fireEvent.click(screen.getByTestId('tabbar-new-shell'));
+    }
+
+    test('the + menu lists the host\'s saved profiles, offers no custom command, and opens a profile as a new selected tab', async () => {
+      host();
+      await openMenu();
+      const mine = await screen.findByText('mine');
+      expect(screen.getByText('claude')).toBeTruthy();
+      expect(screen.queryByText(/custom command/i)).toBeNull();
+      fireEvent.click(mine);
+      await waitFor(() => expect(rpc('shells.launchProfile')).toEqual([{ projectId: 7, profileName: 'mine' }]));
+      // Selected at once, before the next poll lists it.
+      await waitFor(() => expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('6'));
+      expect(chips()).toHaveLength(3);
+    });
+
+    test('Terminal in the + menu opens the host login shell', async () => {
+      host();
+      await openMenu();
+      fireEvent.click(await screen.findByText('Terminal'));
+      await waitFor(() => expect(rpc('shells.launchPlain')).toEqual([{ projectId: 7 }]));
+      await waitFor(() => expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('6'));
+    });
+
+    test('the star sets and clears the host default, and × on a project profile removes it on the host', async () => {
+      host();
+      await openMenu();
+      fireEvent.click(await screen.findByRole('button', { name: 'Set mine as folder default' }));
+      await waitFor(() => expect(rpc('shells.setDefaultCli')).toEqual([{ projectId: 7, name: 'mine' }]));
+      fireEvent.click(await screen.findByRole('button', { name: 'Clear folder default' }));
+      await waitFor(() => expect(rpc('shells.setDefaultCli')).toEqual([{ projectId: 7, name: 'mine' }, { projectId: 7, name: null }]));
+      fireEvent.click(screen.getByTitle('Remove from this project'));
+      await waitFor(() => expect(rpc('shells.removeCliProfile')).toEqual([{ projectId: 7, name: 'mine' }]));
+      await waitFor(() => expect(screen.queryByText('mine')).toBeNull());
+    });
+
+    test('an older host without profile support shows the menu error and still offers Terminal', async () => {
+      host({ profilesFail: true });
+      await openMenu();
+      expect(await screen.findByRole('alert')).toBeTruthy();
+      expect(screen.getByText('Terminal')).toBeTruthy();
+    });
+
+    test('× on a tab kills that shell on the host, drops it at once and shows a remaining tab', async () => {
+      host();
+      render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
+      await waitFor(() => expect(chips()).toHaveLength(2));
+      expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('2');
+      fireEvent.click(screen.getByRole('button', { name: 'Close Claude' }));
+      await waitFor(() => expect(rpc('shells.kill')).toEqual([{ projectId: 7, shellIndex: 2 }]));
+      await waitFor(() => expect(chips().map((c) => c.textContent)).toEqual(['Opencode']));
+      expect(screen.getByTestId('shell-tab').getAttribute('data-shell')).toBe('3');
+    });
+
+    test('closing the last tab leaves no terminal attached and points at +', async () => {
+      host();
+      alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }];
+      invoke.mockImplementation(async (_ch: string, a: { method?: string }) => {
+        if (a?.method === 'shells.launch') return { result: { shellIndex: 2 } };
+        if (a?.method === 'shells.alive') return { result: alive };
+        if (a?.method === 'shells.kill') { alive = []; return { result: { ok: true } }; }
+        if (a?.method === 'workspace.info') throw new Error('unknown_method');
+        return {};
+      });
+      render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
+      await waitFor(() => expect(chips()).toHaveLength(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Close Claude' }));
+      expect(await screen.findByTestId('remote-no-shells')).toBeTruthy();
+      expect(screen.queryByTestId('shell-tab')).toBeNull();
+      expect(screen.getByTestId('tabbar-new-shell')).toBeTruthy();
+    });
+
+    test('App\'s ⌘T / ⌘W reach the shown remote tab through the commands context, only while Shell is showing', async () => {
+      host();
+      const commands = { current: null as RemoteShellCommands | null };
+      render(<RemoteShellCommandsContext.Provider value={commands}>
+        <RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />
+      </RemoteShellCommandsContext.Provider>);
+      await waitFor(() => expect(chips()).toHaveLength(2));
+      act(() => commands.current!.closeActive());
+      await waitFor(() => expect(rpc('shells.kill')).toEqual([{ projectId: 7, shellIndex: 2 }]));
+      act(() => commands.current!.newTab());
+      await waitFor(() => expect(rpc('shells.launchPlain')).toEqual([{ projectId: 7 }]));
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+      await waitFor(() => expect(commands.current).toBeNull());
+    });
   });
 
   test('the close button calls onClose', () => {

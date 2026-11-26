@@ -364,6 +364,45 @@ export function wireHub(peer: RpcPeer, opts: HubOptions): HubHandle {
     return { ok: true } as const;
   });
 
+  // Tab management for a viewer's add-tab menu. Profiles are resolved and run on this host by name;
+  // their commands and environment are never sent to the peer, and no raw command is accepted.
+  on('shells.cliProfiles', async ({ projectId }) => {
+    const project = s.projects.get(projectId);
+    if (!project) throw new RpcError('unknown_project', `no project ${projectId}`);
+    const { profiles } = await handlers['shells:cli-profiles-list'](s, { projectId });
+    return {
+      profiles: profiles.slice(0, 200).map((p) => ({ name: p.name, scope: p.scope, ...(p.icon ? { icon: p.icon } : {}) })),
+      defaultName: project.config.defaultCliName ?? null,
+    };
+  });
+
+  on('shells.launchProfile', async ({ projectId, profileName }) => {
+    const r = await handlers['shells:launch-cli'](s, { projectId, profileName });
+    events.aliveShellsChanged();
+    events.projectsChanged();
+    return { shellIndex: r.shellIndex };
+  });
+
+  on('shells.launchPlain', async ({ projectId }) => {
+    const r = await handlers['shells:launch-plain'](s, { projectId });
+    events.aliveShellsChanged();
+    return { shellIndex: r.shellIndex };
+  });
+
+  on('shells.removeCliProfile', async ({ projectId, name }) => {
+    if (!s.projects.get(projectId)) throw new RpcError('unknown_project', `no project ${projectId}`);
+    await handlers['shells:cli-profiles-remove'](s, { projectId, name });
+    events.projectsChanged();
+    return { ok: true } as const;
+  });
+
+  on('shells.setDefaultCli', async ({ projectId, name }) => {
+    if (!s.projects.get(projectId)) throw new RpcError('unknown_project', `no project ${projectId}`);
+    const { project } = await handlers['shells:set-default-cli'](s, { projectId, name });
+    events.projectsChanged();
+    return { defaultName: project.config.defaultCliName ?? null };
+  });
+
   // Active shells.attach streams on this peer, by wire stream id. Input/resize only act on these.
   const attached = new Map<number, { projectId: number; shellIndex: number }>();
   on('shells.attach', ({ projectId, shellIndex }, ctx) => attachStream(s, projectId, shellIndex, attached, ctx.stream));

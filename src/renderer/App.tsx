@@ -98,6 +98,7 @@ import { FleetStateProvider, useFleetState } from './p2p/FleetStateProvider';
 import { inUseJumpNumber } from './in-use-jump';
 import { remotePaneRequest } from './palette-run';
 import { WorkspaceHeaderSlotContext } from './components/WorkspaceHeaderSlot';
+import { RemoteShellCommandsContext, type RemoteShellCommands } from './components/RemoteShellCommands';
 
 
 interface PopoutInfo {
@@ -183,6 +184,8 @@ function MainApp() {
   const inUseTargetsRef = useRef(inUseTargets);
   inUseTargetsRef.current = inUseTargets;
   const jumpToInUseRef = useRef<(n: number) => void>(() => undefined);
+  // ⌘T / ⌘W reach a remote project's shell tabs through this ref (filled by its Shell view).
+  const remoteShellCommandsRef = useRef<RemoteShellCommands | null>(null);
   // The header row a remote project pane portals its tabs, shell strip and actions into (same layout as the local header).
   const [remoteHeaderSlot, setRemoteHeaderSlot] = useState<HTMLElement | null>(null);
   const localWorkspaceProject = remotePane ? null : selected;
@@ -678,7 +681,10 @@ function MainApp() {
       prompts: () => setPromptsOpen(true),
       'scrollback-search': () => setScrollbackOpen(true),
       'toggle-help': () => setHelpOpen(!helpOpenRef.current),
-      'new-terminal': () => openNewTerminalRef.current(false, tabMotionRef.current?.launchResult()),
+      'new-terminal': () => {
+        if (remotePaneRef.current) { remoteShellCommandsRef.current?.newTab(); return; }
+        openNewTerminalRef.current(false, tabMotionRef.current?.launchResult());
+      },
       'new-terminal-window': () => openNewTerminalRef.current(true),
     };
     function onKey(e: KeyboardEvent) {
@@ -709,7 +715,7 @@ function MainApp() {
       if (mod && e.key.toLowerCase() === 'w' && !e.shiftKey && !e.altKey) {
         // ⌘W → close the active shell tab in the current project.
         const p = selectedRef.current;
-        if (remotePaneRef.current) { e.preventDefault(); return; }
+        if (remotePaneRef.current) { e.preventDefault(); remoteShellCommandsRef.current?.closeActive(); return; }
         if (!p) return;
         e.preventDefault();
         const idx = activeShellIndexRef.current;
@@ -1209,8 +1215,10 @@ function MainApp() {
                   />
                 : remotePane
                 ? <WorkspaceHeaderSlotContext.Provider value={remoteHeaderSlot}>
-                    <RemoteProjectPane deviceId={remotePane.source.deviceId} deviceName={remotePane.deviceName} projectId={remotePane.projectId}
-                      projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)} />
+                    <RemoteShellCommandsContext.Provider value={remoteShellCommandsRef}>
+                      <RemoteProjectPane deviceId={remotePane.source.deviceId} deviceName={remotePane.deviceName} projectId={remotePane.projectId}
+                        projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)} />
+                    </RemoteShellCommandsContext.Provider>
                   </WorkspaceHeaderSlotContext.Provider>
                 : mainTab === 'settings'
                 ? settingsTarget

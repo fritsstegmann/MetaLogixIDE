@@ -80,6 +80,42 @@ export const RpcMethods = {
     result: z.object({ ok: z.literal(true) }),
   },
   /**
+   * The host's saved CLI profiles for a project (project overrides, then global), for the viewer's
+   * add-tab menu, and the project's current auto-launch default. Labels and icons only: a profile's
+   * command and environment never leave the host.
+   */
+  'shells.cliProfiles': {
+    params: z.object({ projectId: z.number().int().positive() }),
+    result: z.object({
+      profiles: z.array(z.object({
+        name: z.string().max(200),
+        scope: z.enum(['project', 'global']),
+        icon: z.string().max(16).optional(),
+      })).max(200),
+      defaultName: z.string().max(200).nullable(),
+    }),
+  },
+  /** Opens a new tab running one of the host's saved profiles, by name; the host resolves the command. */
+  'shells.launchProfile': {
+    params: z.object({ projectId: z.number().int().positive(), profileName: z.string().min(1).max(200) }),
+    result: z.object({ shellIndex: z.number() }),
+  },
+  /** Opens a new tab running the host's login shell in the project directory. */
+  'shells.launchPlain': {
+    params: z.object({ projectId: z.number().int().positive() }),
+    result: z.object({ shellIndex: z.number() }),
+  },
+  /** Removes a project-scoped saved profile on the host (global profiles are not removed this way). */
+  'shells.removeCliProfile': {
+    params: z.object({ projectId: z.number().int().positive(), name: z.string().min(1).max(200) }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  /** Sets (or clears with null) the project's auto-launch profile on the host, by saved-profile name. */
+  'shells.setDefaultCli': {
+    params: z.object({ projectId: z.number().int().positive(), name: z.string().min(1).max(200).nullable() }),
+    result: z.object({ defaultName: z.string().max(200).nullable() }),
+  },
+  /**
    * The viewer says how long ago its IDE was last used (input while its window was focused); null if never.
    * The host uses it to send agent notices to the instance in use. Sent as an age, not a time, so the two
    * machines' clocks need not agree.

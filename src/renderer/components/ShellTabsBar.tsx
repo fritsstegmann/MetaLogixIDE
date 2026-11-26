@@ -240,7 +240,8 @@ export function NewShellMenu({
           </div>
         );
       })}
-      <div className="border-t border-[--border]">
+      {/* A remote host runs only its own saved profiles; viewers cannot send it a raw command. */}
+      {!remoteMenu && <div className="border-t border-[--border]">
         <button
           onClick={() => setCustomOpen(true)}
           className="w-full text-left px-3 py-2 text-xs hover:bg-[--panel] flex items-center gap-2 text-[--text-muted] hover:text-[--text]"
@@ -248,7 +249,7 @@ export function NewShellMenu({
           <span className="w-5 text-center text-base leading-none">＋</span>
           <span>Add a custom command…</span>
         </button>
-      </div>
+      </div>}
       <div className="border-t border-[--border]">
         <button
           onClick={onLaunchPlainTab}

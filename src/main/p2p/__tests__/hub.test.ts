@@ -125,6 +125,70 @@ describe('hub dispatch', () => {
     expect(events.aliveShellsChanged).toHaveBeenCalledTimes(2);
   });
 
+  test('shells.cliProfiles lists names, scopes and icons with the default, and never a command or environment', async () => {
+    projects.updateConfig(projectId, {
+      cliProfiles: [{ name: 'secret-cli', argv: ['/opt/bin/agent', '--token=TOPSECRET'], env: { API_KEY: 'k-123' }, icon: '🤖' }],
+    });
+    const { client } = setup();
+    await client.call('shells.setDefaultCli', { projectId, name: 'secret-cli' });
+    const result = await client.call('shells.cliProfiles', { projectId });
+    expect(result.defaultName).toBe('secret-cli');
+    expect(result.profiles.find((p) => p.name === 'secret-cli')).toEqual({ name: 'secret-cli', scope: 'project', icon: '🤖' });
+    const wire = JSON.stringify(result);
+    for (const leak of ['TOPSECRET', '/opt/bin/agent', 'API_KEY', 'k-123', 'argv', 'env']) expect(wire).not.toContain(leak);
+    await expect(client.call('shells.cliProfiles', { projectId: 9999 })).rejects.toMatchObject({ code: 'unknown_project' });
+  });
+
+  test('shells.launchProfile runs a saved profile by name only; a raw command in the request never reaches the launcher', async () => {
+    const spy = vi.spyOn(handlers, 'shells:launch-cli').mockResolvedValue({ shellIndex: 3 });
+    const events = { aliveShellsChanged: vi.fn(), projectsChanged: vi.fn() };
+    const { client } = setup({ events });
+    const result = await client.call('shells.launchProfile', { projectId, profileName: 'claude', argv: ['rm', '-rf', '/'], env: { X: '1' }, save: true } as never);
+    expect(result).toEqual({ shellIndex: 3 });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![1]).toEqual({ projectId, profileName: 'claude' });
+    expect(events.aliveShellsChanged).toHaveBeenCalledTimes(1);
+    await expect(client.call('shells.launchProfile', { projectId, profileName: '' })).rejects.toMatchObject({ code: 'invalid_params' });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test('shells.launchProfile with an unknown profile fails without launching', async () => {
+    const { client } = setup();
+    await expect(client.call('shells.launchProfile', { projectId, profileName: 'no-such-profile' })).rejects.toBeTruthy();
+    expect(pty.liveShell(projectId, 0) ?? null).toBeNull();
+  });
+
+  test('shells.launchPlain opens the host login shell through the local plain launcher', async () => {
+    const spy = vi.spyOn(handlers, 'shells:launch-plain').mockResolvedValue({ shellIndex: 2 });
+    const events = { aliveShellsChanged: vi.fn(), projectsChanged: vi.fn() };
+    const { client } = setup({ events });
+    expect(await client.call('shells.launchPlain', { projectId })).toEqual({ shellIndex: 2 });
+    expect(spy.mock.calls[0]![1]).toEqual({ projectId });
+    expect(events.aliveShellsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  test('shells.removeCliProfile removes a project profile and leaves global profiles alone', async () => {
+    projects.updateConfig(projectId, { cliProfiles: [{ name: 'mine', argv: ['x'] }, { name: 'keep', argv: ['y'] }] });
+    const { client } = setup();
+    expect(await client.call('shells.removeCliProfile', { projectId, name: 'mine' })).toEqual({ ok: true });
+    expect(projects.get(projectId)!.config.cliProfiles?.map((p) => p.name)).toEqual(['keep']);
+    const globals = (await client.call('shells.cliProfiles', { projectId })).profiles.filter((p) => p.scope === 'global').map((p) => p.name);
+    await client.call('shells.removeCliProfile', { projectId, name: globals[0] ?? 'none' });
+    const after = (await client.call('shells.cliProfiles', { projectId })).profiles.filter((p) => p.scope === 'global').map((p) => p.name);
+    expect(after).toEqual(globals);
+    await expect(client.call('shells.removeCliProfile', { projectId: 9999, name: 'mine' })).rejects.toMatchObject({ code: 'unknown_project' });
+  });
+
+  test('shells.setDefaultCli sets and clears the host default and rejects a name with no saved profile', async () => {
+    projects.updateConfig(projectId, { cliProfiles: [{ name: 'mine', argv: ['x'] }] });
+    const { client } = setup();
+    expect(await client.call('shells.setDefaultCli', { projectId, name: 'mine' })).toEqual({ defaultName: 'mine' });
+    expect(projects.get(projectId)!.config.defaultCliName).toBe('mine');
+    expect(await client.call('shells.setDefaultCli', { projectId, name: null })).toEqual({ defaultName: null });
+    await expect(client.call('shells.setDefaultCli', { projectId, name: 'not-a-profile' })).rejects.toBeTruthy();
+    expect(projects.get(projectId)!.config.defaultCliName ?? null).toBeNull();
+  });
+
   test('projects.list returns the local project rows shape', async () => {
     const { client } = setup();
     const list = await client.call('projects.list', {});

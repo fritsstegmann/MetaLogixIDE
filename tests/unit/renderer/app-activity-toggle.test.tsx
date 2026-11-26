@@ -181,6 +181,11 @@ it('does not expose hidden local workspace actions after a remote Fleet notice',
   });
   expect(bridge.calls.slice(before).map(({ channel }) => channel)).not.toContain('shells:launch-plain');
   expect(bridge.calls.slice(before).map(({ channel }) => channel)).not.toContain('shells:kill');
+  // They act on the remote host's tabs instead.
+  const remoteMethods = bridge.calls.slice(before).filter(({ channel }) => channel === 'p2p:rpc-call')
+    .map(({ payload }) => (payload as { method?: string; deviceId?: string }));
+  expect(remoteMethods).toContainEqual(expect.objectContaining({ method: 'shells.launchPlain', deviceId: 'tower' }));
+  expect(remoteMethods).toContainEqual(expect.objectContaining({ method: 'shells.kill', deviceId: 'tower' }));
   expect(stored('metaide.mainTab')).toBe('files');
 });
 
