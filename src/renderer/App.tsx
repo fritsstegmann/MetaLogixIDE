@@ -233,6 +233,16 @@ function MainApp() {
     setActiveView('projects');
     setRemotePane(request);
   }, [setActiveView]);
+  // Opening a remote project (Sidebar, palette, Ctrl+1–9, a fleet notice) focuses its terminal, as
+  // picking a local project does. Requested after the commit, so a hidden local terminal with the
+  // same project id has already unregistered and cannot take the request.
+  useEffect(() => {
+    if (!remotePane) return;
+    if (remotePane.shellIndex !== undefined) terminalFocus.requestFocus({ projectId: remotePane.projectId, shellIndex: remotePane.shellIndex });
+    else terminalFocus.requestProjectFocus(remotePane.projectId);
+  }, [remotePane]);
+  /** The main sheet; focused when a local project is picked on a tab other than Shell. */
+  const mainSheetRef = useRef<HTMLElement>(null);
   const activeViewRef = useRef<ActivityView>('projects');
   activeViewRef.current = activeView;
   useEffect(() => api.on('metaproject:chat-event', ({ epoch, event }) => {
@@ -773,6 +783,7 @@ function MainApp() {
       const { project } = await api.invoke('projects:open', { id: p.id });
       if (selectionRequestRef.current !== requestId) return false;
       if (mainTabRef.current === 'shell') terminalFocus.requestProjectFocus(project.id);
+      else requestAnimationFrame(() => mainSheetRef.current?.focus({ preventScroll: true }));
       setSelected(project);
       selectedIt = true;
       await api.invoke('shells:launch', { projectId: project.id });
@@ -1198,7 +1209,9 @@ function MainApp() {
               </div>
             </header>}
           <main
-            className={`workspace-sheet mx-2 mt-0.5 flex flex-1 flex-col min-h-0 min-w-0 rounded-[14px] bg-[--surface-sheet] ${showStatusBar ? 'mb-0.5' : 'mb-2'}`}
+            ref={mainSheetRef}
+            tabIndex={-1}
+            className={`workspace-sheet outline-none mx-2 mt-0.5 flex flex-1 flex-col min-h-0 min-w-0 rounded-[14px] bg-[--surface-sheet] ${showStatusBar ? 'mb-0.5' : 'mb-2'}`}
             data-sheet-content={mainSheetContent}
           >
             <div className="flex-1 relative min-h-0 flex flex-col">

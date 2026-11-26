@@ -17,6 +17,7 @@ const bridge = vi.hoisted(() => ({
   calls: [] as Array<{ channel: string; payload: unknown }>,
   listeners: new Map<string, Set<(payload: unknown) => void>>(),
   holdLocalOpen: null as Promise<{ project: Project }> | null,
+  focus: [] as unknown[],
 }));
 
 vi.mock('@renderer/api', () => ({
@@ -61,7 +62,11 @@ vi.mock('@renderer/hooks/useAgentStates', () => ({
 }));
 vi.mock('@renderer/hooks/useWindowTerminalFocus', () => ({
   useWindowTerminalFocus: () => undefined,
-  terminalFocus: { requestProjectFocus: () => undefined, cancelRequest: () => undefined, requestFocus: () => undefined },
+  terminalFocus: {
+    requestProjectFocus: (projectId: number) => { bridge.focus.push({ project: projectId }); },
+    cancelRequest: () => undefined,
+    requestFocus: (key: { projectId: number; shellIndex: number }) => { bridge.focus.push({ shell: key }); },
+  },
 }));
 vi.mock('@renderer/hooks/useTerminalGeometryHold', () => ({ useTerminalGeometryHold: () => undefined }));
 vi.mock('@renderer/hooks/usePrefersReducedMotion', () => ({ usePrefersReducedMotion: () => false }));
@@ -79,8 +84,11 @@ vi.mock('@renderer/hooks/useFrostedGlassAttributes', () => ({ useFrostedGlassAtt
 vi.mock('@renderer/hooks/useExternalDragGuard', () => ({ useExternalDragGuard: () => undefined }));
 vi.mock('@renderer/components/FoldPane', () => ({ FoldPane: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('@renderer/components/Sidebar', () => ({
-  Sidebar: ({ onSelect }: { onSelect: (project: Project) => void }) =>
-    <aside><button onClick={() => onSelect(project(1))}>Select 1</button></aside>,
+  Sidebar: ({ onSelect, onOpenPane }: { onSelect: (project: Project) => void; onOpenPane?: (req: unknown) => void }) =>
+    <aside>
+      <button onClick={() => onSelect(project(1))}>Select 1</button>
+      <button onClick={() => onOpenPane?.({ source: { kind: 'remote', deviceId: 'tower' }, deviceName: 'Tower', projectId: 1, projectName: 'Remote' })}>Open remote 1</button>
+    </aside>,
 }));
 vi.mock('@renderer/components/StatusBar', () => ({ StatusBar: ({ onOpenPalette }: { onOpenPalette: () => void }) =>
   <button data-testid="status-bar-palette-hint" onClick={onOpenPalette}>Commands</button> }));
@@ -263,6 +271,50 @@ it('a remote project\'s Shell tab makes the main sheet a shell sheet, like a loc
     within(document.querySelector<HTMLElement>('[data-testid="remote-workspace-header"]')!).getByRole('button', { name: 'Files' }).click();
   });
   expect(sheet()).toBe('other');
+});
+
+describe('selecting a project focuses its panel', () => {
+  const clickButton = async (label: string) => {
+    await act(async () => { [...document.querySelectorAll('button')].find((b) => b.textContent === label)!.click(); });
+    await flush();
+    await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
+  };
+
+  it('a local project on the Shell tab asks for its terminal', async () => {
+    await mount({ activity: true, tab: 'shell' });
+    bridge.focus = [];
+    await clickButton('Select 1');
+    expect(bridge.focus).toContainEqual({ project: 1 });
+  });
+
+  it('a local project on another tab focuses the main panel', async () => {
+    await mount({ activity: true, tab: 'files' });
+    bridge.focus = [];
+    (document.activeElement as HTMLElement | null)?.blur();
+    await clickButton('Select 1');
+    expect(document.activeElement).toBe(document.querySelector('main.workspace-sheet'));
+    expect(bridge.focus).toEqual([]);
+  });
+
+  it('a remote project from the Sidebar asks for its terminal after the pane mounts', async () => {
+    await mount({ activity: true, tab: 'files' });
+    bridge.focus = [];
+    await clickButton('Open remote 1');
+    expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
+    expect(bridge.focus).toEqual([{ project: 1 }]);
+  });
+
+  it('a fleet notice for a remote shell asks for that exact shell', async () => {
+    await mount({ activity: true, tab: 'shell' });
+    bridge.focus = [];
+    await act(async () => {
+      for (const listener of bridge.listeners.get('p2p:focus-remote-shell') ?? []) {
+        listener({ deviceId: 'tower', deviceName: 'Tower', projectId: 1, projectName: 'Remote', shellIndex: 3 });
+      }
+    });
+    await flush();
+    expect(bridge.focus).toContainEqual({ shell: { projectId: 1, shellIndex: 3 } });
+  });
 });
 
 describe('App activity-log switch', () => {
