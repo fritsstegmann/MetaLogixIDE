@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '@renderer/api';
 import { ShellTab } from './ShellTab';
 import { StatusDot } from './StatusDot';
@@ -13,6 +14,7 @@ import { DiffTab } from './DiffTab';
 import { FilesTab } from './FilesTab';
 import { RemoteProjectSettings, type RemoteProjectSettingsProps } from './RemoteProjectSettings';
 import { WorkspaceDestinations } from './WorkspaceDestinations';
+import { useWorkspaceHeaderSlot } from './WorkspaceHeaderSlot';
 
 interface Props {
   deviceId: string;
@@ -80,10 +82,12 @@ function RemoteWorkspacePane({ deviceId, deviceName, projectId, projectName, ini
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col" data-testid="remote-project-pane">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-1.5 text-xs text-[--text]">
+      <RemoteHeader>
         <WorkspaceDestinations active={visibleTab} activityEnabled={activityEnabled} onSelect={selectTab} />
-        <RemoteProjectIdentity projectName={projectName} deviceName={deviceName} onClose={onClose} />
-      </div>
+        <div className="workspace-project-actions flex min-w-0 flex-wrap items-center justify-end gap-2 pr-2">
+          <RemoteProjectIdentity projectName={projectName} deviceName={deviceName} onClose={onClose} />
+        </div>
+      </RemoteHeader>
       {status === 'unavailable' && <p role="status" className="px-3 pb-1 text-xs text-[--text-muted]">
         Workspace access unavailable. Check the host’s P2P permissions and app version.
       </p>}
@@ -111,6 +115,16 @@ function RemoteSettingsView(props: RemoteProjectSettingsProps): ReactElement {
       <RemoteProjectSettings {...props} />
     </div>
   </section>;
+}
+
+/**
+ * The pane's destinations and project actions: portalled into App's workspace header row (the same
+ * row and grid the local workspace uses) when one is provided, otherwise rendered inline above the body.
+ */
+function RemoteHeader({ children }: { readonly children: ReactNode }): ReactElement {
+  const slot = useWorkspaceHeaderSlot();
+  if (slot) return createPortal(children, slot);
+  return <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-1.5 text-xs text-[--text]">{children}</div>;
 }
 
 function RemoteProjectIdentity({ projectName, deviceName, onClose }: Pick<Props, 'projectName' | 'deviceName' | 'onClose'>): ReactElement {
@@ -184,21 +198,37 @@ function RemoteProjectShells({ active, deviceId, deviceName, projectId, projectN
   );
 }
 
+/**
+ * The remote shell chips. In App's header row they sit in the centred `shell-tabs-bar` slot, as the
+ * local tabs do; without a header row they render inline above the terminal.
+ */
 function RemoteShellStrip({ shells, shellIndex, label, onPick }: {
   readonly shells: RemoteProjectShell[];
   readonly shellIndex: number;
   readonly label: string;
   readonly onPick: (index: number) => void;
 }): ReactElement | null {
+  const slot = useWorkspaceHeaderSlot();
   if (shells.length === 0) return null;
+  const strip = <RemoteShellChips shells={shells} shellIndex={shellIndex} label={label} onPick={onPick} inHeader={slot !== null} />;
+  return slot ? createPortal(<div className="shell-tabs-bar no-drag flex min-w-0 max-w-full items-center gap-1 px-[14px] text-xs">{strip}</div>, slot) : strip;
+}
+
+function RemoteShellChips({ shells, shellIndex, label, onPick, inHeader }: {
+  readonly shells: RemoteProjectShell[];
+  readonly shellIndex: number;
+  readonly label: string;
+  readonly onPick: (index: number) => void;
+  readonly inHeader: boolean;
+}): ReactElement {
   return (
-    <div className="flex items-center gap-1 pl-2 pr-[14px] py-1 text-xs shrink-0 overflow-x-auto"
+    <div className={inHeader ? 'flex min-w-0 items-center gap-1 overflow-x-auto' : 'flex items-center gap-1 pl-2 pr-[14px] py-1 text-xs shrink-0 overflow-x-auto'}
       role="tablist" aria-label={label} data-testid="remote-shell-tabs">
       {shells.map((shell) => {
         const isActive = shell.shellIndex === shellIndex;
         return <button key={shell.shellIndex} type="button" role="tab" aria-selected={isActive}
           data-testid={SHELL_TAB_TEST_ID} data-shell-index={shell.shellIndex} onClick={() => onPick(shell.shellIndex)}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded-md whitespace-nowrap ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}>
+          className={`terminal-chip flex items-center gap-1 px-2 py-0.5 rounded-md whitespace-nowrap ${isActive ? 'bg-[--surface-active]' : 'hover:bg-[--surface-hover]'}`}>
           {shell.agentState && <StatusDot agent={shell.agent} state={shell.agentState} inactiveWhenIdle={!isActive} />}
           <span className={isActive ? 'text-[--text] font-medium' : 'text-[--text-muted]'}>
             {shellChipLabel(shells, shell.shellIndex)}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /** RemoteProjectPane: the main-area pane for a project on a paired machine (moved unchanged from Sidebar.machines.test.tsx). */
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
 const invoke = vi.fn();
 vi.mock('@renderer/api', () => ({ api: { invoke: (...a: unknown[]) => invoke(...a), on: () => () => {} } }));
@@ -14,6 +14,7 @@ vi.mock('../ActivityTab', () => ({ ActivityTab: ({ onOpenTarget }: { onOpenTarge
 
 import { RemoteProjectPane } from '../RemoteProjectPane';
 import { WorkspaceDestinations } from '../WorkspaceDestinations';
+import { WorkspaceHeaderSlotContext } from '../WorkspaceHeaderSlot';
 
 let alive: unknown[] = [];
 
@@ -30,6 +31,41 @@ beforeEach(() => {
 });
 
 describe('RemoteProjectPane', () => {
+  test('fills a provided workspace header row with its destinations, centred shell strip and identity, like the local header', async () => {
+    alive = [{ projectId: 7, shellIndex: 2, launchArgv: ['claude'] }, { projectId: 7, shellIndex: 3, launchArgv: ['opencode'] }];
+    const header = document.createElement('header');
+    header.className = 'workspace-header-row';
+    document.body.appendChild(header);
+    try {
+      render(<WorkspaceHeaderSlotContext.Provider value={header}>
+        <RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />
+      </WorkspaceHeaderSlotContext.Provider>);
+      await screen.findByTestId('shell-tab');
+      const pane = screen.getByTestId('remote-project-pane');
+      const strip = await screen.findByTestId('remote-shell-tabs');
+      // Positive control: everything still renders, just in the header row rather than inside the pane.
+      expect(within(header.querySelector<HTMLElement>('.workspace-destinations')!).getByRole('button', { name: 'Shell' }).getAttribute('aria-current')).toBe('page');
+      expect(header.querySelector('.workspace-project-actions')?.textContent).toContain('alpha @ Tower');
+      expect(strip.closest('.shell-tabs-bar')?.parentElement).toBe(header);
+      expect(pane.contains(strip)).toBe(false);
+      expect(pane.querySelector('.workspace-destinations')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+      expect(header.querySelector('.shell-tabs-bar')).toBeNull();
+      expect(await screen.findByTestId('files-panel')).toBeTruthy();
+    } finally {
+      cleanup();
+      header.remove();
+    }
+  });
+
+  test('renders its header inline when no header row is provided', async () => {
+    render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
+    await screen.findByTestId('shell-tab');
+    const pane = screen.getByTestId('remote-project-pane');
+    expect(pane.querySelector('.workspace-destinations')).not.toBeNull();
+    expect(pane.textContent).toContain('alpha @ Tower');
+  });
+
   test('offers workspace destinations independently of shell session tabs', async () => {
     render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
     await screen.findByTestId('shell-tab');

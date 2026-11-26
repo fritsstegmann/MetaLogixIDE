@@ -299,12 +299,13 @@ describe('status dot consumers (AC8, AC9)', () => {
     vi.stubGlobal('localStorage', { getItem: () => null });
     try {
       const { Sidebar } = await import('@renderer/components/Sidebar');
+      const { FleetStateProvider } = await import('@renderer/p2p/FleetStateProvider');
       const { createElement: h } = await import('react');
       const { renderToStaticMarkup: render } = await import('react-dom/server');
-      const html = render(h(Sidebar, {
+      const html = render(h(FleetStateProvider, null, h(Sidebar, {
         selectedProjectId: 7,
         onSelect: vi.fn(), onUnloadSession: vi.fn(), onEditEnv: vi.fn(), onProjectSettings: vi.fn(),
-      }));
+      })));
       expect(html).toContain('In use');
       expect(projectState).toHaveBeenCalledWith(7);
       expect(overallState).toHaveBeenCalled();

@@ -3,6 +3,7 @@ import { homeRelativePath } from '@renderer/abbreviate-path';
 import { PALETTE_COPY, PALETTE_TESTIDS } from '@renderer/command-palette-contract';
 import { useProjectAgentState } from '@renderer/hooks/useAgentStates';
 import { rootHueVar } from '@renderer/root-hue';
+import { useShortcutPlatform } from '@renderer/shortcut-platform';
 import type { AgentState } from '@shared/agent-state';
 import type { Project, Root } from '@shared/types';
 import { RootFolderGlyph } from '../RootFolderGlyph';
@@ -15,7 +16,7 @@ import { StatusDot } from '../StatusDot';
  */
 export const RING_NEEDED = true;
 
-const STATUS_TONE: Record<AgentState, string> = {
+export const STATUS_TONE: Record<AgentState, string> = {
   idle: 'text-[--modal-text-muted]',
   busy: 'text-[--agent-busy]',
   blocked: 'text-[--agent-blocked]',
@@ -28,10 +29,12 @@ interface ProjectRowProps {
   readonly current: boolean;
   readonly active: boolean;
   readonly alive: boolean;
+  /** 1-based position in the In use group when Ctrl+<n> opens it; absent past `PALETTE_JUMP_MAX` or outside In use. */
+  readonly jump?: number;
 }
 
 /** Renders one palette project with a severity-only status and current-project hint. */
-export function ProjectRow({ project, root, current, active, alive }: ProjectRowProps): React.JSX.Element {
+export function ProjectRow({ project, root, current, active, alive, jump }: ProjectRowProps): React.JSX.Element {
   const agentState = useProjectAgentState(project.id);
   return (
     <>
@@ -55,17 +58,30 @@ export function ProjectRow({ project, root, current, active, alive }: ProjectRow
           {PALETTE_COPY.projectStatus[agentState]}
         </span>
       )}
-      {(alive || active) && (
-        <span className="flex w-[68px] shrink-0 justify-end">
-          {active && (
-            <span aria-hidden="true" className="palette-open-hint flex items-center gap-1.5 rounded-md px-2 py-[3px] text-[12.5px]">
-              {PALETTE_COPY.openHint}
-              <kbd>↩</kbd>
-            </span>
-          )}
+      {(alive || active) && <RowTrail active={active} jump={jump} />}
+    </>
+  );
+}
+
+/**
+ * The fixed-width trailing column of a project or remote row: "Open ↩" on the highlighted row,
+ * otherwise the Ctrl+<n> key that opens the row when it has one.
+ */
+export function RowTrail({ active, jump }: { readonly active: boolean; readonly jump?: number }): React.JSX.Element {
+  const platform = useShortcutPlatform();
+  return (
+    <span className="flex w-[68px] shrink-0 justify-end">
+      {active ? (
+        <span aria-hidden="true" className="palette-open-hint flex items-center gap-1.5 rounded-md px-2 py-[3px] text-[12.5px]">
+          {PALETTE_COPY.openHint}
+          <kbd>↩</kbd>
+        </span>
+      ) : jump !== undefined && (
+        <span aria-hidden="true" data-testid={PALETTE_TESTIDS.jumpKey} className="px-2 py-[3px] font-mono text-[11.5px] text-[--modal-text-muted]">
+          {PALETTE_COPY.jumpKey(jump, platform)}
         </span>
       )}
-    </>
+    </span>
   );
 }
 

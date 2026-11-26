@@ -34,6 +34,7 @@ vi.mock('@renderer/api', () => ({
       if (channel === 'metaproject:board-layout' || channel === 'metaproject:board-close') return { ok: true };
       if (channel === 'projects:open') return bridge.holdLocalOpen ?? { project: project(payload?.id ?? 1) };
       if (channel === 'projects:list') return { projects: [project(1)] };
+      if (channel === 'p2p:fleet-list') return { fleet: [] };
       if (channel === 'shells:alive-list') return { shells: [{ projectId: 1, shellIndex: 0 }] };
       if (channel === 'settings:get') return { value: payload?.key === 'activity_log_enabled' ? bridge.activity : undefined };
       if (channel === 'files:peek') return { found: true, projectId: 1, relPath: 'src/a.ts' };
@@ -55,6 +56,7 @@ vi.mock('@renderer/hooks/useAgentStates', () => ({
   useProjectAgentState: () => 'idle',
   useShellAgentState: () => ({ state: 'idle' }),
   useAgentStateMap: () => new Map(),
+  useMachineAgentState: () => null,
 }));
 vi.mock('@renderer/hooks/useWindowTerminalFocus', () => ({
   useWindowTerminalFocus: () => undefined,
@@ -167,7 +169,9 @@ it('does not expose hidden local workspace actions after a remote Fleet notice',
       listener({ deviceId: 'tower', deviceName: 'Tower', projectId: 1, projectName: 'Remote', shellIndex: 0 });
     }
   });
-  expect(document.querySelector('[data-testid="remote-project-pane"]')?.textContent).toContain('Remote @ Tower');
+  expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
+  // The pane's tabs and identity render in the workspace header row above the sheet, like the local header.
+  expect(document.querySelector('[data-testid="remote-workspace-header"]')?.textContent).toContain('Remote @ Tower');
   await act(async () => { document.querySelector<HTMLButtonElement>('[data-testid="status-bar-palette-hint"]')?.click(); });
   expect(paletteContent()).toBe('');
   await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
@@ -205,7 +209,9 @@ it('does not let a pending OS file open replace a later Fleet notice', async () 
   });
   expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
   await act(async () => { completeOpen({ project: project(1) }); });
-  expect(document.querySelector('[data-testid="remote-project-pane"]')?.textContent).toContain('Remote @ Tower');
+  expect(document.querySelector('[data-testid="remote-project-pane"]')).not.toBeNull();
+  // The pane's tabs and identity render in the workspace header row above the sheet, like the local header.
+  expect(document.querySelector('[data-testid="remote-workspace-header"]')?.textContent).toContain('Remote @ Tower');
   expect(bridge.calls.slice(before).map(({ channel }) => channel)).not.toContain('shells:launch');
   expect(stored('metaide.mainTab')).toBe('shell');
 });

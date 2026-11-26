@@ -35,6 +35,7 @@ vi.mock('@renderer/api', () => ({
     invoke: async (channel: string, payload: { id?: number; projectId?: number; generation?: string } | undefined) => {
       bridge.calls.push({ channel, payload });
       if (channel === 'projects:open') return { project: project(payload?.id ?? 1) };
+      if (channel === 'p2p:fleet-list') return { fleet: [] };
       if (channel === 'shells:alive-list') return { shells: bridge.shells };
       if (channel === 'shells:inspect-primary') {
         return bridge.shells.some((shell) => shell.projectId === payload?.projectId && shell.shellIndex === 0)
@@ -67,6 +68,7 @@ vi.mock('@renderer/hooks/useAgentStates', () => ({
   useProjectAgentState: () => 'idle',
   useShellAgentState: () => ({ state: bridge.state }),
   useAgentStateMap: () => new Map(),
+  useMachineAgentState: () => null,
 }));
 vi.mock('@renderer/hooks/useWindowTerminalFocus', () => ({
   useWindowTerminalFocus: () => undefined,

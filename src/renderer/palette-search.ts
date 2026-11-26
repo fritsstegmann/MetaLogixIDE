@@ -1,8 +1,8 @@
 /**
  * Palette search: turns the parsed query and every provider's items into the `PaletteView` the
  * palette renders. The mode picks the providers (normal: projects, commands and Settings; "#":
- * projects; ">": commands and Settings; "@": files). Projects split into `running` (a live shell) and
- * `projects` (the rest). Each provider is fuzzy-matched with fuse.js (project names weigh more than
+ * projects; ">": commands and Settings; "@": files). Projects split into `running` (In use: this
+ * machine's projects with a live shell, then the paired machines' live projects) and `projects` (the rest). Each provider is fuzzy-matched with fuse.js (project names weigh more than
  * paths, and a name equal to or starting with the query outranks any other); groups keep the fixed
  * `GROUP_ORDER` with empty ones dropped, except that with a query the project group holding the best
  * match comes first so Enter picks it. Rows keep list order on an empty query and match order otherwise, and the
@@ -12,6 +12,7 @@
 import Fuse, { type IFuseOptions } from 'fuse.js';
 import {
   GROUP_ORDER,
+  PALETTE_JUMP_MAX,
   PALETTE_COPY,
   PALETTE_FILE_CAP,
   PALETTE_ROW_CAP,
@@ -27,6 +28,7 @@ import {
   type SearchPalette,
 } from '@renderer/command-palette-contract';
 import type { Project } from '@shared/types';
+import type { RemoteInUseRow } from './fleet-in-use';
 
 const MATCH = { threshold: 0.4, ignoreLocation: true } as const;
 
@@ -46,6 +48,7 @@ function cachedMatcher<T>(options: IFuseOptions<T>): (items: readonly T[], text:
 const matchProjects = cachedMatcher<Project>({ keys: [{ name: 'name', weight: 2 }, { name: 'path', weight: 1 }], ...MATCH });
 const matchCommands = cachedMatcher<PaletteCommand>({ keys: ['title', 'category', 'hint'], ...MATCH });
 const matchFiles = cachedMatcher<PaletteFileEntry>({ keys: ['name', 'relPath'], ...MATCH });
+const matchRemote = cachedMatcher<RemoteInUseRow>({ keys: [{ name: 'name', weight: 2 }, { name: 'deviceName', weight: 1 }], ...MATCH });
 
 function group(id: PaletteGroupId, rows: readonly PaletteRow[]): PaletteGroup {
   return { id, title: PALETTE_COPY.groupTitles[id], rows };
@@ -77,7 +80,8 @@ function projectGroups(text: string, input: PaletteSearchInput): PaletteGroup[] 
     (project): PaletteRow & { kind: 'project' } => ({ kind: 'project', project, current: project.id === input.currentProjectId }),
   );
   const running = (row: { project: Project }): boolean => input.aliveIds.has(row.project.id);
-  const groups = [group('running', rows.filter(running)), group('projects', rows.filter((r) => !running(r)))];
+  const remote = matchRemote(input.remoteInUse, text).map((session): PaletteRow => ({ kind: 'remote', session }));
+  const groups = [group('running', [...rows.filter(running), ...remote]), group('projects', rows.filter((r) => !running(r)))];
   const best = rows[0];
   return text && best && !running(best) ? groups.reverse() : groups;
 }
@@ -117,6 +121,24 @@ export const searchPalette: SearchPalette = (parsed, input) => {
   const groups = [...projectGroups(text, input), ...commandGroups(text, input)];
   return view(parsed, capGroups(groups, PALETTE_ROW_CAP), { kind: 'no-results', query: text });
 };
+
+/**
+ * The flat row index Ctrl+<digit> opens: the digit-th row of the In use group (1-based, up to
+ * `PALETTE_JUMP_MAX`), or `null` when the key is not a bare Ctrl+1–9 or that row does not exist.
+ */
+export function inUseJumpIndex(
+  view: PaletteView,
+  e: { readonly key: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean },
+): number | null {
+  if (!e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || !/^[1-9]$/.test(e.key)) return null;
+  const n = Number(e.key);
+  let start = 0;
+  for (const g of view.groups) {
+    if (g.id === 'running') return n <= Math.min(g.rows.length, PALETTE_JUMP_MAX) ? start + n - 1 : null;
+    start += g.rows.length;
+  }
+  return null;
+}
 
 export type HighlightStep = { readonly kind: 'move'; readonly index: number } | { readonly kind: 'pick' } | { readonly kind: 'close' };
 

@@ -5,8 +5,11 @@
  */
 import { AGGREGATE_STATE_LABEL } from '@shared/agent-state';
 import type { Project } from '@shared/types';
+import type { RemoteInUseRow } from './fleet-in-use';
+import type { OpenPaneRequest } from './machine-switcher-contract';
 import type { ShortcutPlatform } from './shortcut-contract';
 import { SHORTCUT_COPY } from './shortcut-copy';
+import { formatShortcut } from './shortcut-format';
 
 /** Search mode, chosen by the first character of the query. */
 export type PaletteMode = 'all' | 'projects' | 'commands' | 'files';
@@ -36,11 +39,14 @@ export interface PaletteCommand {
   readonly run: () => void | Promise<void>;
 }
 
-/** `running` holds the projects with a live shell, `projects` the rest. */
+/** `running` (titled "In use") holds this machine's projects with a live shell and the paired machines' live projects; `projects` the rest. */
 export type PaletteGroupId = 'running' | 'projects' | PaletteCategory | 'files';
 
 /** Fixed group order (AC6). Files mode has a single `files` group. */
 export const GROUP_ORDER: readonly PaletteGroupId[] = ['running', 'projects', 'Go', 'Project', 'View', 'Shell', 'Theme', 'App', 'Settings'];
+
+/** Ctrl+1 to Ctrl+<this> open the matching In use row while the palette is open. */
+export const PALETTE_JUMP_MAX = 9;
 
 /** Most rows rendered in the all, projects and commands modes (AC13). */
 export const PALETTE_ROW_CAP = 50;
@@ -64,6 +70,8 @@ export type PaletteFilesState =
 
 export type PaletteRow =
   | { readonly kind: 'project'; readonly project: Project; readonly current: boolean }
+  /** A paired machine's project with a live shell; picking it opens the remote project pane. */
+  | { readonly kind: 'remote'; readonly session: RemoteInUseRow }
   | { readonly kind: 'command'; readonly command: PaletteCommand }
   | { readonly kind: 'file'; readonly file: PaletteFileEntry };
 
@@ -106,6 +114,8 @@ export interface PaletteSearchInput {
   readonly currentProjectId: number | null;
   /** Projects with a live shell; they go in the `running` group. */
   readonly aliveIds: ReadonlySet<number>;
+  /** The paired machines' live projects; they follow this machine's rows in the `running` group. */
+  readonly remoteInUse: readonly RemoteInUseRow[];
   /** Already filtered for project-dependent commands (AC12). */
   readonly commands: readonly PaletteCommand[];
   readonly files: PaletteFilesState;
@@ -141,6 +151,8 @@ export interface CommandPaletteProps {
   /** The already-current project was picked: focus its terminal once the palette has closed (AC8, R13). */
   readonly onPickCurrent: (project: Project) => void;
   readonly onPickFile: (relPath: string) => void;
+  /** A paired machine's In use project was picked: open its remote project pane. */
+  readonly onPickRemote: (request: OpenPaneRequest) => void;
   readonly onClose: () => void;
 }
 
@@ -148,7 +160,7 @@ export const PALETTE_COPY = {
   placeholder: 'Search projects, commands and settings…',
   inputLabel: 'Search projects, commands and settings',
   groupTitles: {
-    running: 'Running',
+    running: 'In use',
     projects: 'Projects',
     Go: 'Go',
     Project: 'Project',
@@ -162,6 +174,10 @@ export const PALETTE_COPY = {
   current: 'Current',
   /** Generic severity for a running project, irrespective of its agents. */
   projectStatus: AGGREGATE_STATE_LABEL,
+  /** The key that opens the nth In use row (1-based), e.g. "⌃1" on mac and "Ctrl+1" elsewhere. */
+  jumpKey: (n: number, platform: ShortcutPlatform): string => formatShortcut({ ctrl: true, key: String(n) }, platform),
+  /** Accessible-name suffix on a paired machine's row, naming the machine. */
+  remoteLabel: (deviceName: string) => `on ${deviceName}`,
   /** Label of the open hint on the highlighted project row. */
   openHint: 'Open',
   /** The chip in the search row naming the prefix mode; the normal mode has none. */
@@ -208,6 +224,8 @@ export const PALETTE_TESTIDS = {
   projectStatus: 'command-palette-project-status',
   modeChip: 'command-palette-mode-chip',
   projectRoot: 'command-palette-project-root',
+  remoteMachine: 'command-palette-remote-machine',
+  jumpKey: 'command-palette-jump-key',
   empty: 'command-palette-empty',
   legend: 'command-palette-legend',
   capped: 'command-palette-capped',

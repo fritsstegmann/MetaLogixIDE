@@ -24,11 +24,11 @@ import { ChevronIcon } from './ChevronIcon';
 import { MachineDots } from './MachineDots';
 import { RemoteMachineList } from './RemoteMachineList';
 import { RemoteInUseRows } from './RemoteInUseRows';
-import { useMachineSwitcher, type MachineSwitcher } from '@renderer/p2p/useMachineSwitcher';
-import { useFleetInUse } from '@renderer/p2p/useFleetInUse';
+import type { MachineSwitcher } from '@renderer/p2p/useMachineSwitcher';
+import { useFleetState } from '@renderer/p2p/FleetStateProvider';
 import type { OpenPaneRequest } from '@renderer/machine-switcher-contract';
 import { filterByName, switcherLayout } from '@renderer/machine-dots';
-import { inUseHeadingState, inUseIdsByMachine, remoteInUseRows, type RemoteInUseRow } from '@renderer/fleet-in-use';
+import { inUseHeadingState, inUseIdsByMachine, remoteInUseRows, type FleetProjectNames, type RemoteInUseRow } from '@renderer/fleet-in-use';
 
 interface Props {
   selectedProjectId: number | null;
@@ -62,7 +62,8 @@ type LocalRow = (p: Project, alive: boolean) => React.ReactNode;
  * moves out of the per-machine lists into one shared section at the top of the list, whichever dot
  * is selected: this machine's live projects, then each online peer's (AC36–AC40). The local list
  * stays mounted (hidden) while a remote machine is shown, so its order, collapse state and data
- * survive a switch. With no paired machine the markup is exactly the pre-switcher sidebar.
+ * survive a switch. With no paired machine the markup is exactly the pre-switcher sidebar. The
+ * switcher state comes from `FleetStateProvider`, shared with the command palette.
  */
 export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewProject, onEditEnv, onProjectSettings, onOpenPane, width }: Props) {
   const { roots, refresh: refreshRoots } = useRoots();
@@ -71,7 +72,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
   const actions = useMemo<RowActions>(() => ({ onSelect, onUnloadSession, onRename: setRenameTarget, onEditEnv, onProjectSettings }),
     [onSelect, onUnloadSession, onEditEnv, onProjectSettings]);
-  const switcher = useMachineSwitcher();
+  const { switcher, names: fleetNames } = useFleetState();
 
   return (
     <aside
@@ -85,7 +86,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
         <SidebarHeader filter={filter} onFilterChange={setFilter} onNewProject={onNewProject}
           roots={roots} refreshRoots={refreshRoots} refreshProjects={refreshProjects} />
       </div>
-      <SidebarLists switcher={switcher} projects={projects} roots={roots} filter={filter}
+      <SidebarLists switcher={switcher} fleetNames={fleetNames} projects={projects} roots={roots} filter={filter}
         selectedProjectId={selectedProjectId} actions={actions} onOpenPane={onOpenPane} />
       {/* Empty space below the list (and the gap above it) drags the window. */}
       <div aria-hidden className="drag flex-1 min-h-0 -mt-7 -mb-5" data-testid="sidebar-drag-fill" />
@@ -101,6 +102,7 @@ export function Sidebar({ selectedProjectId, onSelect, onUnloadSession, onNewPro
 
 interface ListsProps {
   switcher: MachineSwitcher;
+  fleetNames: FleetProjectNames;
   projects: Project[];
   roots: Root[];
   filter: string;
@@ -115,9 +117,9 @@ interface ListsProps {
  * machine, with In use inside it). Always rendered in the same place so the local list's state, In
  * use order included, survives dot switches.
  */
-function SidebarLists({ switcher, projects, roots, filter, selectedProjectId, actions, onOpenPane }: ListsProps) {
+function SidebarLists({ switcher, fleetNames, projects, roots, filter, selectedProjectId, actions, onOpenPane }: ListsProps) {
   const { banded, remote, framing, panelProps, listClass } = switcherLayout(switcher);
-  const { local, remoteInUse, inUseIds } = useInUseRows(switcher, projects, filter);
+  const { local, remoteInUse, inUseIds } = useInUseRows(switcher, fleetNames, projects, filter);
   const row: LocalRow = (p, alive) => (
     <ProjectRow key={p.id} project={p} selected={selectedProjectId === p.id} alive={alive} primaryAlive={local.primaryIds.has(p.id)} {...actions} />
   );
@@ -149,9 +151,8 @@ const NO_IDS: ReadonlySet<number> = new Set();
  * the shared section, and the project ids those rows show per machine, which a remote list's Recents
  * leaves out (AC36, AC39).
  */
-function useInUseRows(switcher: MachineSwitcher, projects: Project[], filter: string) {
+function useInUseRows(switcher: MachineSwitcher, fleetNames: FleetProjectNames, projects: Project[], filter: string) {
   const local = useLocalSections(projects, filter);
-  const fleetNames = useFleetInUse(switcher.shells);
   const remoteInUse = useMemo(
     () => remoteInUseRows(switcher.machines, switcher.shells, fleetNames, filter),
     [switcher.machines, switcher.shells, fleetNames, filter],

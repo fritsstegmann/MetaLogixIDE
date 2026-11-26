@@ -94,6 +94,8 @@ import { isPrimaryVisible } from './unload-session';
 import { resolveFileTarget } from './agent-file-targets';
 import { useAgentFileFollow } from './hooks/useAgentFileFollow';
 import type { SheetContent } from './frosted-chrome-contract';
+import { FleetStateProvider } from './p2p/FleetStateProvider';
+import { WorkspaceHeaderSlotContext } from './components/WorkspaceHeaderSlot';
 
 
 interface PopoutInfo {
@@ -150,7 +152,7 @@ export function App() {
   // a blank window. See components/ErrorBoundary.tsx for the fallback UI.
   return (
     <ErrorBoundary>
-      {popout ? <PopoutShell {...popout} /> : <MetaprojectSessionProvider><MainApp /></MetaprojectSessionProvider>}
+      {popout ? <PopoutShell {...popout} /> : <MetaprojectSessionProvider><FleetStateProvider><MainApp /></FleetStateProvider></MetaprojectSessionProvider>}
     </ErrorBoundary>
   );
 }
@@ -174,6 +176,8 @@ function MainApp() {
   const [remotePane, setRemotePane] = useState<OpenPaneRequest | null>(null);
   const remotePaneRef = useRef(remotePane);
   remotePaneRef.current = remotePane;
+  // The header row a remote project pane portals its tabs, shell strip and actions into (same layout as the local header).
+  const [remoteHeaderSlot, setRemoteHeaderSlot] = useState<HTMLElement | null>(null);
   const localWorkspaceProject = remotePane ? null : selected;
   function openLocalWorkspaceFile(relPath: string, line: number | null): void {
     if (remotePaneRef.current) return;
@@ -1074,6 +1078,7 @@ function MainApp() {
           )}
         </AnimatePresence>
         <div className="workspace-header-container flex flex-1 flex-col min-h-0 min-w-0 overflow-hidden" data-testid="main-column">
+            {remotePane && <header ref={setRemoteHeaderSlot} className="workspace-header-row drag relative shrink-0 items-center gap-x-1.5 gap-y-1 px-3 py-1.5 text-xs text-[--text]" data-testid="remote-workspace-header" />}
             {!remotePane && <header className="workspace-header-row drag relative shrink-0 items-center gap-x-1.5 gap-y-1 px-3 py-1.5 text-xs" data-testid={DIFF_TESTIDS.tabBar}>
               <WorkspaceDestinations active={boardVisible ? null : mainTab} activityEnabled={activityEnabled}
                 diffCount={diffCount} envDirty={envDirty}
@@ -1183,8 +1188,10 @@ function MainApp() {
                     onOpenRemote={openPane}
                   />
                 : remotePane
-                ? <RemoteProjectPane deviceId={remotePane.source.deviceId} deviceName={remotePane.deviceName} projectId={remotePane.projectId}
-                    projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)} />
+                ? <WorkspaceHeaderSlotContext.Provider value={remoteHeaderSlot}>
+                    <RemoteProjectPane deviceId={remotePane.source.deviceId} deviceName={remotePane.deviceName} projectId={remotePane.projectId}
+                      projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)} />
+                  </WorkspaceHeaderSlotContext.Provider>
                 : mainTab === 'settings'
                 ? settingsTarget
                   ? <ProjectSettingsTab key={settingsTarget.id} target={settingsTarget} onSaved={applyDefaultAgentProject} assignmentVisible={!boardVisible}>
@@ -1269,6 +1276,7 @@ function MainApp() {
         onPickProject={(p) => { void pick(p); }}
         onPickCurrent={(p) => { if (mainTabRef.current === 'shell') focusAfterPaletteRef.current = p.id; }}
         onPickFile={(relPath) => openLocalWorkspaceFile(relPath, null)}
+        onPickRemote={openPane}
         onClose={() => setPaletteRequest(null)}
       />
       <ToastStack />

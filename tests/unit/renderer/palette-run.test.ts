@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { restoresOpenerOnClose, runPaletteRow, runSafely } from '@renderer/palette-run';
 import type { PaletteCommand, PaletteRow } from '@renderer/command-palette-contract';
 import type { Project } from '@shared/types';
+import type { OpenPaneRequest } from '@renderer/machine-switcher-contract';
 
 function project(id: number): Project {
   return {
@@ -29,6 +30,7 @@ function handlers() {
     onPickProject: vi.fn((p: Project) => { calls.push(`project:${p.id}`); }),
     onPickCurrent: vi.fn((p: Project) => { calls.push(`current:${p.id}`); }),
     onPickFile: vi.fn((rel: string) => { calls.push(`file:${rel}`); }),
+    onPickRemote: vi.fn((req: OpenPaneRequest) => { calls.push(`remote:${req.source.kind === 'remote' ? req.source.deviceId : ''}:${req.projectId}`); }),
     onCommandError: vi.fn((e: unknown) => { calls.push(`error:${String(e)}`); }),
   };
 }
@@ -63,6 +65,21 @@ describe('runSafely', () => {
     let done = false;
     await runSafely(async () => { await new Promise((r) => setTimeout(r, 5)); done = true; }, vi.fn());
     expect(done).toBe(true);
+  });
+});
+
+describe('runPaletteRow — paired machine rows', () => {
+  it('closes, then opens the remote project pane with the same request its Sidebar row sends', async () => {
+    const h = handlers();
+    await runPaletteRow({ kind: 'remote', session: { deviceId: 'dev-a', deviceName: 'Studio', projectId: 7, name: 'api', state: 'busy' } }, h);
+    expect(h.calls).toEqual(['close', 'remote:dev-a:7']);
+    expect(h.onPickRemote).toHaveBeenCalledWith({ source: { kind: 'remote', deviceId: 'dev-a' }, deviceName: 'Studio', projectId: 7, projectName: 'api' });
+    expect(h.onPickProject).not.toHaveBeenCalled();
+    expect(h.onPickCurrent).not.toHaveBeenCalled();
+  });
+
+  it('never restores the opener after a remote pick', () => {
+    expect(restoresOpenerOnClose('remote', true)).toBe(false);
   });
 });
 

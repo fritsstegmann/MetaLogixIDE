@@ -8,7 +8,8 @@
  * `stepHighlight` (AC3, AC14).
  */
 import { describe, it, expect } from 'vitest';
-import { searchPalette, stepHighlight } from '@renderer/palette-search';
+import { inUseJumpIndex, searchPalette, stepHighlight } from '@renderer/palette-search';
+import type { RemoteInUseRow } from '@renderer/fleet-in-use';
 import { parsePaletteQuery } from '@renderer/palette-query';
 import {
   PALETTE_COPY,
@@ -55,7 +56,7 @@ const READY_FILES: PaletteFilesState = {
 };
 
 function input(over: Partial<PaletteSearchInput> = {}): PaletteSearchInput {
-  return { projects: PROJECTS, currentProjectId: null, aliveIds: new Set(), commands: COMMANDS, files: READY_FILES, ...over };
+  return { projects: PROJECTS, currentProjectId: null, aliveIds: new Set(), remoteInUse: [], commands: COMMANDS, files: READY_FILES, ...over };
 }
 
 function view(raw: string, over: Partial<PaletteSearchInput> = {}): PaletteView {
@@ -65,10 +66,85 @@ function view(raw: string, over: Partial<PaletteSearchInput> = {}): PaletteView 
 function label(row: PaletteRow): string {
   if (row.kind === 'project') return `p:${row.project.name}`;
   if (row.kind === 'command') return `c:${row.command.id}`;
+  if (row.kind === 'remote') return `r:${row.session.deviceName}/${row.session.name}`;
   return `f:${row.file.relPath}`;
 }
 
 const groupIds = (v: PaletteView): string[] => v.groups.map((g) => g.id);
+
+function remote(deviceName: string, projectId: number, name: string): RemoteInUseRow {
+  return { deviceId: `dev-${deviceName}`, deviceName, projectId, name, state: 'busy' };
+}
+
+const REMOTE = [remote('studio', 7, 'api'), remote('studio', 3, 'zebra'), remote('laptop', 9, 'notes')];
+
+describe('searchPalette — paired machines in In use', () => {
+  it('titles the running group "In use" and lists remote rows after this machine\'s, in their given order', () => {
+    const v = view('', { aliveIds: new Set([2]), remoteInUse: REMOTE });
+    expect(PALETTE_COPY.groupTitles.running).toBe('In use');
+    expect(groupIds(v).slice(0, 2)).toEqual(['running', 'projects']);
+    expect(v.groups[0]?.rows.map(label)).toEqual(['p:tools', 'r:studio/api', 'r:studio/zebra', 'r:laptop/notes']);
+  });
+
+  it('keeps a remote project out of Projects even when a local project shares its id and name', () => {
+    const v = view('', { remoteInUse: REMOTE });
+    expect(v.groups.find((g) => g.id === 'projects')?.rows.map(label)).toEqual(['p:zebra', 'p:alpha-tools', 'p:tools']);
+    expect(v.groups.find((g) => g.id === 'running')?.rows.map(label)).toEqual(['r:studio/api', 'r:studio/zebra', 'r:laptop/notes']);
+  });
+
+  it('matches remote rows by project name and by machine name', () => {
+    expect(view('notes', { remoteInUse: REMOTE }).groups.find((g) => g.id === 'running')?.rows.map(label)).toEqual(['r:laptop/notes']);
+    expect(view('laptop', { remoteInUse: REMOTE }).groups.find((g) => g.id === 'running')?.rows.map(label)).toEqual(['r:laptop/notes']);
+    expect(view('qqqq', { remoteInUse: REMOTE }).groups.find((g) => g.id === 'running')).toBeUndefined();
+  });
+
+  it('shows remote rows in "#" mode and never in ">" or "@" mode', () => {
+    expect(view('#', { remoteInUse: REMOTE }).rows.some((r) => r.kind === 'remote')).toBe(true);
+    expect(view('>', { remoteInUse: REMOTE }).rows.some((r) => r.kind === 'remote')).toBe(false);
+    expect(view('@', { remoteInUse: REMOTE }).rows.some((r) => r.kind === 'remote')).toBe(false);
+  });
+});
+
+describe('inUseJumpIndex', () => {
+  const ctrl = (key: string, over: Partial<{ metaKey: boolean; altKey: boolean; shiftKey: boolean; ctrlKey: boolean }> = {}) =>
+    ({ key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, ...over });
+
+  it('maps Ctrl+n to the nth In use row, local rows first, then remote', () => {
+    const v = view('', { aliveIds: new Set([2]), remoteInUse: REMOTE });
+    expect(label(v.rows[inUseJumpIndex(v, ctrl('1'))!]!)).toBe('p:tools');
+    expect(label(v.rows[inUseJumpIndex(v, ctrl('2'))!]!)).toBe('r:studio/api');
+    expect(label(v.rows[inUseJumpIndex(v, ctrl('4'))!]!)).toBe('r:laptop/notes');
+    expect(inUseJumpIndex(v, ctrl('5'))).toBeNull();
+  });
+
+  it('offsets into In use when Projects is listed first', () => {
+    const v = view('#beta', { projects: [project(2, 'beta', '/t/beta')], remoteInUse: [remote('box', 5, 'beta-api')] });
+    expect(groupIds(v)).toEqual(['projects', 'running']);
+    expect(inUseJumpIndex(v, ctrl('1'))).toBe(1);
+    expect(label(v.rows[1]!)).toBe('r:box/beta-api');
+  });
+
+  it('ignores anything but a bare Ctrl+1–9', () => {
+    const v = view('', { aliveIds: new Set([1, 2, 3]) });
+    expect(inUseJumpIndex(v, ctrl('1', { ctrlKey: false }))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('1', { metaKey: true }))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('1', { altKey: true }))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('1', { shiftKey: true }))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('0'))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('a'))).toBeNull();
+    expect(inUseJumpIndex(v, ctrl('10'))).toBeNull();
+  });
+
+  it('returns null when there is no In use group', () => {
+    expect(inUseJumpIndex(view(''), ctrl('1'))).toBeNull();
+  });
+
+  it('reaches only the first nine In use rows', () => {
+    const many = Array.from({ length: 12 }, (_, i) => remote('box', i + 1, `p${String(i + 1).padStart(2, '0')}`));
+    const v = view('', { remoteInUse: many });
+    expect(label(v.rows[inUseJumpIndex(v, ctrl('9'))!]!)).toBe('r:box/p09');
+  });
+});
 
 describe('searchPalette — running projects', () => {
   it('puts projects with a live shell in a Running group before Projects, each keeping list order', () => {

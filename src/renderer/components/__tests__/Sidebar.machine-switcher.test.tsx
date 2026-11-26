@@ -27,6 +27,7 @@ let agentSnapshot: Array<{ projectId: number; shellIndex: number; agent: string 
 const agentDelta = (entry: { projectId: number; shellIndex: number; agent: string | null; state: string }) => act(() => { handlers.get('agent-state:changed')?.(entry); });
 
 import { Sidebar } from '../Sidebar';
+import { FleetStateProvider } from '@renderer/p2p/FleetStateProvider';
 import { MACHINE_TESTIDS, SIDEBAR_TESTIDS } from '@renderer/sidebar-copy';
 import { LOCAL_MACHINE_ID } from '@renderer/machine-switcher-contract';
 import { SWITCHER_PANEL_ID, machineTabId } from '@renderer/machine-dots';
@@ -91,7 +92,7 @@ const aside = () => document.querySelector('aside')!;
 const scrollArea = () => screen.getByTestId(SIDEBAR_TESTIDS.sectionAll).closest('.overflow-y-auto') as HTMLElement;
 
 async function renderSidebar(props: Partial<typeof base> & { onOpenPane?: () => void } = {}) {
-  const utils = render(<Sidebar {...base} {...props} />);
+  const utils = render(<FleetStateProvider><Sidebar {...base} {...props} /></FleetStateProvider>);
   await waitFor(() => expect(calls('p2p:fleet-list')).toBe(1));
   await screen.findAllByText('home-app');
   return utils;
@@ -653,7 +654,7 @@ describe('Sidebar poll cost (F4)', () => {
   test('with zero peers, unchanged fleet polls stop committing the sidebar; a changed one still does', async () => {
     fleetReplies = [{ fleet: [] }, { fleet: [] }, { fleet: [] }, { fleet: [] }, { fleet: [] }, { fleet: [TOWER] }];
     let commits = 0;
-    render(<Profiler id="sidebar" onRender={() => { commits++; }}><Sidebar {...base} /></Profiler>);
+    render(<Profiler id="sidebar" onRender={() => { commits++; }}><FleetStateProvider><Sidebar {...base} /></FleetStateProvider></Profiler>);
     await screen.findByText('home-app');
     await settle();
     await pollOnce();
@@ -674,7 +675,7 @@ describe('Sidebar agent-state cost (AC34)', () => {
     fleetReplies = [{ fleet: [TOWER] }];
     agentSnapshot = [{ projectId: 3, shellIndex: 0, agent: 'claude', state: 'busy' }];
     let commits = 0;
-    render(<Profiler id="sidebar" onRender={() => { commits++; }}><Sidebar {...base} /></Profiler>);
+    render(<Profiler id="sidebar" onRender={() => { commits++; }}><FleetStateProvider><Sidebar {...base} /></FleetStateProvider></Profiler>);
     const local = () => screen.getByTestId(MACHINE_TESTIDS.dot(LOCAL_MACHINE_ID)).querySelector('[data-dot]')!;
     await waitFor(() => expect(local().getAttribute('data-agent-state')).toBe('busy'));
     await act(async () => { await new Promise((r) => setTimeout(r, 10)); });

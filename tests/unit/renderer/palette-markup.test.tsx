@@ -63,6 +63,7 @@ function render({ seed = '', current = null, request }: RenderOpts = {}): string
       onPickProject={() => undefined}
       onPickCurrent={() => undefined}
       onPickFile={() => undefined}
+      onPickRemote={() => undefined}
       onClose={() => undefined}
     />,
   );
@@ -207,7 +208,7 @@ describe('CommandPalette — combobox and listbox (AC3, AC20)', () => {
       expect(heading, g.attrs['aria-labelledby']).toBeDefined();
       return text(outer(html, heading as El));
     });
-    expect(titles).toEqual(['Running', 'Projects', 'View', 'Shell', 'App']);
+    expect(titles).toEqual(['In use', 'Projects', 'View', 'Shell', 'App']);
     for (const g of groups) expect(options(outer(html, g)).length).toBeGreaterThan(0);
   });
 
