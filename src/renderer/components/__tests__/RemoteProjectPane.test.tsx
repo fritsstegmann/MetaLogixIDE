@@ -77,6 +77,17 @@ describe('RemoteProjectPane', () => {
     }
   });
 
+  test('reports whether its Shell tab shows, so the host sheet can take the shell styling', async () => {
+    const onSheet = vi.fn();
+    render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" onSheetContentChange={onSheet} />);
+    await screen.findByTestId('shell-tab');
+    expect(onSheet).toHaveBeenLastCalledWith('shell');
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    await waitFor(() => expect(onSheet).toHaveBeenLastCalledWith('other'));
+    fireEvent.click(screen.getByRole('button', { name: 'Shell' }));
+    await waitFor(() => expect(onSheet).toHaveBeenLastCalledWith('shell'));
+  });
+
   test('renders its header inline when no header row is provided', async () => {
     render(<RemoteProjectPane deviceId="tower" deviceName="Tower" projectId={7} projectName="alpha" />);
     await screen.findByTestId('shell-tab');

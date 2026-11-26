@@ -188,6 +188,8 @@ function MainApp() {
   const remoteShellCommandsRef = useRef<RemoteShellCommands | null>(null);
   // The header row a remote project pane portals its tabs, shell strip and actions into (same layout as the local header).
   const [remoteHeaderSlot, setRemoteHeaderSlot] = useState<HTMLElement | null>(null);
+  // Whether the remote pane shows its Shell tab; the main sheet then takes the shell styling, as for a local Shell tab.
+  const [remoteSheetContent, setRemoteSheetContent] = useState<SheetContent>('other');
   const localWorkspaceProject = remotePane ? null : selected;
   function openLocalWorkspaceFile(relPath: string, line: number | null): void {
     if (remotePaneRef.current) return;
@@ -1001,7 +1003,7 @@ function MainApp() {
     } catch (e) { toast('Tile failed', { kind: 'error', detail: String(e).replace(/^Error:\s*/, '') }); }
   }
 
-  const mainSheetContent: SheetContent = !remotePane && !boardVisible && mainTab === 'shell' ? 'shell' : 'other';
+  const mainSheetContent: SheetContent = remotePane ? remoteSheetContent : !boardVisible && mainTab === 'shell' ? 'shell' : 'other';
 
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col bg-[--surface-chrome]" data-chrome-root>
@@ -1217,7 +1219,8 @@ function MainApp() {
                 ? <WorkspaceHeaderSlotContext.Provider value={remoteHeaderSlot}>
                     <RemoteShellCommandsContext.Provider value={remoteShellCommandsRef}>
                       <RemoteProjectPane deviceId={remotePane.source.deviceId} deviceName={remotePane.deviceName} projectId={remotePane.projectId}
-                        projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)} />
+                        projectName={remotePane.projectName} openRequest={remotePane} onClose={() => setRemotePane(null)}
+                        onSheetContentChange={setRemoteSheetContent} />
                     </RemoteShellCommandsContext.Provider>
                   </WorkspaceHeaderSlotContext.Provider>
                 : mainTab === 'settings'

@@ -4,6 +4,7 @@ import { App } from '@renderer/App';
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { within } from '@testing-library/react';
 import type { Project } from '@shared/types';
 
 const project = (id: number): Project => ({
@@ -243,6 +244,25 @@ it('global Ctrl+1 opens the first In use project from a remote pane; a number pa
   await flush();
   expect(bridge.calls.slice(before)).toContainEqual({ channel: 'projects:open', payload: { id: 1 } });
   expect(document.querySelector('[data-testid="remote-project-pane"]')).toBeNull();
+});
+
+it('a remote project\'s Shell tab makes the main sheet a shell sheet, like a local Shell tab; other tabs do not', async () => {
+  await mount({ activity: true, tab: 'files' });
+  const sheet = () => document.querySelector('main.workspace-sheet')?.getAttribute('data-sheet-content');
+  expect(sheet()).toBe('other');
+  await act(async () => {
+    for (const listener of bridge.listeners.get('p2p:focus-remote-shell') ?? []) {
+      listener({ deviceId: 'tower', deviceName: 'Tower', projectId: 1, projectName: 'Remote', shellIndex: 0 });
+    }
+  });
+  await flush();
+  expect(sheet()).toBe('shell');
+  // The pane draws no terminal box of its own inside the sheet.
+  expect(document.querySelector('[data-testid="remote-project-pane"] [data-sheet-content]')).toBeNull();
+  await act(async () => {
+    within(document.querySelector<HTMLElement>('[data-testid="remote-workspace-header"]')!).getByRole('button', { name: 'Files' }).click();
+  });
+  expect(sheet()).toBe('other');
 });
 
 describe('App activity-log switch', () => {

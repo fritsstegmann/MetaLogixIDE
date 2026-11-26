@@ -692,12 +692,8 @@ input::placeholder, textarea::placeholder {
   border: 1px solid light-dark(rgb(0 0 0 / 0.18), rgb(255 255 255 / 0.18));
   --terminal-pane-radius: 0 0 13px 13px;
 }
-[data-testid="remote-project-pane"] { --terminal-pane-radius: 0 0 13px 13px; }
-/* A remote project's Shell tab, with its chips in the header row, gets the local shell sheet's outline and corners. */
-.workspace-header-row:has(> .shell-tabs-bar) + .workspace-sheet:has([data-testid="remote-project-pane"] [data-sheet-content="shell"]) {
-  border: 1px solid color-mix(in oklab, var(--text) 12%, transparent);
-}
-.workspace-header-row:has(> .shell-tabs-bar) + .workspace-sheet [data-testid="remote-project-pane"] [data-sheet-content="shell"] { --terminal-pane-radius: 13px; }
+/* Standalone (no header row) the remote shell view draws its chips above the terminal, so only the bottom corners round. */
+[data-testid="remote-project-pane"] [data-testid="remote-shell-tabs"] + * { --terminal-pane-radius: 0 0 13px 13px; }
 .terminal-pane[data-terminal-backdrop] {
   border-radius: var(--terminal-pane-radius, 0);
   overflow: clip;

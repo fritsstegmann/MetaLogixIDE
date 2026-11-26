@@ -16,6 +16,7 @@ import { FilesTab } from './FilesTab';
 import { RemoteProjectSettings, type RemoteProjectSettingsProps } from './RemoteProjectSettings';
 import { WorkspaceDestinations } from './WorkspaceDestinations';
 import { useWorkspaceHeaderSlot } from './WorkspaceHeaderSlot';
+import type { SheetContent } from '@renderer/frosted-chrome-contract';
 
 interface Props {
   deviceId: string;
@@ -27,6 +28,11 @@ interface Props {
   /** Object identity distinguishes repeated requests for the same shell. */
   openRequest?: { readonly shellIndex?: number };
   onClose?: () => void;
+  /**
+   * Told whether the pane shows its Shell tab, so the host sheet takes the shell sheet's styling
+   * (outline, corners, terminal surface and frost), exactly as a local project's Shell tab does.
+   */
+  onSheetContentChange?: (content: SheetContent) => void;
 }
 
 type WorkspaceStatus = 'checking' | 'unavailable' | 'activity-disabled' | 'activity-enabled';
@@ -60,7 +66,7 @@ export function RemoteProjectPane(props: Props): ReactElement {
   return <RemoteWorkspacePane key={`${props.deviceId}:${props.projectId}`} {...props} />;
 }
 
-function RemoteWorkspacePane({ deviceId, deviceName, projectId, projectName, initialShellIndex, openRequest, onClose }: Props): ReactElement {
+function RemoteWorkspacePane({ deviceId, deviceName, projectId, projectName, initialShellIndex, openRequest, onClose, onSheetContentChange }: Props): ReactElement {
   const [tab, setTab] = useState<MainTab>('shell');
   const [filesVisited, setFilesVisited] = useState(false);
   const [fileTarget, setFileTarget] = useState<string | null>(null);
@@ -80,6 +86,9 @@ function RemoteWorkspacePane({ deviceId, deviceName, projectId, projectName, ini
   useEffect(() => {
     if (visibleTab !== tab) setTab(visibleTab);
   }, [tab, visibleTab]);
+  useEffect(() => {
+    onSheetContentChange?.(visibleTab === 'shell' ? 'shell' : 'other');
+  }, [onSheetContentChange, visibleTab]);
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col" data-testid="remote-project-pane">
@@ -292,7 +301,8 @@ function RemoteProjectShells({ active, deviceId, deviceName, projectId, projectN
     />
   );
   return (
-    <div className="flex-1 min-h-0 flex flex-col bg-[--surface-sheet]" data-sheet-content="shell">
+    // Inside App the host sheet itself is the shell sheet (see onSheetContentChange); standalone, this view styles itself.
+    <div className="flex-1 min-h-0 flex flex-col" {...(slot ? {} : { className: 'flex-1 min-h-0 flex flex-col bg-[--surface-sheet]', 'data-sheet-content': 'shell' })}>
       {slot ? createPortal(bar, slot) : <div className="shrink-0 py-1" aria-label={`Shells of ${projectName} on ${deviceName}`} data-testid="remote-shell-tabs">{bar}</div>}
       <div className="flex-1 min-h-0 relative">
         {error && shells.length === 0 && <div className="p-4 text-[12px] text-[--danger]">Could not open remote shell: {error}</div>}
